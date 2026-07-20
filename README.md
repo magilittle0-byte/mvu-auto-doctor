@@ -1,6 +1,6 @@
 # MVU 自动医生（通用）
 
-这是一个独立的 SillyTavern / TauriTavern 扩展。它不会修改角色卡，也不会修改 Story Oracle 文件。
+这是一个独立的 SillyTavern / TauriTavern 扩展。它不会修改角色卡、SP·数据库或 Story Oracle 文件。
 
 ## 安装
 
@@ -16,11 +16,13 @@ https://github.com/magilittle0-byte/mvu-auto-doctor
 
 1. 动态读取当前角色卡暴露的 MVU/Zod Schema。
 2. 动态读取当前启用世界书中的 `[mvu_update]` 规则。
-3. 对比上一 AI 楼层状态、当前 `stat_data`、本轮正文和原更新区块。
-4. 让模型只生成针对当前状态的纠错/补漏补丁。
-5. 在内存副本上校验路径、操作、MVU 解析和 Zod 结果。
-6. 全部通过后才原子写入，并在写入后回读验证。
-7. 刷新消息与 `<StatusPlaceHolderImpl/>`，让正文状态栏立即重建。
+3. 等待本轮普通 MVU 更新稳定，避免在变量仍写入时抢跑。
+4. 对比上一 AI 楼层状态、当前 `stat_data`、本轮正文和原更新区块。
+5. 让模型只生成针对当前状态的纠错/补漏补丁。
+6. 在内存副本上校验路径、操作、MVU 解析和 Zod 结果。
+7. 全部通过后才原子写入，并在写入后回读验证。
+8. 把纠错块持久附加在当前 swipe 中；刷新或重进聊天后，原错误块与纠错块会按顺序重放，不会把旧错误复活。
+9. 刷新消息与 `<StatusPlaceHolderImpl/>`，让正文状态栏立即重建。
 
 模型连接顺序：
 
@@ -28,6 +30,13 @@ https://github.com/magilittle0-byte/mvu-auto-doctor
 - Story Oracle 未安装、未配置或调用失败时，自动使用酒馆当前主连接的 `generateRaw`。
 
 为避免两个自动程序同时写变量，扩展默认会关闭 Story Oracle 的 `AUTO` 诊断开关；Story Oracle 的手动诊断不受影响。
+
+## 必须这样设置
+
+- 关闭 MVU 的“额外 AI 解析/额外模型更新变量”。本扩展跟随角色卡原本的 `<UpdateVariable>` 更新完成后再审计，不需要第二个 MVU 解析模型。
+- 只保留一个自动修复器：开启“MVU 自动医生”，关闭 Story Oracle 的 `AUTO` 诊断。Story Oracle 的手动诊断、问剧情、校正回复、世界书模式仍可正常使用。
+- SP·数据库继续使用作者原版填表提示词。自动医生不读写数据库表，也不接管数据库回忆。
+- 同一角色只启用一套当前版本的 MVU 更新规则。若作者卡已内嵌世界书，不要再同时启用一套重复旧世界书。
 
 扩展设置里提供：
 
@@ -39,3 +48,5 @@ https://github.com/magilittle0-byte/mvu-auto-doctor
 - 撤销本次启动后的上一次自动修复
 
 插件不包含任何角色卡专属字段、路径或枚举。角色卡更新或切换到其他 MVU 卡时，会重新读取新卡的规则和 Schema。
+
+v1.1.0 修复了两个会造成“检测到、当下看似改好，但刷新后又错”的问题：纠错补丁现在会持久写进当前 swipe；同时新增 MVU 稳定等待与同楼层去重，避免异步更新尚未结束或重复事件触发时抢写。
