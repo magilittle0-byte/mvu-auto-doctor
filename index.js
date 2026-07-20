@@ -12,7 +12,7 @@ import {
 } from './core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const DEFAULTS = Object.freeze({
     enabled: true,
@@ -26,6 +26,8 @@ const DEFAULTS = Object.freeze({
 
 let mvuPromise = null;
 let runChain = Promise.resolve();
+const automaticPendingKeys = new Set();
+const automaticCompletedKeys = new Set();
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
 let oracleAutoDisabledNoticeShown = false;
@@ -401,6 +403,25 @@ async function mvuDataAt(Mvu, messageId) {
     }
 }
 
+async function waitMvuStable(Mvu, capMs = 8000, intervalMs = 250, stableReads = 3) {
+    const started = Date.now();
+    let previous = '';
+    let repeats = 0;
+    while (Date.now() - started < capMs) {
+        const data = await mvuDataAt(Mvu, 'latest');
+        const current = fingerprint(safeJson(statDataOf(data), 0));
+        if (current && current === previous) {
+            repeats += 1;
+            if (repeats >= stableReads) return true;
+        } else {
+            previous = current;
+            repeats = 0;
+        }
+        await sleep(intervalMs);
+    }
+    return false;
+}
+
 async function previousMvuData(Mvu, context, targetIndex) {
     for (let index = targetIndex - 1; index >= 0; index -= 1) {
         const message = context.chat[index];
@@ -606,15 +627,20 @@ async function parseCandidate(Mvu, oldData, output) {
     };
 }
 
-function applyBlockToCurrentSwipe(message, block, includeBlock) {
+function applyBlockToCurrentSwipe(message, block, includeBlock, removeBlock = '') {
     if (!message || typeof message.mes !== 'string') return false;
     const before = message.mes;
-    if (includeBlock && block && !message.mes.includes(block)) {
-        message.mes = `${message.mes.trimEnd()}\n\n${block}`;
+    let content = message.mes.split(STATUS_PLACEHOLDER).join('').trimEnd();
+    if (removeBlock && content.includes(removeBlock)) {
+        content = content
+            .replace(removeBlock, '')
+            .replace(/\n{3,}/gu, '\n\n')
+            .trimEnd();
     }
-    if (!message.mes.includes(STATUS_PLACEHOLDER)) {
-        message.mes = `${message.mes.trimEnd()}\n\n${STATUS_PLACEHOLDER}`;
+    if (includeBlock && block && !content.includes(block)) {
+        content = `${content}\n\n${block}`.trim();
     }
+    message.mes = `${content}\n\n${STATUS_PLACEHOLDER}`.trim();
     if (
         Array.isArray(message.swipes)
         && typeof message.swipes[message.swipe_id] === 'string'
@@ -627,11 +653,16 @@ function applyBlockToCurrentSwipe(message, block, includeBlock) {
     return message.mes !== before;
 }
 
-async function refreshMessage(index, block = '', includeBlock = false) {
+async function refreshMessage(index, block = '', includeBlock = false, removeBlock = '') {
     const context = getContext();
     const message = context?.chat?.[index];
     if (!message) return;
-    const changed = applyBlockToCurrentSwipe(message, block, includeBlock);
+    const changed = applyBlockToCurrentSwipe(
+        message,
+        block,
+        includeBlock,
+        removeBlock,
+    );
     if (changed) {
         try {
             await context.saveChat?.();
@@ -654,7 +685,7 @@ async function refreshMessage(index, block = '', includeBlock = false) {
     }
 }
 
-async function commitCandidate(Mvu, candidate, captured, originalBlock) {
+async function commitCandidate(Mvu, candidate, captured) {
     const current = targetIsCurrent(captured);
     if (!current.ok) {
         return { status: 'stale', reason: `${current.reason}，未写入` };
@@ -695,8 +726,12 @@ async function commitCandidate(Mvu, candidate, captured, originalBlock) {
         chatId: captured.chatId,
         targetIndex: captured.index,
         snapshot,
+        block: candidate.block,
     };
-    await refreshMessage(captured.index, candidate.block, !originalBlock);
+    // Always persist the corrective block in the swipe. Updating only the
+    // in-memory MVU snapshot is not durable: a reload/reparse would otherwise
+    // replay the original faulty block and silently resurrect the error.
+    await refreshMessage(captured.index, candidate.block, true);
     return { status: 'applied', block: candidate.block };
 }
 
@@ -725,6 +760,7 @@ async function runTarget(targetId, { manual = false } = {}) {
 
     if (!manual) await sleep(Math.max(300, Number(settings.delayMs) || 1600));
     await waitMvuIdle(Mvu);
+    await waitMvuStable(Mvu);
 
     const context = getContext();
     const latest = latestAiMessage(context);
@@ -797,7 +833,7 @@ async function runTarget(targetId, { manual = false } = {}) {
 
     let result;
     try {
-        result = await commitCandidate(Mvu, candidate, captured, originalBlock);
+        result = await commitCandidate(Mvu, candidate, captured);
     } catch (error) {
         result = { status: 'failed', reason: `提交补丁失败：${error.message || error}` };
     }
@@ -816,15 +852,56 @@ async function runTarget(targetId, { manual = false } = {}) {
     return result;
 }
 
+function automaticTargetKey(targetId) {
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const message = context?.chat?.[resolved];
+    if (!context || !message) return '';
+    return [
+        context.chatId,
+        resolved,
+        Number(message.swipe_id) || 0,
+        fingerprint(message.mes),
+    ].join(':');
+}
+
 function enqueue(targetId, options = {}) {
+    const automatic = !options.manual;
+    const dedupeKey = automatic ? automaticTargetKey(targetId) : '';
+    if (
+        dedupeKey
+        && (
+            automaticPendingKeys.has(dedupeKey)
+            || automaticCompletedKeys.has(dedupeKey)
+        )
+    ) {
+        return Promise.resolve({ status: 'duplicate', reason: '同一楼层已处理' });
+    }
+    if (dedupeKey) automaticPendingKeys.add(dedupeKey);
+
     runChain = runChain
         .catch(() => undefined)
         .then(() => runTarget(targetId, options))
+        .then((result) => {
+            if (
+                dedupeKey
+                && ['applied', 'nochange'].includes(result?.status)
+            ) {
+                automaticCompletedKeys.add(dedupeKey);
+                const landedKey = automaticTargetKey(targetId);
+                if (landedKey) automaticCompletedKeys.add(landedKey);
+            }
+            return result;
+        })
         .catch((error) => {
             console.error('[MVU Auto Doctor] 自动处理异常：', error);
             setStatus(`运行异常：${error.message || error}`, 'error');
             toast('warning', `运行异常，未改动变量：${error.message || error}`);
             return { status: 'failed', reason: String(error.message || error) };
+        })
+        .finally(() => {
+            if (dedupeKey) automaticPendingKeys.delete(dedupeKey);
         });
     return runChain;
 }
@@ -848,7 +925,7 @@ async function undoLast() {
         type: 'message',
         message_id: 'latest',
     });
-    await refreshMessage(lastUndo.targetIndex);
+    await refreshMessage(lastUndo.targetIndex, '', false, lastUndo.block);
     lastUndo = null;
     setStatus('已撤销上一次自动修复', 'ok');
     toast('success', '已撤销上一次自动修复。');
@@ -958,6 +1035,8 @@ function bindEvents() {
         types.CHAT_CHANGED || 'chat_changed',
         () => {
             lastUndo = null;
+            automaticPendingKeys.clear();
+            automaticCompletedKeys.clear();
             setStatus('等待新的 AI 回复');
             disableStoryOracleAutoIfNeeded();
         },
