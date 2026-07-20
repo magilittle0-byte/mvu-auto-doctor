@@ -1,0 +1,68 @@
+#mvu-auto-doctor-settings .mvuad-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 2px 10px;
+}
+
+#mvu-auto-doctor-settings .mvuad-description,
+#mvu-auto-doctor-settings .mvuad-version {
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.78;
+    font-size: 0.9em;
+    line-height: 1.45;
+}
+
+#mvu-auto-doctor-settings .mvuad-options {
+    display: grid;
+    gap: 7px;
+}
+
+#mvu-auto-doctor-settings .mvuad-check,
+#mvu-auto-doctor-settings .mvuad-number {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#mvu-auto-doctor-settings .mvuad-number {
+    justify-content: space-between;
+}
+
+#mvu-auto-doctor-settings .mvuad-number input {
+    width: min(150px, 42vw);
+}
+
+#mvu-auto-doctor-settings .mvuad-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+#mvu-auto-doctor-settings .mvuad-status {
+    min-height: 38px;
+    padding: 9px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 75%, transparent);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+#mvu-auto-doctor-settings .mvuad-status[data-kind="busy"] {
+    color: #f1c75b;
+}
+
+#mvu-auto-doctor-settings .mvuad-status[data-kind="ok"] {
+    color: #78d69c;
+}
+
+#mvu-auto-doctor-settings .mvuad-status[data-kind="error"] {
+    color: #ff8e8e;
+}
+
+@media (max-width: 600px) {
+    #mvu-auto-doctor-settings .mvuad-actions {
+        grid-template-columns: 1fr;
+    }
+}
