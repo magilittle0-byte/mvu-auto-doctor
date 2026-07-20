@@ -1,0 +1,12 @@
+{
+  "display_name": "MVU 自动医生（通用）",
+  "loading_order": 110,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Codex",
+  "version": "1.0.0",
+  "homePage": "https://github.com/magilittle0-byte/mvu-auto-doctor",
+  "auto_update": true
+}
