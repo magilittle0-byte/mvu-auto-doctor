@@ -80,6 +80,12 @@ window.Mvu = {
     const ops = match ? JSON.parse(match[1]) : [];
     for (const op of ops) {
       if (op.path === '/账户/代币' && op.op === 'delta') data.stat_data.账户.代币 += op.value;
+      if (op.op === 'replace') {
+        const parts = op.path.slice(1).split('/').map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+        let parent = data.stat_data;
+        for (const part of parts.slice(0, -1)) parent = parent[part];
+        parent[parts.at(-1)] = op.value;
+      }
     }
     return data;
   },
@@ -108,6 +114,8 @@ window.StoryOracleAPI = {
 window.__TEST__ = {
   calls, context,
   setMode(value) { mode = value; },
+  setLatestData(value) { latestData = structuredClone(value); },
+  getLatestData() { return structuredClone(latestData); },
   resolveRepair(value) { deferredResolve?.(value); },
   hasDeferred: () => !!deferredResolve,
 };
@@ -200,7 +208,7 @@ try {
         cardCount: document.querySelectorAll('.mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('.mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.3.0');
+    assert.equal(continuity.version, '1.3.1');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
@@ -247,6 +255,68 @@ try {
         1,
     );
 
+    const openingSync = await page.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.characters[0].data.character_book.entries.push({
+            comment: '[initvar]变量初始化勿开',
+            disable: true,
+            content: [
+                '契约者:',
+                '  衍生属性:',
+                '    MP_当前: 50',
+                '    MP_最大: 50',
+                '    负重_当前: 0',
+                '    负重_上限: 25',
+            ].join('\n'),
+        });
+        t.setLatestData({
+            stat_data: {
+                契约者: {
+                    衍生属性: {
+                        MP_当前: 50,
+                        MP_最大: 110,
+                        负重_当前: 0,
+                        负重_上限: 55,
+                    },
+                },
+            },
+            display_data: {},
+        });
+        const modelCallsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.syncOpeningResources();
+        return {
+            result,
+            state: t.getLatestData(),
+            modelCallsBefore,
+            modelCallsAfter: t.calls.model.length,
+            lastReplace: structuredClone(t.calls.replace.at(-1)),
+            journalLength: t.context.chatMetadata.mvu_auto_doctor.repairJournal.length,
+        };
+    });
+    assert.equal(openingSync.result.status, 'applied');
+    assert.equal(openingSync.state.stat_data.契约者.衍生属性.MP_当前, 110);
+    assert.equal(openingSync.state.stat_data.契约者.衍生属性.负重_当前, 0);
+    assert.equal(openingSync.modelCallsAfter, openingSync.modelCallsBefore, '开局同步不得调用模型');
+    assert.equal(openingSync.lastReplace.options.message_id, 2);
+    assert.equal(openingSync.journalLength, 2);
+
+    const openingUndo = await page.evaluate(async () => {
+        const undone = await window.MvuAutoDoctorAPI.undoLast();
+        const retried = await window.MvuAutoDoctorAPI.syncOpeningResources();
+        return {
+            undone,
+            retried,
+            state: window.__TEST__.getLatestData(),
+            openingState: structuredClone(
+                window.__TEST__.context.chatMetadata.mvu_auto_doctor.openingResourceSync,
+            ),
+        };
+    });
+    assert.equal(openingUndo.undone, true);
+    assert.equal(openingUndo.state.stat_data.契约者.衍生属性.MP_当前, 50);
+    assert.equal(openingUndo.retried.status, 'nochange', '手动撤销后不得立即自动补回');
+    assert.ok(openingUndo.openingState.suppressed['/契约者/衍生属性/MP_当前']);
+
     const beforeRefreshCalls = continuity.calls.model.length;
     await page.click('.mvuad-ledger-refresh');
     assert.equal(
@@ -275,6 +345,7 @@ try {
     const before = await page.evaluate(() => window.__TEST__.calls.replace.length);
     await page.evaluate(async () => {
         const t = window.__TEST__;
+        t.setLatestData({ stat_data: { 账户: { 代币: 3 } }, display_data: {} });
         t.context.chatId = 'chat-b';
         t.context.chat = [{ is_user: false, is_system: false, mes: '另一个聊天', swipe_id: 0, extra: {} }];
         t.context.chatMetadata = {};

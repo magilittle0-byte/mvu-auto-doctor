@@ -504,3 +504,218 @@ export function fingerprint(value) {
     }
     return `${text.length}:${(hash >>> 0).toString(16)}`;
 }
+
+function unquoteYamlScalar(value) {
+    const text = String(value || '').trim();
+    if (
+        text.length >= 2
+        && (
+            (text.startsWith('"') && text.endsWith('"'))
+            || (text.startsWith("'") && text.endsWith("'"))
+        )
+    ) {
+        if (text.startsWith('"')) {
+            try {
+                return JSON.parse(text);
+            } catch {
+                return text.slice(1, -1);
+            }
+        }
+        return text.slice(1, -1).replace(/''/gu, "'");
+    }
+    if (/^(?:null|~)$/iu.test(text)) return null;
+    if (/^(?:true|false)$/iu.test(text)) return text.toLowerCase() === 'true';
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/iu.test(text)) {
+        const number = Number(text);
+        if (Number.isFinite(number)) return number;
+    }
+    if (text === '{}') return {};
+    if (text === '[]') return [];
+    return text.replace(/\s+#.*$/u, '').trim();
+}
+
+/**
+ * Parse the conservative YAML subset commonly used by [initvar] lorebook
+ * entries. Unsupported list/block constructs are ignored instead of guessed.
+ */
+export function parseInitializationText(source) {
+    const original = String(source || '')
+        .replace(/^```(?:ya?ml|json)?\s*$/gimu, '')
+        .replace(/^```\s*$/gimu, '')
+        .trim();
+    if (!original) return null;
+
+    if (/^[{[]/u.test(original)) {
+        try {
+            const parsed = JSON.parse(original);
+            return isPlainObject(parsed) ? parsed : null;
+        } catch {
+            // Most MVU init entries are YAML; continue with the safe subset.
+        }
+    }
+
+    const root = {};
+    const stack = [{ indent: -1, value: root }];
+    let parsedFields = 0;
+    for (const rawLine of original.split(/\r?\n/u)) {
+        if (!rawLine.trim() || /^\s*(?:#|---\s*$|\.\.\.\s*$)/u.test(rawLine)) continue;
+        if (/^\s*-\s+/u.test(rawLine)) continue;
+        const match = rawLine.match(/^(\s*)([^:#][^:]*?):(?:\s*(.*))?$/u);
+        if (!match) continue;
+        const indent = match[1].replace(/\t/gu, '    ').length;
+        let key = match[2].trim();
+        if (
+            (key.startsWith('"') && key.endsWith('"'))
+            || (key.startsWith("'") && key.endsWith("'"))
+        ) {
+            key = String(unquoteYamlScalar(key));
+        }
+        if (!key || key === '<<') continue;
+        while (stack.length > 1 && stack.at(-1).indent >= indent) stack.pop();
+        const parent = stack.at(-1).value;
+        if (!isPlainObject(parent)) continue;
+        const scalar = String(match[3] ?? '').trim();
+        if (!scalar || /^[|>][+-]?$/u.test(scalar)) {
+            if (/^[|>]/u.test(scalar)) continue;
+            const child = {};
+            parent[key] = child;
+            stack.push({ indent, value: child });
+        } else {
+            parent[key] = unquoteYamlScalar(scalar);
+            parsedFields += 1;
+        }
+    }
+    return parsedFields ? root : null;
+}
+
+function resourceKeyPart(key, kind) {
+    const source = String(key || '').trim();
+    const suffix = kind === 'current'
+        ? /^(.*?)(?:[_\s.·-]*)(当前|现值|current|cur)$/iu
+        : /^(.*?)(?:[_\s.·-]*)(最大|上限|maximum|max)$/iu;
+    const prefix = kind === 'current'
+        ? /^(当前|现值|current|cur)(?:[_\s.·-]*)(.+)$/iu
+        : /^(最大|上限|maximum|max)(?:[_\s.·-]*)(.+)$/iu;
+    const suffixMatch = source.match(suffix);
+    const rawBase = suffixMatch?.[1] || source.match(prefix)?.[2] || '';
+    const base = rawBase.replace(/[_\s.·-]+/gu, '').toLowerCase();
+    return base || '';
+}
+
+function numericPairAt(stat, pair) {
+    if (!stat) return null;
+    const current = pointerGet(stat, pair.currentPath);
+    const maximum = pointerGet(stat, pair.maximumPath);
+    if (
+        !current.found
+        || !maximum.found
+        || typeof current.value !== 'number'
+        || typeof maximum.value !== 'number'
+        || !Number.isFinite(current.value)
+        || !Number.isFinite(maximum.value)
+    ) return null;
+    return { current: current.value, maximum: maximum.value };
+}
+
+function collectResourcePairs(root) {
+    const pairs = [];
+    function walk(value, parts) {
+        if (!isPlainObject(value)) return;
+        const currentByBase = new Map();
+        const maximumByBase = new Map();
+        for (const [key, item] of Object.entries(value)) {
+            if (typeof item !== 'number' || !Number.isFinite(item)) continue;
+            const currentBase = resourceKeyPart(key, 'current');
+            const maximumBase = resourceKeyPart(key, 'maximum');
+            if (currentBase) currentByBase.set(currentBase, key);
+            if (maximumBase) maximumByBase.set(maximumBase, key);
+        }
+        for (const [base, currentKey] of currentByBase) {
+            const maximumKey = maximumByBase.get(base);
+            if (!maximumKey || maximumKey === currentKey) continue;
+            pairs.push({
+                base,
+                currentKey,
+                maximumKey,
+                currentPath: pointerPath([...parts, currentKey]),
+                maximumPath: pointerPath([...parts, maximumKey]),
+            });
+        }
+        for (const [key, item] of Object.entries(value)) {
+            if (isPlainObject(item)) walk(item, [...parts, key]);
+        }
+    }
+    walk(root, []);
+    return pairs;
+}
+
+function pathWasTouched(path, touchedPaths) {
+    return (touchedPaths || []).some((candidate) => (
+        candidate === path
+        || candidate === ''
+        || path.startsWith(`${candidate}/`)
+        || candidate.startsWith(`${path}/`)
+    ));
+}
+
+/**
+ * Find resource fields which were full in the declared/previous initial state,
+ * whose derived maximum then increased while the current value stayed frozen.
+ * This deliberately does not use resource names such as HP/MP, so it works for
+ * arbitrary MVU cards while refusing capacity pairs (for example load 0/25).
+ */
+export function findOpeningResourceMismatches(currentData, {
+    initialStates = [],
+    previousData = null,
+    lastSynced = {},
+    touchedPaths = [],
+    limit = 24,
+} = {}) {
+    const currentStat = statDataOf(currentData);
+    if (!currentStat) return [];
+    const previousStat = statDataOf(previousData);
+    const initialStats = (Array.isArray(initialStates) ? initialStates : [initialStates])
+        .map(statDataOf)
+        .filter(Boolean);
+    const result = [];
+    for (const pair of collectResourcePairs(currentStat)) {
+        const now = numericPairAt(currentStat, pair);
+        if (!now || now.maximum <= now.current) continue;
+        if (pathWasTouched(pair.currentPath, touchedPaths)) continue;
+
+        const declaredFull = initialStats.some((initialStat) => {
+            const initial = numericPairAt(initialStat, pair);
+            return !!(
+                initial
+                && initial.current === initial.maximum
+                && now.current === initial.current
+            );
+        });
+        const previous = numericPairAt(previousStat, pair);
+        const derivedIncreaseFromFull = !!(
+            previous
+            && previous.current === previous.maximum
+            && now.current === previous.current
+            && now.maximum > previous.maximum
+        );
+        const syncedMaximum = Number(lastSynced?.[pair.currentPath]?.maximum);
+        const continuedSetupIncrease = !!(
+            Number.isFinite(syncedMaximum)
+            && now.current === syncedMaximum
+            && now.maximum > syncedMaximum
+        );
+        if (!declaredFull && !derivedIncreaseFromFull && !continuedSetupIncrease) continue;
+        result.push({
+            ...pair,
+            from: now.current,
+            to: now.maximum,
+            proof: declaredFull
+                ? 'declared-full-initial-value'
+                : derivedIncreaseFromFull
+                    ? 'derived-maximum-increased-from-full'
+                    : 'continued-opening-setup',
+        });
+        if (result.length >= Math.max(1, Number(limit) || 24)) break;
+    }
+    return result;
+}
