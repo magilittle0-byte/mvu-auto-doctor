@@ -15,6 +15,7 @@ import {
     attachChangedSourceRefs,
     buildContinuityInjection,
     continuityContentDigest,
+    continuityLedgerView,
     emptyContinuityState,
     extractContinuityMarkers,
     latestUndoRecord,
@@ -25,7 +26,7 @@ import {
 } from './continuity-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 2;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -112,9 +113,11 @@ function setStatus(text, kind = '') {
 
 function setContinuityStatus(text, kind = '') {
     latestContinuityStatus = String(text || '');
-    if (!ui?.continuityStatus) return;
-    ui.continuityStatus.textContent = latestContinuityStatus;
-    ui.continuityStatus.dataset.kind = kind;
+    if (ui?.continuityStatus) {
+        ui.continuityStatus.textContent = latestContinuityStatus;
+        ui.continuityStatus.dataset.kind = kind;
+    }
+    renderContinuityLedger();
 }
 
 function invalidateOperations(reason = '') {
@@ -1735,6 +1738,137 @@ async function clearContinuityState() {
     return true;
 }
 
+const CONTINUITY_DIRECTOR_LABELS = Object.freeze({
+    standalone: '独立低频整理',
+    preset: '预设平行事件桥接',
+    stitches: '缝合怪桥接',
+    mixed: '预设＋缝合怪联合桥接',
+});
+
+function formatLedgerTime(timestamp) {
+    const value = Number(timestamp) || 0;
+    if (!value) return '尚未整理';
+    try {
+        return new Intl.DateTimeFormat('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        }).format(new Date(value));
+    } catch {
+        return new Date(value).toLocaleString();
+    }
+}
+
+function appendLedgerField(host, label, value, emptyText = '未登记') {
+    const row = document.createElement('div');
+    row.className = 'mvuad-thread-field';
+    const key = document.createElement('div');
+    key.className = 'mvuad-thread-field-label';
+    key.textContent = label;
+    const content = document.createElement('div');
+    content.className = 'mvuad-thread-field-value';
+    content.textContent = String(value || '').trim() || emptyText;
+    row.append(key, content);
+    host.appendChild(row);
+}
+
+function buildLedgerThreadCard(thread, { open = false } = {}) {
+    const details = document.createElement('details');
+    details.className = `mvuad-thread-card mvuad-thread-stage-${thread.stage}`;
+    details.dataset.threadId = thread.id;
+    details.open = open;
+
+    const heading = document.createElement('summary');
+    const titleWrap = document.createElement('span');
+    titleWrap.className = 'mvuad-thread-heading';
+    const title = document.createElement('span');
+    title.className = 'mvuad-thread-title';
+    title.textContent = thread.title || thread.id;
+    const id = document.createElement('span');
+    id.className = 'mvuad-thread-id';
+    id.textContent = thread.id;
+    titleWrap.append(title, id);
+
+    const badges = document.createElement('span');
+    badges.className = 'mvuad-thread-badges';
+    for (const [className, text] of [
+        [`stage-${thread.stage}`, thread.stageLabel],
+        ['kind', thread.kindLabel],
+        [`urgency-${thread.urgency}`, `紧迫度：${thread.urgencyLabel}`],
+    ]) {
+        const badge = document.createElement('span');
+        badge.className = `mvuad-thread-badge ${className}`;
+        badge.textContent = text;
+        badges.appendChild(badge);
+    }
+    heading.append(titleWrap, badges);
+    details.appendChild(heading);
+
+    const body = document.createElement('div');
+    body.className = 'mvuad-thread-body';
+    appendLedgerField(body, '当前进展', thread.summary, '暂无新增事实');
+    appendLedgerField(body, '下一自然接口', thread.nextBeat, '保持现状，不强推');
+    appendLedgerField(body, '触发条件', thread.trigger, '等待剧情自然接轨');
+    appendLedgerField(body, '涉及人物/势力', thread.actors?.join('、'));
+    appendLedgerField(body, '涉及地点', thread.locations?.join('、'));
+    appendLedgerField(body, '知情范围', thread.knowledgeLabel);
+    appendLedgerField(
+        body,
+        '最近登记',
+        thread.latestSource
+            ? `第 ${thread.latestSource.index + 1} 楼 · 候选 ${thread.latestSource.swipeId + 1}`
+            : (thread.lastAdvancedTurn ? `账本第 ${thread.lastAdvancedTurn} 轮` : ''),
+    );
+    details.appendChild(body);
+    return details;
+}
+
+function renderContinuityLedger() {
+    if (!ui?.ledgerActive || !ui?.ledgerSummary) return;
+    const context = getContext();
+    const settings = getSettings();
+    const namespace = readChatNamespace(context);
+    const view = continuityLedgerView(namespace.continuity, {
+        chatId: context?.chatId || '',
+        maxThreads: settings.continuityMaxThreads,
+    });
+    const chatChanged = ui.ledgerChatId !== (context?.chatId || '');
+    const previouslyRendered = ui.ledgerRendered && !chatChanged;
+    const hadActiveCards = previouslyRendered && ui.ledgerActive.children.length > 0;
+    const openIds = new Set(
+        [...ui.ledgerActive.querySelectorAll('.mvuad-thread-card[open]')]
+            .map((element) => element.dataset.threadId),
+    );
+
+    ui.ledgerChatId = context?.chatId || '';
+    ui.ledgerRendered = true;
+    ui.ledgerSummary.textContent = [
+        `${view.activeCount} 条未结`,
+        `${view.resolvedCount} 条已收束`,
+        view.turn ? `账本第 ${view.turn} 轮` : '尚未建立账本轮次',
+        `更新：${formatLedgerTime(view.updatedAt)}`,
+        `来源：${CONTINUITY_DIRECTOR_LABELS[namespace.continuityDirector] || '等待识别'}`,
+        settings.continuityMode === 'off' ? '当前已关闭运行（旧账本仍保留）' : '',
+    ].filter(Boolean).join(' · ');
+
+    ui.ledgerActive.replaceChildren();
+    view.active.forEach((thread, index) => {
+        ui.ledgerActive.appendChild(buildLedgerThreadCard(thread, {
+            open: openIds.has(thread.id) || (!hadActiveCards && index === 0),
+        }));
+    });
+    ui.ledgerEmpty.hidden = view.activeCount > 0;
+
+    ui.ledgerResolvedList.replaceChildren();
+    for (const thread of view.resolved) {
+        ui.ledgerResolvedList.appendChild(buildLedgerThreadCard(thread));
+    }
+    ui.ledgerResolved.hidden = view.resolvedCount === 0;
+    ui.ledgerResolvedSummary.textContent = `已收束支线（${view.resolvedCount}）`;
+}
+
 function makeCheckbox(label, key) {
     const settings = getSettings();
     const row = document.createElement('label');
@@ -1807,6 +1941,22 @@ function buildSettingsPanel() {
                         <button class="menu_button mvuad-continuity-clear" type="button">清空当前账本</button>
                     </div>
                     <div class="mvuad-status mvuad-continuity-status" role="status"></div>
+                    <div class="mvuad-ledger" aria-label="支线账本">
+                        <div class="mvuad-ledger-header">
+                            <b>支线账本</b>
+                            <button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button>
+                        </div>
+                        <div class="mvuad-ledger-note">
+                            玩家审计视图：可能包含角色尚不知道的幕后支线；这里只展示账本，不会把隐藏信息写进正文。
+                        </div>
+                        <div class="mvuad-ledger-summary"></div>
+                        <div class="mvuad-ledger-empty">当前没有未结支线。生成新回复后会自动整理，也可点击“立即整理支线”。</div>
+                        <div class="mvuad-ledger-active"></div>
+                        <details class="mvuad-ledger-resolved">
+                            <summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary>
+                            <div class="mvuad-ledger-resolved-list"></div>
+                        </details>
+                    </div>
                     <div class="mvuad-version">v${VERSION} · 独立安装，不修改角色卡或故事神谕文件</div>
                 </div>
             </div>
@@ -1849,7 +1999,18 @@ function buildSettingsPanel() {
         wrapper,
         status: wrapper.querySelector('.mvuad-status:not(.mvuad-continuity-status)'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
+        ledgerSummary: wrapper.querySelector('.mvuad-ledger-summary'),
+        ledgerEmpty: wrapper.querySelector('.mvuad-ledger-empty'),
+        ledgerActive: wrapper.querySelector('.mvuad-ledger-active'),
+        ledgerResolved: wrapper.querySelector('.mvuad-ledger-resolved'),
+        ledgerResolvedSummary: wrapper.querySelector('.mvuad-ledger-resolved-summary'),
+        ledgerResolvedList: wrapper.querySelector('.mvuad-ledger-resolved-list'),
+        ledgerRendered: false,
+        ledgerChatId: '',
     };
+    wrapper.querySelector('.mvuad-ledger-refresh').addEventListener('click', () => {
+        renderContinuityLedger();
+    });
     setStatus(latestStatus);
     setContinuityStatus(latestContinuityStatus);
 }

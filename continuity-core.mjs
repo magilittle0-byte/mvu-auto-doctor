@@ -16,12 +16,41 @@ const KINDS = new Set([
 
 const KNOWLEDGE = new Set(['hidden', 'rumor', 'observed']);
 
-const STAGE_LABELS = Object.freeze({
+export const CONTINUITY_STAGE_LABELS = Object.freeze({
     seeded: '已埋设',
     advancing: '推进中',
     manifested: '已显现',
     resolved: '已回收',
     dormant: '搁置',
+});
+
+export const CONTINUITY_KIND_LABELS = Object.freeze({
+    parallel: '平行事件',
+    personal: '人物线',
+    promise: '约定/承诺',
+    enemy: '敌方行动',
+    mystery: '谜团线索',
+});
+
+export const CONTINUITY_KNOWLEDGE_LABELS = Object.freeze({
+    hidden: '幕后隐藏（角色未知）',
+    rumor: '传闻阶段（部分可知）',
+    observed: '正文已观察',
+});
+
+const CONTINUITY_URGENCY_LABELS = Object.freeze([
+    '暂缓',
+    '低',
+    '中',
+    '高',
+]);
+
+const STAGE_SORT_ORDER = Object.freeze({
+    manifested: 0,
+    advancing: 1,
+    seeded: 2,
+    dormant: 3,
+    resolved: 4,
 });
 
 function clone(value) {
@@ -133,6 +162,44 @@ export function normalizeContinuityState(value, {
         turn,
         threads,
         updatedAt: boundedInteger(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
+    };
+}
+
+export function continuityLedgerView(value, {
+    chatId = '',
+    maxThreads = 12,
+} = {}) {
+    const state = normalizeContinuityState(value, { chatId, maxThreads });
+    const items = state.threads
+        .map((thread) => {
+            const latestSource = thread.sourceRefs.at(-1) || null;
+            return {
+                ...clone(thread),
+                stageLabel: CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage,
+                kindLabel: CONTINUITY_KIND_LABELS[thread.kind] || thread.kind,
+                knowledgeLabel: CONTINUITY_KNOWLEDGE_LABELS[thread.knowledge]
+                    || thread.knowledge,
+                urgencyLabel: CONTINUITY_URGENCY_LABELS[thread.urgency]
+                    || CONTINUITY_URGENCY_LABELS[1],
+                latestSource,
+                isResolved: thread.stage === 'resolved',
+            };
+        })
+        .sort((left, right) => (
+            (STAGE_SORT_ORDER[left.stage] ?? 9) - (STAGE_SORT_ORDER[right.stage] ?? 9)
+            || right.urgency - left.urgency
+            || right.lastAdvancedTurn - left.lastAdvancedTurn
+            || left.title.localeCompare(right.title, 'zh-CN')
+        ));
+    const active = items.filter((thread) => !thread.isResolved);
+    const resolved = items.filter((thread) => thread.isResolved);
+    return {
+        turn: state.turn,
+        updatedAt: state.updatedAt,
+        activeCount: active.length,
+        resolvedCount: resolved.length,
+        active,
+        resolved,
     };
 }
 
@@ -277,7 +344,7 @@ export function buildContinuityInjection(state, {
         .sort((left, right) => right.urgency - left.urgency)
         .map((thread) => [
             `[${thread.id}] ${thread.title}`,
-            `阶段=${STAGE_LABELS[thread.stage] || thread.stage}`,
+            `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
             `认知=${thread.knowledge}`,
             `现状=${thread.summary || '无新增事实'}`,
             `触发=${thread.trigger || '等待自然接口'}`,
