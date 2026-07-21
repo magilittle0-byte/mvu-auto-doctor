@@ -3,9 +3,12 @@ import {
     diffStates,
     extractLastUpdateBlock,
     extractSchemaScripts,
+    findOpeningResourceMismatches,
     findMvuRuleEntries,
     fingerprint,
     isPlainObject,
+    parseInitializationText,
+    parsePatchBlock,
     preparePatch,
     statDataOf,
     validatePatchResult,
@@ -27,14 +30,15 @@ import {
 } from './continuity-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 2;
+const CHAT_NAMESPACE_VERSION = 3;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
 const DEFAULTS = Object.freeze({
     enabled: true,
+    normalizeOpeningResources: true,
     preferStoryOracle: true,
     preventDoubleWrite: true,
     notifyNoChange: false,
@@ -57,6 +61,8 @@ let runChain = Promise.resolve();
 let continuityChain = Promise.resolve();
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
+const openingSyncPendingKeys = new Set();
+const openingSyncCompletedKeys = new Set();
 const continuityPendingKeys = new Set();
 const continuityCompletedKeys = new Set();
 let lastUndo = null;
@@ -68,6 +74,7 @@ let operationEpoch = 0;
 let generationSerial = 0;
 let lastGeneration = { serial: 0, type: 'normal', dryRun: false };
 let pendingChatSaveTimer = null;
+let pendingOpeningSyncTimer = null;
 let presetContinuityCache = { checkedAt: 0, active: false };
 
 function getContext() {
@@ -137,6 +144,8 @@ function setContinuityStatus(text, kind = '') {
 
 function invalidateOperations(reason = '') {
     operationEpoch += 1;
+    clearTimeout(pendingOpeningSyncTimer);
+    pendingOpeningSyncTimer = null;
     automaticPendingKeys.clear();
     // A stale model request cannot be forcibly cancelled through every host API,
     // so detach the new queue. The old request may finish, but its epoch guard
@@ -206,11 +215,25 @@ function readChatNamespace(context = getContext()) {
             rev: 0,
             chatId: context?.chatId || '',
             repairJournal: [],
+            openingResourceSync: {
+                version: 1,
+                synced: {},
+                suppressed: {},
+            },
             continuity: emptyContinuityState(context?.chatId || ''),
             continuityCheckpoint: null,
         };
     }
     return deepClone(value);
+}
+
+function openingSyncState(namespace = readChatNamespace()) {
+    const value = namespace?.openingResourceSync;
+    return {
+        version: 1,
+        synced: isPlainObject(value?.synced) ? deepClone(value.synced) : {},
+        suppressed: isPlainObject(value?.suppressed) ? deepClone(value.suppressed) : {},
+    };
 }
 
 async function writeChatNamespace(next, expectedChatId, {
@@ -339,6 +362,58 @@ async function collectMvuRules(context, character) {
         contents.push(`【${entry.comment || 'MVU 更新规则'}】\n${content}`);
     }
     return contents;
+}
+
+function initializationEntriesOf(book) {
+    return entriesOfWorldBook(book).filter((entry) => {
+        if (!entry || typeof entry.content !== 'string' || !entry.content.trim()) return false;
+        const title = String(entry.comment || entry.name || '');
+        return /\binitvar\b|变量初始化|初始变量|initial\s*(?:state|variables?)/iu.test(title);
+    });
+}
+
+async function collectInitializationStates(context, character) {
+    const embeddedEntries = embeddedBooks(character).flatMap(initializationEntriesOf);
+    const externalEntries = [];
+    try {
+        const module = await import('/scripts/world-info.js');
+        const names = new Set(module.selected_world_info || []);
+        const primaryWorld = character?.data?.extensions?.world
+            || character?.extensions?.world
+            || character?.json_data?.data?.extensions?.world
+            || character?.json_data?.extensions?.world;
+        if (primaryWorld) names.add(primaryWorld);
+        if (context?.chatMetadata?.world_info) names.add(context.chatMetadata.world_info);
+        for (const name of names) {
+            if (!name || typeof module.loadWorldInfo !== 'function') continue;
+            try {
+                const book = await module.loadWorldInfo(name);
+                if (book) externalEntries.push(...initializationEntriesOf(book));
+            } catch (error) {
+                console.warn('[MVU Auto Doctor] 读取初始化世界书失败：', name, error);
+            }
+        }
+    } catch {
+        // Embedded [initvar] remains available on clients without this module.
+    }
+
+    const entries = externalEntries.length ? externalEntries : embeddedEntries;
+    const states = [];
+    const seen = new Set();
+    for (const entry of entries) {
+        let content = entry.content;
+        try {
+            content = context?.substituteParams?.(content) ?? content;
+        } catch {
+            // Numeric initialization fields do not depend on macro expansion.
+        }
+        const key = fingerprint(content);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const parsed = parseInitializationText(content);
+        if (parsed) states.push(parsed);
+    }
+    return states;
 }
 
 function entriesOfWorldBook(book) {
@@ -783,6 +858,180 @@ async function previousMvuData(Mvu, context, targetIndex) {
     return null;
 }
 
+function assistantMessageOrdinal(context, targetIndex) {
+    return (context?.chat || [])
+        .slice(0, targetIndex + 1)
+        .filter((message) => (
+            message
+            && !message.is_user
+            && !message.is_system
+            && typeof message.mes === 'string'
+            && message.mes.trim()
+        )).length;
+}
+
+function updateTouchedPaths(text) {
+    const paths = new Set();
+    const blocks = String(text || '').match(/<UpdateVariable\b[\s\S]*?<\/UpdateVariable>/giu) || [];
+    for (const block of blocks) {
+        const parsed = parsePatchBlock(block);
+        if (parsed.error) continue;
+        for (const operation of parsed.ops) {
+            for (const path of [operation.path, operation.from, operation.to]) {
+                if (typeof path === 'string') paths.add(path);
+            }
+        }
+    }
+    return [...paths];
+}
+
+function openingSyncLabel(mismatch) {
+    const path = String(mismatch?.currentPath || '资源');
+    const leaf = path.split('/').at(-1) || path;
+    return `${leaf} ${mismatch.from}→${mismatch.to}`;
+}
+
+async function runOpeningResourceSync(targetId, { manual = false } = {}) {
+    const settings = getSettings();
+    if (!settings.normalizeOpeningResources) return { status: 'disabled' };
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    if (resolved < 0 || assistantMessageOrdinal(context, resolved) > 4) {
+        return { status: 'outside-opening' };
+    }
+    const captured = captureTarget(context, resolved);
+    if (!captured) return { status: 'stale', reason: '开局资源同步目标不可用' };
+    const token = operationToken(captured);
+    const Mvu = await getMvu();
+    if (
+        !Mvu
+        || typeof Mvu.getMvuData !== 'function'
+        || typeof Mvu.parseMessage !== 'function'
+        || typeof Mvu.replaceMvuData !== 'function'
+    ) return { status: 'failed', reason: '未检测到完整的 MVU API' };
+
+    let guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    await waitMvuIdle(Mvu);
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    await waitMvuStable(Mvu, 4000, 200, 2);
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+
+    const freshContext = getContext();
+    const currentData = await mvuDataAt(Mvu, resolved);
+    const previousData = await previousMvuData(Mvu, freshContext, resolved);
+    const initialStates = await collectInitializationStates(
+        freshContext,
+        currentCharacter(freshContext),
+    );
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const namespace = readChatNamespace(freshContext);
+    const openingState = openingSyncState(namespace);
+    const mismatches = findOpeningResourceMismatches(currentData, {
+        initialStates,
+        previousData,
+        lastSynced: openingState.synced,
+        touchedPaths: [
+            ...updateTouchedPaths(freshContext.chat[resolved]?.mes),
+            ...Object.keys(openingState.suppressed),
+        ],
+    });
+    if (!mismatches.length) return { status: 'nochange' };
+
+    const block = [
+        '<UpdateVariable>',
+        '<Analysis>',
+        '开局派生上限已确定；仅同步初始化时原本为满值且未被本轮消耗的当前资源。',
+        '</Analysis>',
+        '<JSONPatch>',
+        JSON.stringify(mismatches.map((item) => ({
+            op: 'replace',
+            path: item.currentPath,
+            value: item.to,
+        })), null, 2),
+        '</JSONPatch>',
+        '</UpdateVariable>',
+    ].join('\n');
+    const candidate = await parseCandidate(Mvu, currentData, block);
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (candidate.status !== 'ready') {
+        return {
+            status: candidate.status || 'failed',
+            reason: candidate.reason || '开局资源补丁未通过 MVU/Schema 校验',
+        };
+    }
+    const result = await commitCandidate(Mvu, candidate, captured, token, {
+        repairKind: 'opening-resource-sync',
+        openingPaths: mismatches.map((item) => item.currentPath),
+    });
+    if (result.status !== 'applied') return result;
+
+    const landedNamespace = readChatNamespace();
+    const landedOpeningState = openingSyncState(landedNamespace);
+    for (const mismatch of mismatches) {
+        landedOpeningState.synced[mismatch.currentPath] = {
+            maximum: mismatch.to,
+            targetIndex: resolved,
+            updatedAt: Date.now(),
+        };
+    }
+    landedNamespace.openingResourceSync = landedOpeningState;
+    await writeChatNamespace(landedNamespace, captured.chatId);
+    const summary = mismatches.map(openingSyncLabel).join('、');
+    setStatus(`已同步开局资源：${summary}`, 'ok');
+    toast('success', `已修正开局初始化失配：${summary}`);
+    return { ...result, mismatches };
+}
+
+function enqueueOpeningResourceSync(targetId, options = {}) {
+    const automatic = !options.manual;
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const captured = captureTarget(context, resolved);
+    const key = capturedTargetKey(captured);
+    if (
+        automatic
+        &&
+        key
+        && (openingSyncPendingKeys.has(key) || openingSyncCompletedKeys.has(key))
+    ) return Promise.resolve({ status: 'duplicate' });
+    if (automatic && key) openingSyncPendingKeys.add(key);
+    return runOpeningResourceSync(resolved, options)
+        .then((result) => {
+            if (automatic && key && ['applied', 'nochange', 'outside-opening'].includes(result?.status)) {
+                openingSyncCompletedKeys.add(key);
+            }
+            return result;
+        })
+        .catch((error) => {
+            console.error('[MVU Auto Doctor] 开局资源同步异常：', error);
+            return { status: 'failed', reason: String(error.message || error) };
+        })
+        .finally(() => {
+            if (automatic && key) openingSyncPendingKeys.delete(key);
+        });
+}
+
+function scheduleOpeningResourceSync(delayMs = 700) {
+    clearTimeout(pendingOpeningSyncTimer);
+    const expectedEpoch = operationEpoch;
+    const expectedChatId = getContext()?.chatId || '';
+    pendingOpeningSyncTimer = setTimeout(() => {
+        pendingOpeningSyncTimer = null;
+        if (
+            expectedEpoch !== operationEpoch
+            || expectedChatId !== (getContext()?.chatId || '')
+        ) return;
+        enqueueOpeningResourceSync(null);
+    }, Math.max(100, Number(delayMs) || 700));
+}
+
 async function buildAuditMessages({
     context,
     character,
@@ -1098,7 +1347,7 @@ async function persistRepairRecord(record, expectedChatId) {
     return saved;
 }
 
-async function commitCandidate(Mvu, candidate, captured, token) {
+async function commitCandidate(Mvu, candidate, captured, token, recordMeta = {}) {
     let current = targetIsCurrent(captured, token);
     if (!current.ok) {
         return { status: 'stale', reason: `${current.reason}，未写入` };
@@ -1168,6 +1417,7 @@ async function commitCandidate(Mvu, candidate, captured, token) {
         afterFingerprint,
         snapshot,
         block: candidate.block,
+        ...deepClone(recordMeta),
     };
     // Always persist the corrective block in the swipe. Updating only the
     // in-memory MVU snapshot is not durable: a reload/reparse would otherwise
@@ -1462,6 +1712,17 @@ async function undoLast() {
         token,
     );
     const updatedNamespace = markRepairUndone(readChatNamespace(), record.id);
+    if (record.repairKind === 'opening-resource-sync') {
+        const state = openingSyncState(updatedNamespace);
+        for (const path of Array.isArray(record.openingPaths) ? record.openingPaths : []) {
+            delete state.synced[path];
+            state.suppressed[path] = {
+                recordId: record.id,
+                updatedAt: Date.now(),
+            };
+        }
+        updatedNamespace.openingResourceSync = state;
+    }
     await writeChatNamespace(updatedNamespace, record.chatId, { force: true });
     lastUndo = null;
     setStatus('已撤销上一次自动修复', 'ok');
@@ -2219,6 +2480,7 @@ function buildSettingsPanel() {
     const options = wrapper.querySelector('.mvuad-options');
     options.append(
         makeCheckbox('自动检查每条新回复', 'enabled'),
+        makeCheckbox('开局自动补满初始化失配的资源', 'normalizeOpeningResources'),
         makeCheckbox('优先复用故事神谕的模型连接', 'preferStoryOracle'),
         makeCheckbox('自动关闭故事神谕 AUTO，避免双写', 'preventDoubleWrite'),
         makeCheckbox('无需修正时也弹提示', 'notifyNoChange'),
@@ -2234,7 +2496,8 @@ function buildSettingsPanel() {
         saveSettings();
     });
     wrapper.querySelector('.mvuad-run').addEventListener('click', () => {
-        enqueue(null, { manual: true });
+        const repair = enqueue(null, { manual: true });
+        repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
     });
     wrapper.querySelector('.mvuad-undo').addEventListener('click', undoLast);
     const continuityMode = wrapper.querySelector('.mvuad-continuity-mode');
@@ -2314,8 +2577,9 @@ function bindEvents() {
             const captured = captureTarget(current, resolved);
             if (!captured) return;
             const repair = enqueue(resolved, { queuedTarget: captured });
+            const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
             enqueueContinuity(resolved, {
-                after: repair,
+                after: openingSync,
                 expectedTarget: captured,
             });
         },
@@ -2326,6 +2590,8 @@ function bindEvents() {
             invalidateOperations('聊天已经切换');
             automaticPendingKeys.clear();
             automaticCompletedKeys.clear();
+            openingSyncPendingKeys.clear();
+            openingSyncCompletedKeys.clear();
             continuityPendingKeys.clear();
             continuityCompletedKeys.clear();
             presetContinuityCache = { checkedAt: 0, active: false };
@@ -2333,6 +2599,7 @@ function bindEvents() {
             setStatus('等待新的 AI 回复');
             applyContinuityInjection();
             disableStoryOracleAutoIfNeeded();
+            scheduleOpeningResourceSync();
         };
     const chatEvents = new Set([
         types.CHAT_CHANGED || 'chat_changed',
@@ -2352,10 +2619,12 @@ function initialize() {
     disableStoryOracleAutoIfNeeded();
     lastUndo = latestUndoRecord(readChatNamespace());
     applyContinuityInjection();
+    scheduleOpeningResourceSync();
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
         runLatest: () => enqueue(null, { manual: true }),
+        syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),
         clearContinuityState,
