@@ -17,6 +17,7 @@ import {
     continuityContentDigest,
     continuityLedgerView,
     emptyContinuityState,
+    enforceContinuityPolicy,
     extractContinuityMarkers,
     latestUndoRecord,
     markRepairUndone,
@@ -26,7 +27,7 @@ import {
 } from './continuity-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 2;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -42,7 +43,10 @@ const DEFAULTS = Object.freeze({
     maxTokens: 4096,
     modelTimeoutMs: 120000,
     continuityMode: 'auto',
-    continuityMaxThreads: 4,
+    continuityAutonomy: 'living',
+    hideContinuitySpoilers: true,
+    continuitySettingsVersion: 2,
+    continuityMaxThreads: 8,
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
     continuityMaxTokens: 2200,
@@ -76,6 +80,7 @@ function getSettings() {
     const root = context.extensionSettings || {};
     if (!isPlainObject(root[PLUGIN_ID])) root[PLUGIN_ID] = {};
     const settings = root[PLUGIN_ID];
+    const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -85,6 +90,16 @@ function getSettings() {
     }
     if (!['auto', 'on', 'off'].includes(settings.continuityMode)) {
         settings.continuityMode = 'auto';
+        changed = true;
+    }
+    if (!['conservative', 'living', 'expansive'].includes(settings.continuityAutonomy)) {
+        settings.continuityAutonomy = 'living';
+        changed = true;
+    }
+    if (previousContinuitySettingsVersion < 2) {
+        // v1.2.x had no UI for this value, so 4 can only be the old default.
+        if (Number(settings.continuityMaxThreads) === 4) settings.continuityMaxThreads = 8;
+        settings.continuitySettingsVersion = 2;
         changed = true;
     }
     if (changed) context.saveSettingsDebounced?.();
@@ -326,6 +341,140 @@ async function collectMvuRules(context, character) {
     return contents;
 }
 
+function entriesOfWorldBook(book) {
+    if (Array.isArray(book?.entries)) return book.entries;
+    if (isPlainObject(book?.entries)) return Object.values(book.entries);
+    return [];
+}
+
+function continuityCharacterSetting(character, context) {
+    const roots = [
+        character?.data,
+        character,
+        character?.json_data?.data,
+        character?.json_data,
+    ].filter((value) => value && typeof value === 'object');
+    const fields = [
+        ['角色/世界名', 'name'],
+        ['角色设定', 'description'],
+        ['性格与社会位置', 'personality'],
+        ['当前世界场景', 'scenario'],
+        ['系统世界观', 'system_prompt'],
+    ];
+    const blocks = [];
+    const seen = new Set();
+    for (const [label, key] of fields) {
+        for (const root of roots) {
+            let value = String(root?.[key] || '').trim();
+            if (!value) continue;
+            try {
+                value = String(context?.substituteParams?.(value) ?? value).trim();
+            } catch {
+                // Keep the raw setting when macro substitution is unavailable.
+            }
+            if (!value || seen.has(value)) continue;
+            seen.add(value);
+            blocks.push(`【${label}】\n${cropText(value, 7000, label)}`);
+            break;
+        }
+    }
+    return blocks;
+}
+
+function usableContinuityWorldEntry(entry) {
+    if (!entry || entry.disable === true || entry.enabled === false) return null;
+    const title = String(entry.comment || entry.name || entry.uid || '世界设定').trim();
+    const content = String(entry.content || '').trim();
+    if (!content) return null;
+    const mechanismText = `${title}\n${content}`;
+    if (/\[mvu_update\]|registerMvuSchema|<UpdateVariable\b|StatusPlaceHolder|TavernDB|数据库填表|SQL(?:ite)?\b|正则美化/iu.test(mechanismText)) {
+        return null;
+    }
+    const keys = [
+        ...(Array.isArray(entry.key) ? entry.key : []),
+        ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : []),
+    ].map((value) => String(value || '').trim()).filter(Boolean).slice(0, 8);
+    return {
+        title,
+        world: String(entry.world || '').trim(),
+        keys,
+        content: cropText(content, 2600, title),
+    };
+}
+
+async function collectContinuityWorldContext(context, character) {
+    const characterBlocks = continuityCharacterSetting(character, context);
+    const activeEntries = [];
+    const loadedEntries = [];
+    try {
+        const module = await import('/scripts/world-info.js');
+        const sorted = typeof module.getSortedEntries === 'function'
+            ? await module.getSortedEntries()
+            : [];
+        activeEntries.push(...(Array.isArray(sorted) ? sorted : []));
+
+        const names = new Set(
+            (sorted || []).map((entry) => entry?.world).filter(Boolean),
+        );
+        for (const name of module.selected_world_info || []) {
+            if (name) names.add(name);
+        }
+        const primaryWorld = character?.data?.extensions?.world
+            || character?.extensions?.world
+            || character?.json_data?.data?.extensions?.world
+            || character?.json_data?.extensions?.world;
+        if (primaryWorld) names.add(primaryWorld);
+        if (context?.chatMetadata?.world_info) names.add(context.chatMetadata.world_info);
+
+        for (const name of names) {
+            try {
+                if (typeof module.loadWorldInfo !== 'function') continue;
+                const book = await module.loadWorldInfo(name);
+                loadedEntries.push(...entriesOfWorldBook(book).map((entry) => ({
+                    ...entry,
+                    world: entry?.world || name,
+                })));
+            } catch (error) {
+                console.warn('[MVU Auto Doctor] 读取活世界设定失败：', name, error);
+            }
+        }
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 世界书模块不可用，活世界事件将只参考角色卡内嵌设定。', error);
+    }
+
+    const external = [...activeEntries, ...loadedEntries]
+        .map(usableContinuityWorldEntry)
+        .filter(Boolean);
+    const embedded = embeddedBooks(character)
+        .flatMap(entriesOfWorldBook)
+        .map(usableContinuityWorldEntry)
+        .filter(Boolean);
+    const candidates = external.length ? external : embedded;
+    const worldBlocks = [];
+    const seen = new Set();
+    for (const entry of candidates) {
+        const key = fingerprint(`${entry.title}\n${entry.content}`);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        worldBlocks.push([
+            `【世界书：${entry.world || '当前角色卡'} / ${entry.title}】`,
+            entry.keys.length ? `关键词：${entry.keys.join('、')}` : '',
+            entry.content,
+        ].filter(Boolean).join('\n'));
+        if (worldBlocks.length >= 24) break;
+    }
+    const text = cropText(
+        [...characterBlocks, ...worldBlocks].join('\n\n'),
+        42000,
+        '活世界设定取材池',
+    );
+    return {
+        text: text || '未读取到可用的角色卡/世界书叙事设定。',
+        hasSetting: characterBlocks.length > 0 || worldBlocks.length > 0,
+        sourceCount: characterBlocks.length + worldBlocks.length,
+    };
+}
+
 async function getMvu() {
     if (window.Mvu) return window.Mvu;
     if (mvuPromise) return mvuPromise;
@@ -554,6 +703,20 @@ function flattenStateForPrompt(value, maxLeaves = 5000) {
 
     walk(value, []);
     return { paths: result, omitted };
+}
+
+function continuityAnchorState(mvuData) {
+    const stat = statDataOf(mvuData);
+    if (!stat) return '未读取到当前 MVU 锚点。';
+    const flat = flattenStateForPrompt(stat, 2500).paths;
+    const anchors = Object.fromEntries(
+        Object.entries(flat)
+            .filter(([pathValue]) => /时间|日期|天数|时刻|地点|位置|区域|场景|世界|位面|time|date|day|location|place|scene|world/iu.test(pathValue))
+            .slice(0, 80),
+    );
+    return Object.keys(anchors).length
+        ? safeJson(anchors)
+        : '当前 MVU 没有可通用识别的时间/地点字段；以最近正文为准，不得猜造精确日期。';
 }
 
 function stateForPrompt(stat) {
@@ -1330,7 +1493,7 @@ function detectContinuityDirector(context, text, markers) {
     return 'standalone';
 }
 
-function continuityFeatureActive(settings, markers, state, force = false) {
+function continuityFeatureActive(settings, markers, state, worldContext, force = false) {
     if (force) return true;
     if (settings.continuityMode === 'off') return false;
     if (settings.continuityMode === 'on') return true;
@@ -1338,6 +1501,10 @@ function continuityFeatureActive(settings, markers, state, force = false) {
         markers.hasPresetParallel
         || markers.hasStitches
         || state?.threads?.some((thread) => thread.stage !== 'resolved')
+        || (
+            settings.continuityAutonomy !== 'conservative'
+            && worldContext?.hasSetting
+        )
     );
 }
 
@@ -1449,12 +1616,16 @@ function applyContinuityInjection({ isReroll = false } = {}) {
     });
     if (
         !content
-        && (settings.continuityMode === 'on' || namespace.continuityDetected === true)
+        && (
+            settings.continuityMode === 'on'
+            || settings.continuityAutonomy !== 'conservative'
+            || namespace.continuityDetected === true
+        )
     ) {
         content = [
             '<Parallel_Continuity_Bridge>',
-            '当前没有未结支线。不要为了完成指标硬造剧情。',
-            '若本回合已有离场角色的明确意图、敌方计划、未兑现约定、异常物证或主线后果，可依当前预设/缝合怪原格式建立至多一条支线；必须来自已出场人物与既有事实。',
+            '当前没有登记中的未结支线。不要为了完成指标在正文硬造伏笔。',
+            '活世界账本可以在回复落地后依据角色卡与当前世界书，另行建立主线衍生、暗中相关、当前独立或世界脉动事件；此处不要求主回复立即展示。',
             '只能推动NPC与世界；禁止替玩家角色行动、回答、移动、消费资源或追加检定。',
             '</Parallel_Continuity_Bridge>',
         ].join('\n');
@@ -1507,23 +1678,41 @@ function buildContinuityMessages({
     base,
     director,
     markers,
+    worldContext,
+    stateAnchors,
 }) {
     const settings = getSettings();
     const bridgeOnly = director !== 'standalone';
+    const autonomyRule = settings.continuityAutonomy === 'conservative'
+        ? '保守：只能登记正文/预设/缝合怪已经提出的未决因果，不得新建世界自主事件。'
+        : settings.continuityAutonomy === 'expansive'
+            ? '活跃：允许从世界设定建立自主事件；两次新建至少间隔2个账本轮次，未结自主事件最多4条，每轮仍最多只推进1条。'
+            : '活世界：允许从世界设定建立自主事件；两次新建至少间隔3个账本轮次，未结自主事件最多3条，每轮仍最多只推进1条。';
     const system = [
-        '你是一个通用的跑团支线连续性记账与调度引擎。你不写主回复，只维护结构化支线账本。',
+        '你是一个通用的跑团“活世界事件”记账与调度引擎。你不写主回复，只维护结构化支线账本。',
         '你必须服从当前角色卡与已发生正文，不得套用别的角色卡设定。',
         '',
         '【职责边界】',
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
-        '- 每回合最多推进一条未结支线。已有支线优先，禁止为同一因果另造同义ID。',
+        '- 每个账本轮次最多推进一条未结事件；推进可以完全发生在幕后，不要求正文出现镜头或伏笔。已有事件优先，禁止为同一因果另造同义ID。',
         '- 区分hidden、rumor、observed。隐藏事实不能令不知情角色全知，必须经过观察、传播、调查或后果显现。',
         '- 计划、建议、选项、传闻和未来可能性不是已发生事实。',
-        '- 已完成的支线标记resolved，不要删除；暂时无接口可标记dormant。',
+        '- 已完成的事件标记resolved，不要删除；暂时没有自然推进条件的事件可标记dormant。',
+        '- 独立事件可以永远不与主线相交，也可以在幕后自行解决。禁止把所有世界变化都改造成围着玩家转的任务。',
+        '- 只有真实的传播链、因果后果、人物接触、地点重合或时间窗口满足intersection时，relation才可从independent/latent变为converging，再由主回复决定是否形成可观察痕迹。禁止巧合传送和强行汇流。',
+        '',
+        '【事件来源分类 origin】',
+        '- main_derivative：直接由已发生正文衍生。',
+        '- setting_linked：尚未在主线出现，但依据世界设定与主线存在潜在因果。',
+        '- setting_independent：依据世界设定独立发生，当前与主线无关，未来也不保证相交。',
+        '- ambient：社会、组织、生态、日常或局势的世界脉动，可短期发展后自行结束。',
+        '【主线关系 relation】linked / latent / independent / converging。origin记录最初来源，不因后续汇流而改写。',
+        '- 可按世界设定创建尚未登场的普通NPC、小组织、地方事务和日常关系；不得无依据发明核心宇宙法则、改写重要角色过去或凭空制造只为震惊玩家的幕后黑手。',
+        `【自主度】${autonomyRule}`,
         bridgeOnly
-            ? '- 已检测到预设平行事件或缝合怪：它们保留剧情提案权。只有在本回合正文已经出现明确的未决意图、敌方计划、约定、异常线索或离场角色行动时，才可把该既有事实登记为至多一条seeded支线；不得补造幕后真相或无来源阴谋。你的任务是接续、去重、安排下一拍。'
-            : '- 未检测到外部剧情推进器：允许从已出场人物、既有势力、地点、任务、物件或已发生后果中建立至多一条新支线；不得凭空创造无接口阴谋。',
+            ? '- 已检测到预设平行事件或缝合怪：它们保留可见剧情的提案权；你可以独立维护未显现的世界事件。若它们后来提出相同因果，合并进原稳定ID，只落地一次。'
+            : '- 未检测到外部剧情推进器：你负责低频维护世界事件，但仍不得要求主回复展示每一条幕后变化。',
         '',
         '【stage枚举】seeded / advancing / manifested / resolved / dormant',
         '【kind枚举】parallel / personal / promise / enemy / mystery',
@@ -1535,13 +1724,20 @@ function buildContinuityMessages({
         .join('\n');
     const user = [
         `当前导演模式：${director}`,
+        `当前自主度：${settings.continuityAutonomy}`,
         `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
         '',
         '=== 更新前支线账本 ===',
         safeJson(base),
         '',
         '=== 本回合可识别的预设/缝合怪记录 ===',
-        markerText || '无结构化记录；只能依据正文中的明确事实更新。',
+        markerText || '无结构化记录；仍可依据下方世界设定低频维护自主事件。',
+        '',
+        '=== 当前MVU时间/地点等锚点（只读）===',
+        stateAnchors,
+        '',
+        `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
+        worldContext.text,
         '',
         '=== 最近剧情（含本轮回复）===',
         cropText(
@@ -1560,10 +1756,13 @@ function buildContinuityMessages({
         '  "turn": 1,',
         '  "threads": [{',
         '    "id": "稳定ID", "title": "短标题", "kind": "parallel",',
-        '    "stage": "seeded", "summary": "目前已成立的事实",',
-        '    "nextBeat": "下次自然推进的一拍", "trigger": "可验证触发条件",',
+        '    "origin": "setting_independent", "relation": "independent",',
+        '    "stage": "seeded", "summary": "目前已成立的事实", "offscreenBeat": "本轮幕后实际变化或空字符串",',
+        '    "nextBeat": "下次自然推进的一拍", "trigger": "事件自身的可验证推进条件",',
+        '    "intersection": "与主线自然汇流的条件；可写无，不强求相交",',
+        '    "seedBasis": "引用的角色卡/世界书设定依据",',
         '    "actors": [], "locations": [], "knowledge": "hidden",',
-        '    "urgency": 1, "lastAdvancedTurn": 1',
+        '    "urgency": 1, "createdTurn": 1, "lastAdvancedTurn": 1',
         '  }]',
         '}',
         '</ContinuityState>',
@@ -1592,7 +1791,21 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         chatId: captured.chatId,
         maxThreads: settings.continuityMaxThreads,
     });
-    if (!continuityFeatureActive(settings, markers, base, force)) {
+    const character = currentCharacter(context);
+    const worldContext = await collectContinuityWorldContext(context, character);
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    let stateAnchors = '未读取到当前 MVU 锚点。';
+    try {
+        const Mvu = await getMvu();
+        const currentData = Mvu ? await mvuDataAt(Mvu, captured.index) : null;
+        stateAnchors = continuityAnchorState(currentData);
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 读取活世界时间/地点锚点失败：', error);
+    }
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (!continuityFeatureActive(settings, markers, base, worldContext, force)) {
         applyContinuityInjection();
         return { status: 'disabled' };
     }
@@ -1605,6 +1818,8 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         base,
         director,
         markers,
+        worldContext,
+        stateAnchors,
     });
     let output = '';
     try {
@@ -1625,6 +1840,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         else console.warn('[MVU Auto Doctor] 支线账本输出未通过解析：', parsed.error);
     }
     next = preserveMissingThreads(base, next, settings.continuityMaxThreads);
+    next = enforceContinuityPolicy(base, next, {
+        autonomy: settings.continuityAutonomy,
+        allowAutonomous: worldContext.hasSetting,
+        maxThreads: settings.continuityMaxThreads,
+    });
     next.turn = Math.max(base.turn + 1, Number(next.turn) || 0);
     next.updatedAt = Date.now();
     next = attachChangedSourceRefs(base, next, sourceRefOf(captured));
@@ -1774,10 +1994,14 @@ function appendLedgerField(host, label, value, emptyText = '未登记') {
     host.appendChild(row);
 }
 
-function buildLedgerThreadCard(thread, { open = false } = {}) {
+function buildLedgerThreadCard(thread, {
+    open = false,
+    concealSpoiler = false,
+} = {}) {
     const details = document.createElement('details');
     details.className = `mvuad-thread-card mvuad-thread-stage-${thread.stage}`;
     details.dataset.threadId = thread.id;
+    details.dataset.concealed = concealSpoiler ? 'true' : 'false';
     details.open = open;
 
     const heading = document.createElement('summary');
@@ -1785,7 +2009,9 @@ function buildLedgerThreadCard(thread, { open = false } = {}) {
     titleWrap.className = 'mvuad-thread-heading';
     const title = document.createElement('span');
     title.className = 'mvuad-thread-title';
-    title.textContent = thread.title || thread.id;
+    title.textContent = concealSpoiler
+        ? '幕后独立事件（点击查看剧透）'
+        : (thread.title || thread.id);
     const id = document.createElement('span');
     id.className = 'mvuad-thread-id';
     id.textContent = thread.id;
@@ -1796,6 +2022,8 @@ function buildLedgerThreadCard(thread, { open = false } = {}) {
     for (const [className, text] of [
         [`stage-${thread.stage}`, thread.stageLabel],
         ['kind', thread.kindLabel],
+        [`origin-${thread.origin}`, thread.originLabel],
+        [`relation-${thread.relation}`, thread.relationLabel],
         [`urgency-${thread.urgency}`, `紧迫度：${thread.urgencyLabel}`],
     ]) {
         const badge = document.createElement('span');
@@ -1808,9 +2036,15 @@ function buildLedgerThreadCard(thread, { open = false } = {}) {
 
     const body = document.createElement('div');
     body.className = 'mvuad-thread-body';
+    if (concealSpoiler) appendLedgerField(body, '真实事件', thread.title || thread.id);
+    appendLedgerField(body, '事件来源', thread.originLabel);
+    appendLedgerField(body, '与主线关系', thread.relationLabel);
+    appendLedgerField(body, '设定依据', thread.seedBasis, '未登记；建议重新整理核对');
     appendLedgerField(body, '当前进展', thread.summary, '暂无新增事实');
+    appendLedgerField(body, '最近幕后变化', thread.offscreenBeat, '本轮没有推进');
     appendLedgerField(body, '下一自然接口', thread.nextBeat, '保持现状，不强推');
-    appendLedgerField(body, '触发条件', thread.trigger, '等待剧情自然接轨');
+    appendLedgerField(body, '事件推进条件', thread.trigger, '等待自身条件成熟');
+    appendLedgerField(body, '与主线汇流条件', thread.intersection, '无；允许独立发展或在幕后结束');
     appendLedgerField(body, '涉及人物/势力', thread.actors?.join('、'));
     appendLedgerField(body, '涉及地点', thread.locations?.join('、'));
     appendLedgerField(body, '知情范围', thread.knowledgeLabel);
@@ -1854,16 +2088,25 @@ function renderContinuityLedger() {
     ].filter(Boolean).join(' · ');
 
     ui.ledgerActive.replaceChildren();
+    const concealById = new Map(view.active.map((thread) => [
+        thread.id,
+        settings.hideContinuitySpoilers && thread.isSpoiler,
+    ]));
+    const firstSafeIndex = view.active.findIndex((thread) => !concealById.get(thread.id));
     view.active.forEach((thread, index) => {
         ui.ledgerActive.appendChild(buildLedgerThreadCard(thread, {
-            open: openIds.has(thread.id) || (!hadActiveCards && index === 0),
+            open: openIds.has(thread.id)
+                || (!hadActiveCards && index === firstSafeIndex),
+            concealSpoiler: concealById.get(thread.id),
         }));
     });
     ui.ledgerEmpty.hidden = view.activeCount > 0;
 
     ui.ledgerResolvedList.replaceChildren();
     for (const thread of view.resolved) {
-        ui.ledgerResolvedList.appendChild(buildLedgerThreadCard(thread));
+        ui.ledgerResolvedList.appendChild(buildLedgerThreadCard(thread, {
+            concealSpoiler: settings.hideContinuitySpoilers && thread.isSpoiler,
+        }));
     }
     ui.ledgerResolved.hidden = view.resolvedCount === 0;
     ui.ledgerResolvedSummary.textContent = `已收束支线（${view.resolvedCount}）`;
@@ -1882,6 +2125,7 @@ function makeCheckbox(label, key) {
         if (key === 'preventDoubleWrite' && input.checked) {
             disableStoryOracleAutoIfNeeded();
         }
+        if (key === 'hideContinuitySpoilers') renderContinuityLedger();
     });
     const span = document.createElement('span');
     span.textContent = label;
@@ -1925,17 +2169,26 @@ function buildSettingsPanel() {
                     <div class="mvuad-status" role="status"></div>
                     <div class="mvuad-section-title">平行支线连续性</div>
                     <div class="mvuad-description">
-                        复用预设的平行事件与缝合怪记录，给支线建立稳定账本并注入下一回合；
-                        不替玩家行动，不写MVU或数据库。
+                        同时维护主线衍生、暗中相关、当前独立和世界脉动事件；
+                        允许幕后事件自行发展或结束，不强求与主线汇流，不替玩家行动，也不写MVU或数据库。
                     </div>
                     <label class="mvuad-select">
                         <span>运行模式</span>
                         <select class="text_pole mvuad-continuity-mode">
-                            <option value="auto">自动兼容（推荐）</option>
-                            <option value="on">始终开启</option>
+                            <option value="auto">自动活世界（推荐）</option>
+                            <option value="on">始终运行</option>
                             <option value="off">关闭</option>
                         </select>
                     </label>
+                    <label class="mvuad-select">
+                        <span>世界自主度</span>
+                        <select class="text_pole mvuad-continuity-autonomy">
+                            <option value="conservative">保守·只接正文</option>
+                            <option value="living">活世界·平衡（推荐）</option>
+                            <option value="expansive">活跃·更多幕后事件</option>
+                        </select>
+                    </label>
+                    <div class="mvuad-continuity-options"></div>
                     <div class="mvuad-actions">
                         <button class="menu_button mvuad-continuity-run" type="button">立即整理支线</button>
                         <button class="menu_button mvuad-continuity-clear" type="button">清空当前账本</button>
@@ -1991,6 +2244,16 @@ function buildSettingsPanel() {
         saveSettings();
         applyContinuityInjection();
     });
+    const continuityAutonomy = wrapper.querySelector('.mvuad-continuity-autonomy');
+    continuityAutonomy.value = getSettings().continuityAutonomy;
+    continuityAutonomy.addEventListener('change', () => {
+        getSettings().continuityAutonomy = continuityAutonomy.value;
+        saveSettings();
+        applyContinuityInjection();
+    });
+    wrapper.querySelector('.mvuad-continuity-options').append(
+        makeCheckbox('默认折叠未显现的幕后事件，保留惊喜', 'hideContinuitySpoilers'),
+    );
     wrapper.querySelector('.mvuad-continuity-run').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
