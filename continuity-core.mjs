@@ -16,6 +16,20 @@ const KINDS = new Set([
 
 const KNOWLEDGE = new Set(['hidden', 'rumor', 'observed']);
 
+const ORIGINS = new Set([
+    'main_derivative',
+    'setting_linked',
+    'setting_independent',
+    'ambient',
+]);
+
+const RELATIONS = new Set([
+    'linked',
+    'latent',
+    'independent',
+    'converging',
+]);
+
 export const CONTINUITY_STAGE_LABELS = Object.freeze({
     seeded: '已埋设',
     advancing: '推进中',
@@ -36,6 +50,20 @@ export const CONTINUITY_KNOWLEDGE_LABELS = Object.freeze({
     hidden: '幕后隐藏（角色未知）',
     rumor: '传闻阶段（部分可知）',
     observed: '正文已观察',
+});
+
+export const CONTINUITY_ORIGIN_LABELS = Object.freeze({
+    main_derivative: '主线衍生',
+    setting_linked: '世界设定·暗中相关',
+    setting_independent: '世界设定·当前独立',
+    ambient: '世界脉动',
+});
+
+export const CONTINUITY_RELATION_LABELS = Object.freeze({
+    linked: '已接入主线',
+    latent: '潜在关联',
+    independent: '保持独立',
+    converging: '正在汇流',
 });
 
 const CONTINUITY_URGENCY_LABELS = Object.freeze([
@@ -115,6 +143,11 @@ function normalizeThread(value, index, turn) {
     const knowledge = KNOWLEDGE.has(value.knowledge)
         ? value.knowledge
         : (stage === 'manifested' || stage === 'resolved' ? 'observed' : 'hidden');
+    const origin = ORIGINS.has(value.origin) ? value.origin : 'main_derivative';
+    const relation = RELATIONS.has(value.relation)
+        ? value.relation
+        : (origin === 'main_derivative' ? 'linked'
+            : origin === 'setting_linked' ? 'latent' : 'independent');
     const refs = (Array.isArray(value.sourceRefs) ? value.sourceRefs : [])
         .map(normalizeSourceRef)
         .filter(Boolean)
@@ -123,14 +156,25 @@ function normalizeThread(value, index, turn) {
         id,
         title,
         kind,
+        origin,
+        relation,
         stage,
         summary,
+        offscreenBeat: cleanText(value.offscreenBeat, 500),
         nextBeat: cleanText(value.nextBeat, 500),
         trigger: cleanText(value.trigger, 350),
+        intersection: cleanText(value.intersection, 450),
+        seedBasis: cleanText(value.seedBasis, 400),
         actors: cleanList(value.actors),
         locations: cleanList(value.locations),
         knowledge,
         urgency: boundedInteger(value.urgency, 0, 3, 1),
+        createdTurn: boundedInteger(
+            value.createdTurn,
+            0,
+            Number.MAX_SAFE_INTEGER,
+            turn,
+        ),
         lastAdvancedTurn: boundedInteger(
             value.lastAdvancedTurn,
             0,
@@ -177,12 +221,18 @@ export function continuityLedgerView(value, {
                 ...clone(thread),
                 stageLabel: CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage,
                 kindLabel: CONTINUITY_KIND_LABELS[thread.kind] || thread.kind,
+                originLabel: CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin,
+                relationLabel: CONTINUITY_RELATION_LABELS[thread.relation]
+                    || thread.relation,
                 knowledgeLabel: CONTINUITY_KNOWLEDGE_LABELS[thread.knowledge]
                     || thread.knowledge,
                 urgencyLabel: CONTINUITY_URGENCY_LABELS[thread.urgency]
                     || CONTINUITY_URGENCY_LABELS[1],
                 latestSource,
                 isResolved: thread.stage === 'resolved',
+                isSpoiler: thread.knowledge === 'hidden'
+                    && !['linked', 'converging'].includes(thread.relation)
+                    && !['manifested', 'resolved'].includes(thread.stage),
             };
         })
         .sort((left, right) => (
@@ -207,6 +257,87 @@ function stableThreadContent(thread) {
     const copy = clone(thread);
     delete copy.sourceRefs;
     return JSON.stringify(copy);
+}
+
+export function enforceContinuityPolicy(previous, candidate, {
+    autonomy = 'living',
+    allowAutonomous = true,
+    maxThreads = 8,
+} = {}) {
+    const before = normalizeContinuityState(previous, { maxThreads });
+    const after = normalizeContinuityState(candidate, { maxThreads });
+    const oldById = new Map(before.threads.map((thread) => [thread.id, thread]));
+    const newById = new Map(after.threads.map((thread) => [thread.id, thread]));
+    const changedExisting = after.threads
+        .filter((thread) => {
+            const old = oldById.get(thread.id);
+            return old && stableThreadContent(old) !== stableThreadContent(thread);
+        })
+        .sort((left, right) => (
+            right.lastAdvancedTurn - left.lastAdvancedTurn
+            || right.urgency - left.urgency
+        ));
+    const selectedChangedId = changedExisting[0]?.id || '';
+    const threads = before.threads.map((old) => {
+        if (old.id !== selectedChangedId) return clone(old);
+        const proposed = clone(newById.get(old.id));
+        proposed.origin = old.origin;
+        proposed.createdTurn = old.createdTurn;
+        if (
+            ['independent', 'latent'].includes(old.relation)
+            && proposed.relation === 'linked'
+        ) {
+            proposed.relation = 'converging';
+        }
+        if (
+            ['independent', 'latent'].includes(proposed.relation)
+            && (
+                proposed.knowledge === 'observed'
+                || proposed.stage === 'manifested'
+            )
+        ) {
+            proposed.relation = 'converging';
+        }
+        return proposed;
+    });
+
+    const newCandidates = after.threads.filter((thread) => !oldById.has(thread.id));
+    const autonomousBefore = before.threads.filter((thread) => (
+        thread.origin !== 'main_derivative'
+        && thread.stage !== 'resolved'
+    ));
+    const cadence = autonomy === 'expansive' ? 2 : 3;
+    const autonomousLimit = autonomy === 'expansive' ? 4 : 3;
+    const latestAutonomousCreation = autonomousBefore.reduce(
+        (maximum, thread) => Math.max(maximum, thread.createdTurn || 0),
+        0,
+    );
+    const cadenceReady = !autonomousBefore.length
+        || before.turn - latestAutonomousCreation >= cadence;
+
+    if (!selectedChangedId && threads.length < maxThreads) {
+        const accepted = newCandidates.find((thread) => {
+            if (thread.origin === 'main_derivative') return true;
+            return !!(
+                autonomy !== 'conservative'
+                && allowAutonomous
+                && cadenceReady
+                && autonomousBefore.length < autonomousLimit
+                && thread.seedBasis
+            );
+        });
+        if (accepted) {
+            const fresh = clone(accepted);
+            fresh.createdTurn = before.turn + 1;
+            fresh.lastAdvancedTurn = before.turn + 1;
+            threads.push(fresh);
+        }
+    }
+
+    return normalizeContinuityState({
+        ...after,
+        threads,
+    }, { chatId: before.chatId || after.chatId, maxThreads });
 }
 
 export function attachChangedSourceRefs(previous, next, sourceRef) {
@@ -277,10 +408,15 @@ export function extractContinuityMarkers(text) {
             id,
             title: cleanText(fields['标题'] || id, 120),
             kind: 'parallel',
+            origin: 'main_derivative',
+            relation: 'linked',
             stage: stageFromChinese(stateText),
             summary: cleanText(fields['新增变化'] || fields['当前状态'] || body, 700),
+            offscreenBeat: cleanText(fields['新增变化'] || '', 500),
             nextBeat: cleanText(fields['主线接口'] || fields['下一步'] || '', 500),
             trigger: cleanText(fields['触发条件'] || '', 350),
+            intersection: '已由正文或预设平行事件记录接入主线',
+            seedBasis: '正文/预设平行事件记录',
             actors: cleanList((fields['角色'] || '').split(/[、,，;；]/u)),
             locations: cleanList((fields['时间地点'] || fields['地点'] || '').split(/[、,，;；]/u)),
             knowledge: /已显现|已回收/u.test(stateText) ? 'observed' : 'hidden',
@@ -319,6 +455,10 @@ export function mergeMarkerRecords(state, records, {
         byId.set(incoming.id, old ? {
             ...old,
             ...incoming,
+            origin: old.origin || incoming.origin,
+            relation: incoming.relation === 'linked' ? 'linked' : old.relation,
+            seedBasis: incoming.seedBasis || old.seedBasis,
+            intersection: incoming.intersection || old.intersection,
             sourceRefs: old.sourceRefs || [],
         } : incoming);
     }
@@ -330,7 +470,7 @@ export function buildContinuityInjection(state, {
     director = 'standalone',
     maxVisible = 1,
 } = {}) {
-    const normalized = normalizeContinuityState(state);
+    const normalized = normalizeContinuityState(state, { maxThreads: 12 });
     const active = normalized.threads.filter((thread) => thread.stage !== 'resolved');
     if (!active.length) return '';
     const directorText = director === 'stitches'
@@ -345,10 +485,14 @@ export function buildContinuityInjection(state, {
         .map((thread) => [
             `[${thread.id}] ${thread.title}`,
             `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
+            `来源=${CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin}`,
+            `主线关系=${CONTINUITY_RELATION_LABELS[thread.relation] || thread.relation}`,
             `认知=${thread.knowledge}`,
             `现状=${thread.summary || '无新增事实'}`,
+            `幕后变化=${thread.offscreenBeat || '本轮未推进'}`,
             `触发=${thread.trigger || '等待自然接口'}`,
             `下一拍=${thread.nextBeat || '保持，不强推'}`,
+            `汇流条件=${thread.intersection || '无；允许独立发展或在幕后结束'}`,
         ].join('；'));
     return [
         '<Parallel_Continuity_Bridge>',
@@ -357,6 +501,8 @@ export function buildContinuityInjection(state, {
         `本回合最多让${Math.max(0, Number(maxVisible) || 1)}条支线产生可观察变化；已有事件优先，不得另造同义支线。`,
         '只可推动NPC、势力、环境、约定与敌方行动；禁止替玩家角色决定、说话、移动、消费资源或追加检定。',
         'hidden信息只能形成符合传播路径的痕迹，不能让不知情角色突然全知。计划、传闻和未来可能性不得写成已经发生的事实。',
+        'relation=independent或latent的事件默认只在后台账本推进，禁止为了展示伏笔而强行写入正文；只有真实传播路径、地点/时间重合或因果后果满足intersection时，才能转为converging并产生可观察痕迹。',
+        '独立事件可以始终不与主线相交，也可以在幕后自行解决；不要把所有世界变化都变成围着玩家转的任务。',
         '若触发条件尚未满足，保持或低调铺垫；满足时先在正文写出可观察因果，再按原预设/缝合怪格式更新对应事件。',
         ...rows,
         '</Parallel_Continuity_Bridge>',
@@ -364,7 +510,7 @@ export function buildContinuityInjection(state, {
 }
 
 export function continuityContentDigest(state) {
-    const normalized = normalizeContinuityState(state);
+    const normalized = normalizeContinuityState(state, { maxThreads: 12 });
     delete normalized.updatedAt;
     return JSON.stringify(normalized);
 }

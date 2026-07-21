@@ -21,7 +21,7 @@ const harness = String.raw`<!doctype html>
 <html><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], replace: [], prompts: [], saves: 0 };
+const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '' };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -93,9 +93,11 @@ window.StoryOracleAPI = {
   context: { getSettings: () => ({ autoDiagnoseEnabled: false }) },
   async run(messages) {
     const system = messages[0].content;
-    calls.model.push(system.includes('支线连续性') ? 'continuity' : 'repair');
-    if (system.includes('支线连续性')) {
-      return '<ContinuityState>{"turn":1,"threads":[{"id":"PE-港口-哨兵-01","title":"异常货单","kind":"parallel","stage":"advancing","summary":"巡逻队开始核对货单","nextBeat":"门禁盘问留下痕迹","trigger":"再次进入港区","actors":["哨兵"],"locations":["港口"],"knowledge":"rumor","urgency":2,"lastAdvancedTurn":1}]}</ContinuityState>';
+    calls.model.push(system.includes('活世界事件') ? 'continuity' : 'repair');
+    if (system.includes('活世界事件')) {
+      calls.continuitySystem = messages[0].content;
+      calls.continuityUser = messages[1].content;
+      return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"seeded","summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}]}</ContinuityState>';
     }
     if (mode === 'defer') {
       return await new Promise((resolve) => { deferredResolve = resolve; });
@@ -114,8 +116,15 @@ window.__TEST__ = {
 </body></html>`;
 
 const worldInfoModule = `
-export async function getSortedEntries() { return []; }
-export async function loadWorldInfo() { return { entries: {} }; }`;
+export const selected_world_info = ['港城'];
+const entry = {
+  uid: 7, world: '港城', comment: '钟楼巡检制度',
+  constant: true, disable: false, order: 7,
+  key: ['钟楼', '报时'],
+  content: '港城钟楼由三班巡检员轮值，交接册记录报时、维修和城防联络。巡检员与玩家互不认识。'
+};
+export async function getSortedEntries() { return [entry]; }
+export async function loadWorldInfo() { return { entries: { 7: entry } }; }`;
 
 const openaiModule = `
 export const oai_settings = {
@@ -174,7 +183,15 @@ try {
     });
     await page.waitForFunction(() => (
         window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.threads?.length === 1
-    ), null, { timeout: 20000 });
+    ), null, { timeout: 20000 }).catch(async (error) => {
+        console.error('continuity timeout diagnostics', await page.evaluate(() => ({
+            metadata: window.__TEST__.context.chatMetadata,
+            calls: window.__TEST__.calls,
+            apiState: window.MvuAutoDoctorAPI?.getContinuityState?.(),
+            status: document.querySelector('.mvuad-status')?.textContent,
+        })));
+        throw error;
+    });
     const continuity = await page.evaluate(() => ({
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         calls: structuredClone(window.__TEST__.calls),
@@ -183,16 +200,24 @@ try {
         cardCount: document.querySelectorAll('.mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('.mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.2.1');
-    assert.equal(continuity.state.threads[0].id, 'PE-港口-哨兵-01');
+    assert.equal(continuity.version, '1.3.0');
+    assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
+    assert.equal(continuity.state.threads[0].origin, 'ambient');
+    assert.equal(continuity.state.threads[0].relation, 'independent');
     assert.equal(continuity.cardCount, 1);
-    assert.equal(continuity.openCardCount, 1);
-    assert.match(continuity.ledgerText, /异常货单/u);
-    assert.match(continuity.ledgerText, /推进中/u);
-    assert.match(continuity.ledgerText, /巡逻队开始核对货单/u);
-    assert.match(continuity.ledgerText, /门禁盘问留下痕迹/u);
-    assert.match(continuity.ledgerText, /再次进入港区/u);
-    assert.match(continuity.ledgerText, /传闻阶段（部分可知）/u);
+    assert.equal(continuity.openCardCount, 0, '未显现的幕后事件默认折叠');
+    assert.match(continuity.ledgerText, /幕后独立事件（点击查看剧透）/u);
+    assert.match(continuity.ledgerText, /世界脉动/u);
+    assert.match(continuity.ledgerText, /保持独立/u);
+    assert.equal(
+        await page.locator('.mvuad-thread-card summary .mvuad-thread-title').textContent(),
+        '幕后独立事件（点击查看剧透）',
+    );
+    await page.click('.mvuad-thread-card summary');
+    assert.match(
+        await page.locator('.mvuad-thread-card .mvuad-thread-body').textContent(),
+        /钟楼巡检的缺页交接册/u,
+    );
     const mobileLedgerLayout = await page.evaluate(() => {
         const ledger = document.querySelector('.mvuad-ledger');
         const field = document.querySelector('.mvuad-thread-field');
@@ -208,6 +233,10 @@ try {
     assert.ok(mobileLedgerLayout.right <= mobileLedgerLayout.viewportWidth + 1);
     assert.doesNotMatch(mobileLedgerLayout.fieldColumns, /\s/u, '手机字段应为单列');
     assert.ok(continuity.calls.model.includes('continuity'));
+    assert.match(continuity.calls.continuitySystem, /setting_independent/u);
+    assert.match(continuity.calls.continuitySystem, /可以永远不与主线相交/u);
+    assert.match(continuity.calls.continuityUser, /钟楼巡检制度/u);
+    assert.match(continuity.calls.continuityUser, /巡检员与玩家互不认识/u);
     assert.ok(continuity.calls.prompts.some(([, content]) => /禁止替玩家角色决定/u.test(content)));
     assert.equal(continuity.calls.replace[0].chatId, 'chat-a');
     assert.equal(continuity.calls.replace[0].options.message_id, 2);
@@ -231,7 +260,7 @@ try {
         await t.context.eventSource.emit('generation_started', 'regenerate', {}, false);
         return t.calls.prompts.at(-1)?.[1] || '';
     });
-    assert.match(rerollPrompt, /当前没有未结支线/u);
+    assert.match(rerollPrompt, /当前没有登记中的未结支线/u);
     assert.doesNotMatch(rerollPrompt, /PE-港口-哨兵-01/u);
 
     await page.evaluate(async () => {
