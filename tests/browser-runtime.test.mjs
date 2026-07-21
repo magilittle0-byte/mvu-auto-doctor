@@ -162,7 +162,7 @@ const browser = await chromium.launch({
 });
 
 try {
-    const page = await browser.newPage();
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => !!window.MvuAutoDoctorAPI);
 
@@ -178,8 +178,35 @@ try {
     const continuity = await page.evaluate(() => ({
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         calls: structuredClone(window.__TEST__.calls),
+        version: window.MvuAutoDoctorAPI.version,
+        ledgerText: document.querySelector('.mvuad-ledger')?.textContent || '',
+        cardCount: document.querySelectorAll('.mvuad-thread-card').length,
+        openCardCount: document.querySelectorAll('.mvuad-thread-card[open]').length,
     }));
+    assert.equal(continuity.version, '1.2.1');
     assert.equal(continuity.state.threads[0].id, 'PE-港口-哨兵-01');
+    assert.equal(continuity.cardCount, 1);
+    assert.equal(continuity.openCardCount, 1);
+    assert.match(continuity.ledgerText, /异常货单/u);
+    assert.match(continuity.ledgerText, /推进中/u);
+    assert.match(continuity.ledgerText, /巡逻队开始核对货单/u);
+    assert.match(continuity.ledgerText, /门禁盘问留下痕迹/u);
+    assert.match(continuity.ledgerText, /再次进入港区/u);
+    assert.match(continuity.ledgerText, /传闻阶段（部分可知）/u);
+    const mobileLedgerLayout = await page.evaluate(() => {
+        const ledger = document.querySelector('.mvuad-ledger');
+        const field = document.querySelector('.mvuad-thread-field');
+        const rect = ledger?.getBoundingClientRect();
+        return {
+            viewportWidth: window.innerWidth,
+            left: rect?.left ?? -1,
+            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
+            fieldColumns: field ? getComputedStyle(field).gridTemplateColumns : '',
+        };
+    });
+    assert.ok(mobileLedgerLayout.left >= 0);
+    assert.ok(mobileLedgerLayout.right <= mobileLedgerLayout.viewportWidth + 1);
+    assert.doesNotMatch(mobileLedgerLayout.fieldColumns, /\s/u, '手机字段应为单列');
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.ok(continuity.calls.prompts.some(([, content]) => /禁止替玩家角色决定/u.test(content)));
     assert.equal(continuity.calls.replace[0].chatId, 'chat-a');
@@ -189,6 +216,14 @@ try {
             window.__TEST__.context.chatMetadata.mvu_auto_doctor.repairJournal.length
         )),
         1,
+    );
+
+    const beforeRefreshCalls = continuity.calls.model.length;
+    await page.click('.mvuad-ledger-refresh');
+    assert.equal(
+        await page.evaluate(() => window.__TEST__.calls.model.length),
+        beforeRefreshCalls,
+        '刷新显示不得额外调用模型',
     );
 
     const rerollPrompt = await page.evaluate(async () => {
@@ -220,6 +255,15 @@ try {
     await page.waitForTimeout(1200);
     const after = await page.evaluate(() => window.__TEST__.calls.replace.length);
     assert.equal(after, before, '切聊天后的旧模型结果不得写入新聊天');
+    assert.equal(
+        await page.evaluate(() => document.querySelectorAll('.mvuad-thread-card').length),
+        0,
+        '切换到空聊天后不得显示上一个聊天的支线',
+    );
+    assert.match(
+        await page.evaluate(() => document.querySelector('.mvuad-ledger-empty')?.textContent || ''),
+        /当前没有未结支线/u,
+    );
 } finally {
     await browser.close();
     server.close();

@@ -3,6 +3,7 @@ import {
     appendRepairJournal,
     attachChangedSourceRefs,
     buildContinuityInjection,
+    continuityLedgerView,
     extractContinuityMarkers,
     latestUndoRecord,
     markRepairUndone,
@@ -68,6 +69,31 @@ state = attachChangedSourceRefs(state, parsed.state, {
 });
 assert.equal(state.threads[0].sourceRefs.length, 1);
 assert.equal(state.threads[0].sourceRefs[0].swipeId, 1);
+
+const ledger = continuityLedgerView({
+    turn: 4,
+    updatedAt: 123456,
+    threads: [
+        {
+            id: 'PE-已完成-01',
+            title: '旧约兑现',
+            kind: 'promise',
+            stage: 'resolved',
+            summary: '约定已经完成',
+            knowledge: 'observed',
+            urgency: 0,
+            lastAdvancedTurn: 2,
+        },
+        state.threads[0],
+    ],
+}, { chatId: 'chat-a' });
+assert.equal(ledger.activeCount, 1);
+assert.equal(ledger.resolvedCount, 1);
+assert.equal(ledger.active[0].stageLabel, '已显现');
+assert.equal(ledger.active[0].kindLabel, '平行事件');
+assert.equal(ledger.active[0].knowledgeLabel, '传闻阶段（部分可知）');
+assert.equal(ledger.active[0].latestSource.index, 9);
+assert.equal(ledger.resolved[0].kindLabel, '约定/承诺');
 
 const injection = buildContinuityInjection(state, {
     director: 'mixed',
