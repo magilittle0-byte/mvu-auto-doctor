@@ -19,18 +19,28 @@
 }
 
 #mvu-auto-doctor-settings .mvuad-check,
-#mvu-auto-doctor-settings .mvuad-number {
+#mvu-auto-doctor-settings .mvuad-number,
+#mvu-auto-doctor-settings .mvuad-select {
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-#mvu-auto-doctor-settings .mvuad-number {
+#mvu-auto-doctor-settings .mvuad-number,
+#mvu-auto-doctor-settings .mvuad-select {
     justify-content: space-between;
 }
 
-#mvu-auto-doctor-settings .mvuad-number input {
+#mvu-auto-doctor-settings .mvuad-number input,
+#mvu-auto-doctor-settings .mvuad-select select {
     width: min(150px, 42vw);
+}
+
+#mvu-auto-doctor-settings .mvuad-section-title {
+    margin-top: 6px;
+    padding-top: 10px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    font-weight: 700;
 }
 
 #mvu-auto-doctor-settings .mvuad-actions {

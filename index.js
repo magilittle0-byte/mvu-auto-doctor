@@ -10,10 +10,27 @@ import {
     statDataOf,
     validatePatchResult,
 } from './core.mjs';
+import {
+    appendRepairJournal,
+    attachChangedSourceRefs,
+    buildContinuityInjection,
+    continuityContentDigest,
+    emptyContinuityState,
+    extractContinuityMarkers,
+    latestUndoRecord,
+    markRepairUndone,
+    mergeMarkerRecords,
+    normalizeContinuityState,
+    parseContinuityOutput,
+} from './continuity-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
+const CHAT_NAMESPACE_VERSION = 2;
+const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
+const IN_CHAT_POSITION = 1;
+const IN_CHAT_DEPTH = 1;
 const DEFAULTS = Object.freeze({
     enabled: true,
     preferStoryOracle: true,
@@ -22,16 +39,31 @@ const DEFAULTS = Object.freeze({
     delayMs: 1600,
     contextMessages: 8,
     maxTokens: 4096,
+    modelTimeoutMs: 120000,
+    continuityMode: 'auto',
+    continuityMaxThreads: 4,
+    continuityMaxVisible: 1,
+    continuityContextMessages: 12,
+    continuityMaxTokens: 2200,
 });
 
 let mvuPromise = null;
 let runChain = Promise.resolve();
+let continuityChain = Promise.resolve();
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
+const continuityPendingKeys = new Set();
+const continuityCompletedKeys = new Set();
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
+let latestContinuityStatus = '支线连续性：等待事件';
 let oracleAutoDisabledNoticeShown = false;
 let ui = null;
+let operationEpoch = 0;
+let generationSerial = 0;
+let lastGeneration = { serial: 0, type: 'normal', dryRun: false };
+let pendingChatSaveTimer = null;
+let presetContinuityCache = { checkedAt: 0, active: false };
 
 function getContext() {
     return window.SillyTavern?.getContext?.() || null;
@@ -49,6 +81,10 @@ function getSettings() {
             settings[key] = value;
             changed = true;
         }
+    }
+    if (!['auto', 'on', 'off'].includes(settings.continuityMode)) {
+        settings.continuityMode = 'auto';
+        changed = true;
     }
     if (changed) context.saveSettingsDebounced?.();
     return settings;
@@ -72,6 +108,134 @@ function setStatus(text, kind = '') {
     if (!ui?.status) return;
     ui.status.textContent = latestStatus;
     ui.status.dataset.kind = kind;
+}
+
+function setContinuityStatus(text, kind = '') {
+    latestContinuityStatus = String(text || '');
+    if (!ui?.continuityStatus) return;
+    ui.continuityStatus.textContent = latestContinuityStatus;
+    ui.continuityStatus.dataset.kind = kind;
+}
+
+function invalidateOperations(reason = '') {
+    operationEpoch += 1;
+    automaticPendingKeys.clear();
+    // A stale model request cannot be forcibly cancelled through every host API,
+    // so detach the new queue. The old request may finish, but its epoch guard
+    // prevents it from touching chat or MVU state.
+    runChain = Promise.resolve();
+    continuityChain = Promise.resolve();
+    if (reason) console.info('[MVU Auto Doctor] 旧任务已失效：', reason);
+}
+
+function operationToken(captured) {
+    return {
+        epoch: captured?.epoch ?? operationEpoch,
+        generationSerial: captured?.generationSerial ?? generationSerial,
+        chatId: captured?.chatId || getContext()?.chatId || '',
+    };
+}
+
+function operationIsCurrent(token) {
+    const context = getContext();
+    return !!(
+        token
+        && token.epoch === operationEpoch
+        && token.chatId === context?.chatId
+    );
+}
+
+function scheduleSafeChatSave(context, chatId) {
+    if (!context || !chatId) return;
+    clearTimeout(pendingChatSaveTimer);
+    pendingChatSaveTimer = setTimeout(async () => {
+        pendingChatSaveTimer = null;
+        if (getContext()?.chatId !== chatId) return;
+        try {
+            await context.saveChat?.();
+        } catch (error) {
+            console.warn('[MVU Auto Doctor] 保存消息身份失败：', error);
+        }
+    }, 250);
+}
+
+function ensureMessageStableId(context, message, index) {
+    if (!message) return '';
+    const existing = message.extra?.mvu_auto_doctor_source_id
+        || message.mesId
+        || message.message_id
+        || message.send_date;
+    if (existing != null && String(existing).trim()) return String(existing);
+    if (!message.extra || typeof message.extra !== 'object' || Array.isArray(message.extra)) {
+        message.extra = {};
+    }
+    const id = [
+        'mvuad',
+        Date.now().toString(36),
+        Number(index).toString(36),
+        Math.random().toString(36).slice(2, 8),
+    ].join('_');
+    message.extra.mvu_auto_doctor_source_id = id;
+    scheduleSafeChatSave(context, context?.chatId);
+    return id;
+}
+
+function readChatNamespace(context = getContext()) {
+    const value = context?.chatMetadata?.[PLUGIN_ID];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {
+            version: CHAT_NAMESPACE_VERSION,
+            rev: 0,
+            chatId: context?.chatId || '',
+            repairJournal: [],
+            continuity: emptyContinuityState(context?.chatId || ''),
+            continuityCheckpoint: null,
+        };
+    }
+    return deepClone(value);
+}
+
+async function writeChatNamespace(next, expectedChatId, {
+    force = false,
+} = {}) {
+    const context = getContext();
+    if (!context || context.chatId !== expectedChatId) return false;
+    const current = readChatNamespace(context);
+    const candidate = {
+        ...deepClone(next),
+        version: CHAT_NAMESPACE_VERSION,
+        chatId: expectedChatId,
+    };
+    const comparableCurrent = deepClone(current);
+    const comparableNext = deepClone(candidate);
+    delete comparableCurrent.rev;
+    delete comparableNext.rev;
+    if (!force && safeJson(comparableCurrent, 0) === safeJson(comparableNext, 0)) {
+        return true;
+    }
+    candidate.rev = Math.max(Number(current.rev) || 0, Number(candidate.rev) || 0) + 1;
+    if (context.chatId !== expectedChatId) return false;
+    try {
+        if (typeof context.updateChatMetadata === 'function') {
+            context.updateChatMetadata({ [PLUGIN_ID]: candidate });
+        } else if (context.chatMetadata) {
+            context.chatMetadata[PLUGIN_ID] = candidate;
+        } else {
+            return false;
+        }
+        if (context.chatId !== expectedChatId) return false;
+        if (typeof context.saveMetadataDebounced === 'function') {
+            context.saveMetadataDebounced();
+        } else if (typeof context.saveMetadata === 'function') {
+            await context.saveMetadata();
+        } else {
+            await context.saveChat?.();
+        }
+        return context.chatId === expectedChatId;
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 保存聊天内记录失败：', error);
+        return false;
+    }
 }
 
 function currentCharacter(context) {
@@ -261,22 +425,32 @@ function captureTarget(context, index) {
     return {
         chatId: context.chatId,
         index,
+        messageId: ensureMessageStableId(context, message, index),
         swipeId: Number(message.swipe_id) || 0,
         fingerprint: fingerprint(message.mes),
+        epoch: operationEpoch,
+        generationSerial,
+        generationType: lastGeneration.type || 'normal',
     };
 }
 
-function targetIsCurrent(captured) {
+function targetIsCurrent(captured, token = null, { requireLatest = true } = {}) {
     const context = getContext();
+    if (token && !operationIsCurrent(token)) {
+        return { ok: false, reason: '任务已被新的生成或聊天切换作废' };
+    }
     if (!captured || !context || context.chatId !== captured.chatId) {
         return { ok: false, reason: '聊天已经切换' };
     }
     const latest = latestAiMessage(context);
-    if (latest.index !== captured.index) {
+    if (requireLatest && latest.index !== captured.index) {
         return { ok: false, reason: '主聊天已经出现更新的 AI 回复' };
     }
     const message = context.chat[captured.index];
     if (!message) return { ok: false, reason: '目标回复已不存在' };
+    if (String(ensureMessageStableId(context, message, captured.index)) !== captured.messageId) {
+        return { ok: false, reason: '目标楼层身份已经变化' };
+    }
     if ((Number(message.swipe_id) || 0) !== captured.swipeId) {
         return { ok: false, reason: '目标回复已经切换 swipe' };
     }
@@ -284,6 +458,17 @@ function targetIsCurrent(captured) {
         return { ok: false, reason: '目标回复正文已经变化' };
     }
     return { ok: true, reason: '' };
+}
+
+function sourceRefOf(captured) {
+    if (!captured) return null;
+    return {
+        chatId: captured.chatId,
+        messageId: captured.messageId,
+        index: captured.index,
+        swipeId: captured.swipeId,
+        hash: captured.fingerprint,
+    };
 }
 
 function stripMechanism(text) {
@@ -534,18 +719,42 @@ async function buildAuditMessages({
     };
 }
 
-async function callModel(messages) {
+async function withTimeout(promise, milliseconds, label) {
+    const timeout = Math.max(10000, Number(milliseconds) || 120000);
+    let timer;
+    try {
+        return await Promise.race([
+            Promise.resolve(promise),
+            new Promise((_, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error(`${label || '模型请求'}超时（${timeout}ms）`)),
+                    timeout,
+                );
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function callModel(messages, options = {}) {
     const settings = getSettings();
     disableStoryOracleAutoIfNeeded();
+    const maxTokens = Math.max(
+        1024,
+        Number(options.maxTokens ?? settings.maxTokens) || 4096,
+    );
+    const timeoutMs = Math.max(10000, Number(settings.modelTimeoutMs) || 120000);
 
     if (settings.preferStoryOracle) {
         const api = window.StoryOracleAPI;
         if (api?.isCompatible?.(1) && typeof api.run === 'function') {
             try {
-                const output = await api.run(messages, {
-                    stream: false,
-                    maxTokens: Math.max(2048, Number(settings.maxTokens) || 4096),
-                });
+                const output = await withTimeout(
+                    api.run(messages, { stream: false, maxTokens }),
+                    timeoutMs,
+                    '故事神谕连接',
+                );
                 if (String(output || '').trim()) return String(output);
             } catch (error) {
                 console.warn('[MVU Auto Doctor] 故事神谕连接调用失败，改用酒馆当前连接。', error);
@@ -557,12 +766,16 @@ async function callModel(messages) {
     if (typeof context?.generateRaw !== 'function') {
         throw new Error('故事神谕连接和酒馆当前连接都不可用');
     }
-    return await context.generateRaw({
-        systemPrompt: messages[0].content,
-        prompt: messages[1].content,
-        responseLength: Math.max(2048, Number(settings.maxTokens) || 4096),
-        trimNames: false,
-    });
+    return await withTimeout(
+        context.generateRaw({
+            systemPrompt: messages[0].content,
+            prompt: messages[1].content,
+            responseLength: maxTokens,
+            trimNames: false,
+        }),
+        timeoutMs,
+        '酒馆当前连接',
+    );
 }
 
 async function parseCandidate(Mvu, oldData, output) {
@@ -653,22 +866,44 @@ function applyBlockToCurrentSwipe(message, block, includeBlock, removeBlock = ''
     return message.mes !== before;
 }
 
-async function refreshMessage(index, block = '', includeBlock = false, removeBlock = '') {
+async function refreshMessage(
+    index,
+    block = '',
+    includeBlock = false,
+    removeBlock = '',
+    captured = null,
+    token = null,
+) {
+    if (captured) {
+        const guard = targetIsCurrent(captured, token, { requireLatest: false });
+        if (!guard.ok) return false;
+    }
     const context = getContext();
     const message = context?.chat?.[index];
-    if (!message) return;
+    if (!message) return false;
     const changed = applyBlockToCurrentSwipe(
         message,
         block,
         includeBlock,
         removeBlock,
     );
+    const postMutationTarget = captured && changed
+        ? { ...captured, fingerprint: fingerprint(message.mes) }
+        : captured;
     if (changed) {
+        if (captured) {
+            const guard = targetIsCurrent(postMutationTarget, token, { requireLatest: false });
+            if (!guard.ok) return false;
+        }
         try {
             await context.saveChat?.();
         } catch (error) {
             console.warn('[MVU Auto Doctor] 保存更新区块失败：', error);
         }
+    }
+    if (captured) {
+        const guard = targetIsCurrent(postMutationTarget, token, { requireLatest: false });
+        if (!guard.ok) return false;
     }
     try {
         context.updateMessageBlock?.(index, message);
@@ -683,18 +918,34 @@ async function refreshMessage(index, block = '', includeBlock = false, removeBlo
     } catch (error) {
         console.warn('[MVU Auto Doctor] 触发前端刷新失败：', error);
     }
+    return true;
 }
 
-async function commitCandidate(Mvu, candidate, captured) {
-    const current = targetIsCurrent(captured);
+async function persistRepairRecord(record, expectedChatId) {
+    let namespace = readChatNamespace();
+    namespace = appendRepairJournal(namespace, record, {
+        maxEntries: 5,
+        maxSnapshotChars: 180000,
+    });
+    const saved = await writeChatNamespace(namespace, expectedChatId);
+    if (saved) lastUndo = latestUndoRecord(namespace);
+    return saved;
+}
+
+async function commitCandidate(Mvu, candidate, captured, token) {
+    let current = targetIsCurrent(captured, token);
     if (!current.ok) {
         return { status: 'stale', reason: `${current.reason}，未写入` };
     }
-    const options = { type: 'message', message_id: 'latest' };
-    const oldData = await mvuDataAt(Mvu, 'latest');
+    const options = { type: 'message', message_id: captured.index };
+    const oldData = await mvuDataAt(Mvu, captured.index);
     if (!oldData) return { status: 'failed', reason: '提交前无法读取当前 MVU 状态' };
+    current = targetIsCurrent(captured, token);
+    if (!current.ok) return { status: 'stale', reason: `${current.reason}，未写入` };
 
     const reparsed = await Mvu.parseMessage(candidate.block, deepClone(oldData));
+    current = targetIsCurrent(captured, token);
+    if (!current.ok) return { status: 'stale', reason: `${current.reason}，未写入` };
     const rechecked = validatePatchResult(oldData, reparsed, candidate.prepared);
     if (!rechecked.ok) {
         return {
@@ -705,47 +956,94 @@ async function commitCandidate(Mvu, candidate, captured) {
     }
 
     const snapshot = deepClone(oldData);
+    // Final write barrier. No await is allowed between this guard and the
+    // mutation call; every earlier asynchronous boundary has already rechecked.
+    current = targetIsCurrent(captured, token);
+    if (!current.ok) return { status: 'stale', reason: `${current.reason}，未写入` };
     await Mvu.replaceMvuData(reparsed, options);
-    const landed = await mvuDataAt(Mvu, 'latest');
+    current = targetIsCurrent(captured, token);
+    if (!current.ok) {
+        return {
+            status: 'stale',
+            reason: `${current.reason}；精确楼层写入已结束，但未再读取或改动当前新目标`,
+        };
+    }
+    const landed = await mvuDataAt(Mvu, captured.index);
     const verified = validatePatchResult(oldData, landed, candidate.prepared);
     if (!verified.ok) {
-        try {
-            await Mvu.replaceMvuData(snapshot, options);
-        } catch (rollbackError) {
-            console.error('[MVU Auto Doctor] 回滚失败：', rollbackError);
+        const rollbackGuard = targetIsCurrent(captured, token, { requireLatest: false });
+        if (rollbackGuard.ok) {
+            try {
+                await Mvu.replaceMvuData(snapshot, options);
+            } catch (rollbackError) {
+                console.error('[MVU Auto Doctor] 回滚失败：', rollbackError);
+            }
         }
-        await refreshMessage(captured.index);
+        await refreshMessage(captured.index, '', false, '', captured, token);
         return {
             status: 'failed',
-            reason: `写入后回读校验失败，已回滚：${verified.reason}`,
+            reason: `写入后回读校验失败${rollbackGuard.ok ? '，已回滚' : '；目标已变化，未对新目标执行回滚'}：${verified.reason}`,
             details: verified.details,
         };
     }
 
-    lastUndo = {
+    const afterFingerprint = fingerprint(safeJson(landed, 0));
+    const record = {
+        id: `repair_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: Date.now(),
+        status: 'applied',
         chatId: captured.chatId,
         targetIndex: captured.index,
+        messageId: captured.messageId,
+        swipeId: captured.swipeId,
+        messageFingerprint: captured.fingerprint,
+        generationType: captured.generationType,
+        beforeFingerprint: fingerprint(safeJson(snapshot, 0)),
+        afterFingerprint,
         snapshot,
         block: candidate.block,
     };
     // Always persist the corrective block in the swipe. Updating only the
     // in-memory MVU snapshot is not durable: a reload/reparse would otherwise
     // replay the original faulty block and silently resurrect the error.
-    await refreshMessage(captured.index, candidate.block, true);
+    const refreshed = await refreshMessage(
+        captured.index,
+        candidate.block,
+        true,
+        '',
+        captured,
+        token,
+    );
+    if (!refreshed) {
+        return { status: 'stale', reason: '变量已写入，但目标在刷新前发生变化；未改动新回复' };
+    }
+    await persistRepairRecord(record, captured.chatId);
+    lastUndo = record;
     return { status: 'applied', block: candidate.block };
 }
 
-async function ensureExistingFrontend(index, originalBlock) {
+async function ensureExistingFrontend(index, originalBlock, captured, token) {
     if (!originalBlock) return;
-    await refreshMessage(index);
+    await refreshMessage(index, '', false, '', captured, token);
 }
 
-async function runTarget(targetId, { manual = false } = {}) {
+async function runTarget(targetId, { manual = false, queuedTarget = null } = {}) {
     const settings = getSettings();
     if (!manual && !settings.enabled) return { status: 'disabled' };
     disableStoryOracleAutoIfNeeded();
 
+    const initialContext = getContext();
+    const initialLatest = latestAiMessage(initialContext);
+    const initialResolved = targetId == null || targetId < 0
+        ? initialLatest.index
+        : targetId;
+    const captured = queuedTarget || captureTarget(initialContext, initialResolved);
+    if (!captured) return { status: 'stale', reason: '目标回复不可用' };
+    const token = operationToken(captured);
+
     const Mvu = await getMvu();
+    let targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     if (
         !Mvu
         || typeof Mvu.getMvuData !== 'function'
@@ -759,20 +1057,26 @@ async function runTarget(targetId, { manual = false } = {}) {
     }
 
     if (!manual) await sleep(Math.max(300, Number(settings.delayMs) || 1600));
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     await waitMvuIdle(Mvu);
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     await waitMvuStable(Mvu);
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
 
     const context = getContext();
     const latest = latestAiMessage(context);
-    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const resolved = captured.index;
     if (resolved !== latest.index) {
         return { status: 'stale', reason: '目标回复已不是最新 AI 楼层' };
     }
-    const captured = captureTarget(context, resolved);
-    if (!captured) return { status: 'stale', reason: '目标回复不可用' };
 
     const character = currentCharacter(context);
-    const currentData = await mvuDataAt(Mvu, 'latest');
+    const currentData = await mvuDataAt(Mvu, resolved);
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     if (!currentData || !statDataOf(currentData)) {
         const result = { status: 'failed', reason: '最新楼层没有可读取的 stat_data' };
         setStatus(result.reason, 'error');
@@ -780,13 +1084,15 @@ async function runTarget(targetId, { manual = false } = {}) {
         return result;
     }
     const previousData = await previousMvuData(Mvu, context, resolved);
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     setStatus('正在核对最新回复与变量…', 'busy');
 
     let retry = null;
     let candidate = null;
     let originalBlock = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
-        const targetCheck = targetIsCurrent(captured);
+        targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) {
             return { status: 'stale', reason: targetCheck.reason };
         }
@@ -799,6 +1105,8 @@ async function runTarget(targetId, { manual = false } = {}) {
             previousData,
             retry,
         });
+        targetCheck = targetIsCurrent(captured, token);
+        if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         originalBlock = built.originalBlock;
 
         let output;
@@ -812,14 +1120,18 @@ async function runTarget(targetId, { manual = false } = {}) {
                 output: '',
             };
         }
+        targetCheck = targetIsCurrent(captured, token);
+        if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         if (output !== undefined) candidate = await parseCandidate(Mvu, currentData, output);
+        targetCheck = targetIsCurrent(captured, token);
+        if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         if (candidate.status !== 'failed' || !candidate.retryable || attempt === 1) break;
         retry = candidate;
         setStatus('首个补丁未通过校验，正在自动重试…', 'busy');
     }
 
     if (candidate?.status === 'nochange') {
-        await ensureExistingFrontend(resolved, originalBlock);
+        await ensureExistingFrontend(resolved, originalBlock, captured, token);
         setStatus('已检查：本回合变量无需修正', 'ok');
         if (manual || settings.notifyNoChange) toast('info', '已检查，本回合变量无需修正。');
         return candidate;
@@ -833,7 +1145,7 @@ async function runTarget(targetId, { manual = false } = {}) {
 
     let result;
     try {
-        result = await commitCandidate(Mvu, candidate, captured);
+        result = await commitCandidate(Mvu, candidate, captured, token);
     } catch (error) {
         result = { status: 'failed', reason: `提交补丁失败：${error.message || error}` };
     }
@@ -866,9 +1178,24 @@ function automaticTargetKey(targetId) {
     ].join(':');
 }
 
+function capturedTargetKey(captured) {
+    if (!captured) return '';
+    return [
+        captured.chatId,
+        captured.index,
+        captured.messageId,
+        captured.swipeId,
+        captured.fingerprint,
+    ].join(':');
+}
+
 function enqueue(targetId, options = {}) {
     const automatic = !options.manual;
-    const dedupeKey = automatic ? automaticTargetKey(targetId) : '';
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const queuedTarget = options.queuedTarget || captureTarget(context, resolved);
+    const dedupeKey = automatic ? capturedTargetKey(queuedTarget) : '';
     if (
         dedupeKey
         && (
@@ -879,10 +1206,11 @@ function enqueue(targetId, options = {}) {
         return Promise.resolve({ status: 'duplicate', reason: '同一楼层已处理' });
     }
     if (dedupeKey) automaticPendingKeys.add(dedupeKey);
+    const queuedOptions = { ...options, queuedTarget };
 
     runChain = runChain
         .catch(() => undefined)
-        .then(() => runTarget(targetId, options))
+        .then(() => runTarget(targetId, queuedOptions))
         .then((result) => {
             if (
                 dedupeKey
@@ -909,26 +1237,501 @@ function enqueue(targetId, options = {}) {
 async function undoLast() {
     const context = getContext();
     const Mvu = await getMvu();
-    if (!lastUndo || !Mvu) {
-        toast('info', '本次启动后还没有可撤销的自动修复。');
+    const namespace = readChatNamespace(context);
+    const record = lastUndo || latestUndoRecord(namespace);
+    if (!record || !Mvu) {
+        toast('info', '当前聊天还没有可撤销的自动修复。');
         return false;
     }
     const latest = latestAiMessage(context);
     if (
-        context.chatId !== lastUndo.chatId
-        || latest.index !== lastUndo.targetIndex
+        context.chatId !== record.chatId
+        || latest.index !== record.targetIndex
     ) {
         toast('warning', '聊天或最新楼层已经变化，为避免写错位置，不能撤销。');
         return false;
     }
-    await Mvu.replaceMvuData(deepClone(lastUndo.snapshot), {
+    const currentTarget = captureTarget(context, record.targetIndex);
+    if (
+        !currentTarget
+        || currentTarget.messageId !== record.messageId
+        || currentTarget.swipeId !== record.swipeId
+    ) {
+        toast('warning', '目标回复或 swipe 已变化，不能撤销旧修复。');
+        return false;
+    }
+    if (!record.snapshot) {
+        toast('warning', '该次修复快照过大，未随聊天保存，当前无法撤销。');
+        return false;
+    }
+    const currentData = await mvuDataAt(Mvu, record.targetIndex);
+    if (
+        record.afterFingerprint
+        && fingerprint(safeJson(currentData, 0)) !== record.afterFingerprint
+    ) {
+        toast('warning', '变量在修复后又发生了变化，为避免覆盖后续进度，不能撤销。');
+        return false;
+    }
+    const token = operationToken(currentTarget);
+    const guard = targetIsCurrent(currentTarget, token);
+    if (!guard.ok) {
+        toast('warning', `${guard.reason}，不能撤销。`);
+        return false;
+    }
+    await Mvu.replaceMvuData(deepClone(record.snapshot), {
         type: 'message',
-        message_id: 'latest',
+        message_id: record.targetIndex,
     });
-    await refreshMessage(lastUndo.targetIndex, '', false, lastUndo.block);
+    const landed = await mvuDataAt(Mvu, record.targetIndex);
+    if (fingerprint(safeJson(landed, 0)) !== record.beforeFingerprint) {
+        toast('warning', '撤销后的回读校验失败，请不要继续操作并检查当前变量。');
+        return false;
+    }
+    await refreshMessage(
+        record.targetIndex,
+        '',
+        false,
+        record.block,
+        currentTarget,
+        token,
+    );
+    const updatedNamespace = markRepairUndone(readChatNamespace(), record.id);
+    await writeChatNamespace(updatedNamespace, record.chatId, { force: true });
     lastUndo = null;
     setStatus('已撤销上一次自动修复', 'ok');
     toast('success', '已撤销上一次自动修复。');
+    return true;
+}
+
+function recentTranscriptThrough(context, targetIndex, limit) {
+    const chat = context?.chat || [];
+    return chat
+        .slice(0, targetIndex + 1)
+        .filter((message) => message && !message.is_system && typeof message.mes === 'string')
+        .slice(-Math.max(1, Number(limit) || 12))
+        .map((message) => `${message.is_user ? '用户' : 'AI'}：${stripMechanism(message.mes)}`)
+        .join('\n\n');
+}
+
+function detectContinuityDirector(context, text, markers) {
+    const settingKeys = Object.keys(context?.extensionSettings || {}).join(' ');
+    const hasStitches = markers.hasStitches
+        || /stitch|缝合怪/iu.test(settingKeys)
+        || !!(window.Stitches || window.STITCHES || window.stitches);
+    const hasPreset = markers.hasPresetParallel
+        || /<Parallel_Event_Lifecycle>|<parallel_event_record\b/iu.test(text);
+    const hasWorldEngine = !!window.WORLD_ENGINE || !!window.WORLD_ENGINE_CORE;
+    if (hasStitches && (hasPreset || hasWorldEngine)) return 'mixed';
+    if (hasStitches) return 'stitches';
+    if (hasPreset || hasWorldEngine) return 'preset';
+    return 'standalone';
+}
+
+function continuityFeatureActive(settings, markers, state, force = false) {
+    if (force) return true;
+    if (settings.continuityMode === 'off') return false;
+    if (settings.continuityMode === 'on') return true;
+    return !!(
+        markers.hasPresetParallel
+        || markers.hasStitches
+        || state?.threads?.some((thread) => thread.stage !== 'resolved')
+    );
+}
+
+async function activePresetHasContinuityPrompt() {
+    if (Date.now() - presetContinuityCache.checkedAt < 15000) {
+        return presetContinuityCache.active;
+    }
+    let active = false;
+    try {
+        const module = await import('/scripts/openai.js');
+        const preset = module.oai_settings || {};
+        const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+        const enabled = new Set();
+        for (const group of Array.isArray(preset.prompt_order) ? preset.prompt_order : []) {
+            for (const item of Array.isArray(group?.order) ? group.order : []) {
+                if (item?.enabled && item.identifier) enabled.add(item.identifier);
+            }
+        }
+        active = prompts.some((prompt) => (
+            /<Parallel_Event_Lifecycle>|<parallel_event_record\b/iu.test(prompt?.content || '')
+            && (!enabled.size || enabled.has(prompt.identifier))
+        ));
+    } catch {
+        // Non-OpenAI backends or test harnesses may not expose this module.
+    }
+    presetContinuityCache = { checkedAt: Date.now(), active };
+    return active;
+}
+
+function registerContinuityInjection(content) {
+    const context = getContext();
+    try {
+        if (typeof context?.setExtensionPrompt === 'function') {
+            context.setExtensionPrompt(
+                CONTINUITY_INJECTION_NAME,
+                content || '',
+                IN_CHAT_POSITION,
+                IN_CHAT_DEPTH,
+                false,
+                'system',
+            );
+            return true;
+        }
+        if (typeof context?.registerInjection === 'function') {
+            context.unregisterInjection?.(CONTINUITY_INJECTION_NAME);
+            if (content) {
+                context.registerInjection(CONTINUITY_INJECTION_NAME, content, {
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                    role: 'system',
+                });
+            }
+            return true;
+        }
+        if (Array.isArray(context?.extensionPrompts)) {
+            context.extensionPrompts = context.extensionPrompts
+                .filter((item) => item?.name !== CONTINUITY_INJECTION_NAME);
+            if (content) {
+                context.extensionPrompts.push({
+                    name: CONTINUITY_INJECTION_NAME,
+                    content,
+                    role: 'system',
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                });
+            }
+            return true;
+        }
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 支线账本注入失败：', error);
+    }
+    return false;
+}
+
+function continuityStateForInjection(namespace, { isReroll = false } = {}) {
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const latestId = latest.message
+        ? ensureMessageStableId(context, latest.message, latest.index)
+        : '';
+    if (
+        isReroll
+        && namespace?.continuityCheckpoint?.state
+        && namespace.continuityCheckpoint.targetIndex === latest.index
+        && namespace.continuityCheckpoint.messageId === latestId
+    ) {
+        return namespace.continuityCheckpoint.state;
+    }
+    return namespace?.continuity;
+}
+
+function applyContinuityInjection({ isReroll = false } = {}) {
+    const settings = getSettings();
+    if (settings.continuityMode === 'off') {
+        registerContinuityInjection('');
+        return false;
+    }
+    const namespace = readChatNamespace();
+    const state = normalizeContinuityState(
+        continuityStateForInjection(namespace, { isReroll }),
+        {
+            chatId: getContext()?.chatId || '',
+            maxThreads: settings.continuityMaxThreads,
+        },
+    );
+    let content = buildContinuityInjection(state, {
+        director: namespace.continuityDirector || 'standalone',
+        maxVisible: settings.continuityMaxVisible,
+    });
+    if (
+        !content
+        && (settings.continuityMode === 'on' || namespace.continuityDetected === true)
+    ) {
+        content = [
+            '<Parallel_Continuity_Bridge>',
+            '当前没有未结支线。不要为了完成指标硬造剧情。',
+            '若本回合已有离场角色的明确意图、敌方计划、未兑现约定、异常物证或主线后果，可依当前预设/缝合怪原格式建立至多一条支线；必须来自已出场人物与既有事实。',
+            '只能推动NPC与世界；禁止替玩家角色行动、回答、移动、消费资源或追加检定。',
+            '</Parallel_Continuity_Bridge>',
+        ].join('\n');
+    }
+    registerContinuityInjection(content);
+    const active = state.threads.filter((thread) => thread.stage !== 'resolved').length;
+    setContinuityStatus(
+        active
+            ? `支线连续性：${active} 条未结${isReroll ? '（已使用重抽前存档点）' : ''}`
+            : '支线连续性：等待事件',
+        active ? 'ok' : '',
+    );
+    return !!content;
+}
+
+function continuityBase(namespace, captured) {
+    const checkpoint = namespace?.continuityCheckpoint;
+    const isReroll = ['swipe', 'regenerate'].includes(captured?.generationType);
+    if (
+        isReroll
+        && checkpoint?.state
+        && checkpoint.targetIndex === captured.index
+        && checkpoint.messageId === captured.messageId
+    ) {
+        return normalizeContinuityState(checkpoint.state, {
+            chatId: captured.chatId,
+            maxThreads: getSettings().continuityMaxThreads,
+        });
+    }
+    return normalizeContinuityState(namespace?.continuity, {
+        chatId: captured.chatId,
+        maxThreads: getSettings().continuityMaxThreads,
+    });
+}
+
+function preserveMissingThreads(previous, next, maximum) {
+    const present = new Set((next.threads || []).map((thread) => thread.id));
+    for (const thread of previous.threads || []) {
+        if (present.has(thread.id)) continue;
+        next.threads.push(deepClone(thread));
+        present.add(thread.id);
+        if (next.threads.length >= maximum) break;
+    }
+    return next;
+}
+
+function buildContinuityMessages({
+    context,
+    captured,
+    base,
+    director,
+    markers,
+}) {
+    const settings = getSettings();
+    const bridgeOnly = director !== 'standalone';
+    const system = [
+        '你是一个通用的跑团支线连续性记账与调度引擎。你不写主回复，只维护结构化支线账本。',
+        '你必须服从当前角色卡与已发生正文，不得套用别的角色卡设定。',
+        '',
+        '【职责边界】',
+        '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
+        '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
+        '- 每回合最多推进一条未结支线。已有支线优先，禁止为同一因果另造同义ID。',
+        '- 区分hidden、rumor、observed。隐藏事实不能令不知情角色全知，必须经过观察、传播、调查或后果显现。',
+        '- 计划、建议、选项、传闻和未来可能性不是已发生事实。',
+        '- 已完成的支线标记resolved，不要删除；暂时无接口可标记dormant。',
+        bridgeOnly
+            ? '- 已检测到预设平行事件或缝合怪：它们保留剧情提案权。只有在本回合正文已经出现明确的未决意图、敌方计划、约定、异常线索或离场角色行动时，才可把该既有事实登记为至多一条seeded支线；不得补造幕后真相或无来源阴谋。你的任务是接续、去重、安排下一拍。'
+            : '- 未检测到外部剧情推进器：允许从已出场人物、既有势力、地点、任务、物件或已发生后果中建立至多一条新支线；不得凭空创造无接口阴谋。',
+        '',
+        '【stage枚举】seeded / advancing / manifested / resolved / dormant',
+        '【kind枚举】parallel / personal / promise / enemy / mystery',
+        '【knowledge枚举】hidden / rumor / observed',
+        '只输出一个<ContinuityState>包裹的JSON对象；必须保留所有旧线程及稳定ID。',
+    ].join('\n');
+    const markerText = markers.taggedSections
+        .map((item) => `<${item.tag}>${item.content}</${item.tag}>`)
+        .join('\n');
+    const user = [
+        `当前导演模式：${director}`,
+        `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
+        '',
+        '=== 更新前支线账本 ===',
+        safeJson(base),
+        '',
+        '=== 本回合可识别的预设/缝合怪记录 ===',
+        markerText || '无结构化记录；只能依据正文中的明确事实更新。',
+        '',
+        '=== 最近剧情（含本轮回复）===',
+        cropText(
+            recentTranscriptThrough(
+                context,
+                captured.index,
+                settings.continuityContextMessages,
+            ),
+            52000,
+            '支线剧情上下文',
+        ),
+        '',
+        '输出格式：',
+        '<ContinuityState>',
+        '{',
+        '  "turn": 1,',
+        '  "threads": [{',
+        '    "id": "稳定ID", "title": "短标题", "kind": "parallel",',
+        '    "stage": "seeded", "summary": "目前已成立的事实",',
+        '    "nextBeat": "下次自然推进的一拍", "trigger": "可验证触发条件",',
+        '    "actors": [], "locations": [], "knowledge": "hidden",',
+        '    "urgency": 1, "lastAdvancedTurn": 1',
+        '  }]',
+        '}',
+        '</ContinuityState>',
+    ].join('\n');
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+async function runContinuityTarget(captured, { force = false } = {}) {
+    const token = operationToken(captured);
+    let guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const settings = getSettings();
+    const context = getContext();
+    const message = context.chat[captured.index];
+    const messageText = String(message?.mes || '');
+    const markers = extractContinuityMarkers(messageText);
+    if (settings.continuityMode === 'auto' && !markers.hasPresetParallel) {
+        markers.hasPresetParallel = await activePresetHasContinuityPrompt();
+        guard = targetIsCurrent(captured, token);
+        if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    }
+    let namespace = readChatNamespace(context);
+    const checkpointBase = continuityBase(namespace, captured);
+    let base = checkpointBase;
+    base = mergeMarkerRecords(base, markers.records, {
+        chatId: captured.chatId,
+        maxThreads: settings.continuityMaxThreads,
+    });
+    if (!continuityFeatureActive(settings, markers, base, force)) {
+        applyContinuityInjection();
+        return { status: 'disabled' };
+    }
+    const director = detectContinuityDirector(context, messageText, markers);
+    setContinuityStatus('支线连续性：正在整理因果…', 'busy');
+
+    const messages = buildContinuityMessages({
+        context,
+        captured,
+        base,
+        director,
+        markers,
+    });
+    let output = '';
+    try {
+        output = await callModel(messages, { maxTokens: settings.continuityMaxTokens });
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 支线连续性模型调用失败：', error);
+    }
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+
+    let next = base;
+    if (output) {
+        const parsed = parseContinuityOutput(output, {
+            chatId: captured.chatId,
+            maxThreads: settings.continuityMaxThreads,
+        });
+        if (parsed.state) next = parsed.state;
+        else console.warn('[MVU Auto Doctor] 支线账本输出未通过解析：', parsed.error);
+    }
+    next = preserveMissingThreads(base, next, settings.continuityMaxThreads);
+    next.turn = Math.max(base.turn + 1, Number(next.turn) || 0);
+    next.updatedAt = Date.now();
+    next = attachChangedSourceRefs(base, next, sourceRefOf(captured));
+    next = normalizeContinuityState(next, {
+        chatId: captured.chatId,
+        maxThreads: settings.continuityMaxThreads,
+    });
+
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const isReroll = ['swipe', 'regenerate'].includes(captured.generationType);
+    const oldDigest = continuityContentDigest(namespace.continuity);
+    const newDigest = continuityContentDigest(next);
+    namespace.continuity = next;
+    namespace.continuityDirector = director;
+    namespace.continuityDetected = true;
+    if (!isReroll) {
+        namespace.continuityCheckpoint = {
+            targetIndex: captured.index,
+            messageId: captured.messageId,
+            swipeId: captured.swipeId,
+            state: checkpointBase,
+        };
+    }
+    if (oldDigest !== newDigest || isReroll) {
+        await writeChatNamespace(namespace, captured.chatId);
+    }
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    applyContinuityInjection();
+    const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
+    setContinuityStatus(`支线连续性：已记录 ${active} 条未结支线`, 'ok');
+    return { status: 'applied', active, director };
+}
+
+function sameTargetExceptContent(left, right) {
+    return !!(
+        left
+        && right
+        && left.chatId === right.chatId
+        && left.index === right.index
+        && left.messageId === right.messageId
+        && left.swipeId === right.swipeId
+        && left.epoch === operationEpoch
+    );
+}
+
+function enqueueContinuity(targetId, {
+    after = Promise.resolve(),
+    force = false,
+    expectedTarget = null,
+} = {}) {
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const expected = expectedTarget || captureTarget(context, resolved);
+    const dedupeKey = capturedTargetKey(expected);
+    if (
+        !force
+        && dedupeKey
+        && (continuityPendingKeys.has(dedupeKey) || continuityCompletedKeys.has(dedupeKey))
+    ) {
+        return Promise.resolve({ status: 'duplicate' });
+    }
+    if (dedupeKey) continuityPendingKeys.add(dedupeKey);
+
+    continuityChain = continuityChain
+        .catch(() => undefined)
+        .then(() => after.catch?.(() => undefined) ?? after)
+        .then(() => {
+            if (!expected || expected.epoch !== operationEpoch) {
+                return { status: 'stale', reason: '任务已被新的生成作废' };
+            }
+            const freshContext = getContext();
+            const fresh = captureTarget(freshContext, expected.index);
+            if (!sameTargetExceptContent(expected, fresh)) {
+                return { status: 'stale', reason: '目标回复身份已经变化' };
+            }
+            return runContinuityTarget(fresh, { force });
+        })
+        .then((result) => {
+            if (dedupeKey && ['applied', 'disabled'].includes(result?.status)) {
+                continuityCompletedKeys.add(dedupeKey);
+            }
+            return result;
+        })
+        .catch((error) => {
+            console.error('[MVU Auto Doctor] 支线连续性处理异常：', error);
+            setContinuityStatus(`支线连续性异常：${error.message || error}`, 'error');
+            return { status: 'failed', reason: String(error.message || error) };
+        })
+        .finally(() => {
+            if (dedupeKey) continuityPendingKeys.delete(dedupeKey);
+        });
+    return continuityChain;
+}
+
+async function clearContinuityState() {
+    const context = getContext();
+    if (!context?.chatId) return false;
+    if (!window.confirm?.('只清空当前聊天的支线连续性账本？不会删除正文、MVU或数据库内容。')) {
+        return false;
+    }
+    const namespace = readChatNamespace(context);
+    namespace.continuity = emptyContinuityState(context.chatId);
+    namespace.continuityCheckpoint = null;
+    namespace.continuityDirector = 'standalone';
+    await writeChatNamespace(namespace, context.chatId, { force: true });
+    registerContinuityInjection('');
+    setContinuityStatus('支线连续性：当前聊天账本已清空');
     return true;
 }
 
@@ -986,6 +1789,24 @@ function buildSettingsPanel() {
                         <button class="menu_button mvuad-undo" type="button">撤销上次修复</button>
                     </div>
                     <div class="mvuad-status" role="status"></div>
+                    <div class="mvuad-section-title">平行支线连续性</div>
+                    <div class="mvuad-description">
+                        复用预设的平行事件与缝合怪记录，给支线建立稳定账本并注入下一回合；
+                        不替玩家行动，不写MVU或数据库。
+                    </div>
+                    <label class="mvuad-select">
+                        <span>运行模式</span>
+                        <select class="text_pole mvuad-continuity-mode">
+                            <option value="auto">自动兼容（推荐）</option>
+                            <option value="on">始终开启</option>
+                            <option value="off">关闭</option>
+                        </select>
+                    </label>
+                    <div class="mvuad-actions">
+                        <button class="menu_button mvuad-continuity-run" type="button">立即整理支线</button>
+                        <button class="menu_button mvuad-continuity-clear" type="button">清空当前账本</button>
+                    </div>
+                    <div class="mvuad-status mvuad-continuity-status" role="status"></div>
                     <div class="mvuad-version">v${VERSION} · 独立安装，不修改角色卡或故事神谕文件</div>
                 </div>
             </div>
@@ -1013,8 +1834,24 @@ function buildSettingsPanel() {
         enqueue(null, { manual: true });
     });
     wrapper.querySelector('.mvuad-undo').addEventListener('click', undoLast);
-    ui = { wrapper, status: wrapper.querySelector('.mvuad-status') };
+    const continuityMode = wrapper.querySelector('.mvuad-continuity-mode');
+    continuityMode.value = getSettings().continuityMode;
+    continuityMode.addEventListener('change', () => {
+        getSettings().continuityMode = continuityMode.value;
+        saveSettings();
+        applyContinuityInjection();
+    });
+    wrapper.querySelector('.mvuad-continuity-run').addEventListener('click', () => {
+        enqueueContinuity(null, { force: true });
+    });
+    wrapper.querySelector('.mvuad-continuity-clear').addEventListener('click', clearContinuityState);
+    ui = {
+        wrapper,
+        status: wrapper.querySelector('.mvuad-status:not(.mvuad-continuity-status)'),
+        continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
+    };
     setStatus(latestStatus);
+    setContinuityStatus(latestContinuityStatus);
 }
 
 function bindEvents() {
@@ -1025,22 +1862,61 @@ function bindEvents() {
     }
     const types = context.eventTypes || context.event_types || {};
     context.eventSource.on(
-        types.MESSAGE_RECEIVED || 'message_received',
-        (value) => {
-            const index = resolveMessageId(value);
-            enqueue(index);
+        types.GENERATION_STARTED || 'generation_started',
+        (type, _options, dryRun) => {
+            if (dryRun) {
+                console.info('[MVU Auto Doctor] 已忽略数据库/算量 dryRun。');
+                return;
+            }
+            generationSerial += 1;
+            lastGeneration = {
+                serial: generationSerial,
+                type: String(type || 'normal'),
+                dryRun: false,
+            };
+            invalidateOperations(`开始新的${lastGeneration.type}生成`);
+            applyContinuityInjection({
+                isReroll: ['swipe', 'regenerate'].includes(lastGeneration.type),
+            });
         },
     );
     context.eventSource.on(
-        types.CHAT_CHANGED || 'chat_changed',
-        () => {
-            lastUndo = null;
-            automaticPendingKeys.clear();
-            automaticCompletedKeys.clear();
-            setStatus('等待新的 AI 回复');
-            disableStoryOracleAutoIfNeeded();
+        types.MESSAGE_RECEIVED || 'message_received',
+        (value) => {
+            const index = resolveMessageId(value);
+            const current = getContext();
+            const latest = latestAiMessage(current);
+            const resolved = index < 0 ? latest.index : index;
+            const captured = captureTarget(current, resolved);
+            if (!captured) return;
+            const repair = enqueue(resolved, { queuedTarget: captured });
+            enqueueContinuity(resolved, {
+                after: repair,
+                expectedTarget: captured,
+            });
         },
     );
+    const onChatChanged = () => {
+            clearTimeout(pendingChatSaveTimer);
+            pendingChatSaveTimer = null;
+            invalidateOperations('聊天已经切换');
+            automaticPendingKeys.clear();
+            automaticCompletedKeys.clear();
+            continuityPendingKeys.clear();
+            continuityCompletedKeys.clear();
+            presetContinuityCache = { checkedAt: 0, active: false };
+            lastUndo = latestUndoRecord(readChatNamespace());
+            setStatus('等待新的 AI 回复');
+            applyContinuityInjection();
+            disableStoryOracleAutoIfNeeded();
+        };
+    const chatEvents = new Set([
+        types.CHAT_CHANGED || 'chat_changed',
+        types.CHAT_LOADED || 'chat_loaded',
+    ]);
+    for (const eventName of chatEvents) {
+        context.eventSource.on(eventName, onChatChanged);
+    }
 }
 
 function initialize() {
@@ -1050,10 +1926,15 @@ function initialize() {
     buildSettingsPanel();
     bindEvents();
     disableStoryOracleAutoIfNeeded();
+    lastUndo = latestUndoRecord(readChatNamespace());
+    applyContinuityInjection();
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
         runLatest: () => enqueue(null, { manual: true }),
+        runContinuity: () => enqueueContinuity(null, { force: true }),
+        getContinuityState: () => deepClone(readChatNamespace().continuity),
+        clearContinuityState,
         undoLast,
         getStatus: () => latestStatus,
     });
