@@ -20,6 +20,7 @@ import {
     continuityContentDigest,
     continuityLifecycleStats,
     continuityLedgerView,
+    CONTINUITY_TICK_LABELS,
     emptyContinuityState,
     enforceContinuityPolicy,
     extractContinuityMarkers,
@@ -50,7 +51,8 @@ const DEFAULTS = Object.freeze({
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
-    continuitySettingsVersion: 3,
+    floatingOrbEnabled: true,
+    continuitySettingsVersion: 4,
     continuityMaxThreads: 8,
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
@@ -70,7 +72,7 @@ let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
 let latestContinuityStatus = '支线连续性：等待事件';
 let oracleAutoDisabledNoticeShown = false;
-let ui = null;
+let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
 let generationSerial = 0;
 let lastGeneration = { serial: 0, type: 'normal', dryRun: false };
@@ -115,6 +117,11 @@ function getSettings() {
         settings.continuitySettingsVersion = 3;
         changed = true;
     }
+    if (previousContinuitySettingsVersion < 4) {
+        settings.floatingOrbEnabled = settings.floatingOrbEnabled !== false;
+        settings.continuitySettingsVersion = 4;
+        changed = true;
+    }
     if (changed) context.saveSettingsDebounced?.();
     return settings;
 }
@@ -134,9 +141,15 @@ function toast(kind, message, title = 'MVU 自动医生') {
 
 function setStatus(text, kind = '') {
     latestStatus = String(text || '');
-    if (!ui?.status) return;
-    ui.status.textContent = latestStatus;
-    ui.status.dataset.kind = kind;
+    if (ui?.status) {
+        ui.status.textContent = latestStatus;
+        ui.status.dataset.kind = kind;
+    }
+    if (ui?.floatingRepairStatus) {
+        ui.floatingRepairStatus.textContent = `变量：${latestStatus}`;
+        ui.floatingRepairStatus.dataset.kind = kind;
+    }
+    updateFloatingOrb();
 }
 
 function setContinuityStatus(text, kind = '') {
@@ -145,6 +158,11 @@ function setContinuityStatus(text, kind = '') {
         ui.continuityStatus.textContent = latestContinuityStatus;
         ui.continuityStatus.dataset.kind = kind;
     }
+    if (ui?.floatingContinuityStatus) {
+        ui.floatingContinuityStatus.textContent = `世界：${latestContinuityStatus}`;
+        ui.floatingContinuityStatus.dataset.kind = kind;
+    }
+    updateFloatingOrb();
     renderContinuityLedger();
 }
 
@@ -1756,7 +1774,9 @@ function detectContinuityDirector(context, text, markers) {
     const hasWorldEngine = !!window.WORLD_ENGINE || !!window.WORLD_ENGINE_CORE;
     if (hasStitches && (hasPreset || hasWorldEngine)) return 'mixed';
     if (hasStitches) return 'stitches';
-    if (hasPreset || hasWorldEngine) return 'preset';
+    if (hasPreset && hasWorldEngine) return 'world_preset';
+    if (hasWorldEngine) return 'world';
+    if (hasPreset) return 'preset';
     return 'standalone';
 }
 
@@ -1963,12 +1983,13 @@ function buildContinuityMessages({
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 每个账本轮次最多推进一条未结事件；推进可以完全发生在幕后，不要求正文出现镜头或伏笔。已有事件优先，禁止为同一因果另造同义ID。',
-        '- 每个完成的AI回复都代表一个世界节拍。只要存在未结事件，就必须让其中恰好一条发生实质变化：推进、显现、转入休眠或结束；不得只改turn/lastAdvancedTurn后原样返回。',
+        '- 每个完成的AI回复都必须运行一次世界调度，但“运行调度”不等于机械推进时间。通常让一条未结事件推进、显现、转入休眠或结束；若正文只过去片刻、trigger尚未满足或因果前提缺失，可原样保留线程，并在lastTick登记held、目标threadId和不少于8字的具体依据。',
+        '- held不是偷懒选项：不得只写“暂不推进/无变化”。必须说明是哪一项时间、地点、人物行动或因果条件尚未成立；存在更合适的其他未结事件时，应改调度其他事件。',
         '- 本轮正文若明确造成新的持续因果，必须登记一条main_derivative新事件；它不占用“推进一条旧事件”的名额。A造成B、B留下C时，用seedBasis写明正文证据。',
         '- 区分hidden、rumor、observed。隐藏事实不能令不知情角色全知，必须经过观察、传播、调查或后果显现。',
         '- 计划、建议、选项、传闻和未来可能性不是已发生事实。',
         '- 已完成的事件标记resolved，不要删除；同时填写resolution与至少一项effects或rumors。若D后果还会继续自行变化，另建新事件并在causedBy填写父事件ID。',
-        '- rumors是有来源、有传播范围的世界信息，不等于事实本身；只有传播路径接触主线人物时，knowledge才可变成rumor或observed。',
+        '- rumors是有来源、有传播范围的世界信息，不等于事实本身；只有传播路径接触主线人物时，knowledge才可变成rumor或observed。论坛、闲聊和吐槽是社会表面，不必全部登记成事件；只有会持续传播或承载因果的信息才写入rumors。',
         '- 暂时没有自然推进条件的单条事件可标记dormant；不能因为一条休眠就让整个世界停止，仍应调度其他事件或按自主度产生世界脉动。',
         '- 独立事件可以永远不与主线相交，也可以在幕后自行解决。禁止把所有世界变化都改造成围着玩家转的任务。',
         '- 只有真实的传播链、因果后果、人物接触、地点重合或时间窗口满足intersection时，relation才可从independent/latent变为converging，再由主回复决定是否形成可观察痕迹。禁止巧合传送和强行汇流。',
@@ -1982,10 +2003,11 @@ function buildContinuityMessages({
         '- 可按世界设定创建尚未登场的普通NPC、小组织、地方事务和日常关系；不得无依据发明核心宇宙法则、改写重要角色过去或凭空制造只为震惊玩家的幕后黑手。',
         `【自主度】${autonomyRule}`,
         bridgeOnly
-            ? '- 已检测到预设平行事件或缝合怪：它们保留可见剧情的提案权；你可以独立维护未显现的世界事件。若它们后来提出相同因果，合并进原稳定ID，只落地一次。'
+            ? '- 已检测到预设平行事件、缝合怪或世界引擎：外部系统保留可见剧情/世界推演提案权；你只维护连续性与缺失因果。若外部系统提出相同因果，合并进原稳定ID，只落地一次。'
             : '- 未检测到外部剧情推进器：你负责低频维护世界事件，但仍不得要求主回复展示每一条幕后变化。',
         '',
         '【stage枚举】seeded / advancing / manifested / resolved / dormant',
+        '【lastTick.action枚举】created / advanced / manifested / resolved / dormant / held',
         '【kind枚举】parallel / personal / promise / enemy / mystery',
         '【knowledge枚举】hidden / rumor / observed',
         '只输出一个<ContinuityState>包裹的JSON对象；必须保留所有旧线程及稳定ID。',
@@ -2026,6 +2048,7 @@ function buildContinuityMessages({
         '<ContinuityState>',
         '{',
         '  "turn": 1,',
+        '  "lastTick": {"turn": 1, "action": "advanced", "threadId": "稳定ID", "reason": "本轮调度的具体事实依据"},',
         '  "threads": [{',
         '    "id": "稳定ID", "title": "短标题", "kind": "parallel",',
         '    "origin": "setting_independent", "relation": "independent",',
@@ -2129,13 +2152,14 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         const lifecycle = continuityLifecycleStats(base, candidate);
         progressed = lifecycle.activeBefore > 0
             ? lifecycle.changedExisting > 0
+                || (lifecycle.schedulerAdvanced && lifecycle.tickAction === 'held')
             : lifecycle.added > 0;
         if (progressed) {
             next = candidate;
             break;
         }
         retryReason ||= lifecycle.activeBefore > 0
-            ? '已有未结事件，但没有任何一条发生实质推进、休眠、显现或结束'
+            ? '已有未结事件，但既没有实质变化，也没有给出指向具体事件与未满足条件的held调度记录'
             : '没有新建任何有世界设定依据的事件';
     }
     if (!progressed) {
@@ -2173,8 +2197,14 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     applyContinuityInjection();
     const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
-    setContinuityStatus(`支线连续性：已记录 ${active} 条未结支线`, 'ok');
-    return { status: 'applied', active, director };
+    const held = next.lastTick?.action === 'held';
+    setContinuityStatus(
+        held
+            ? `支线连续性：已审计 ${active} 条未结支线，本轮条件未成熟`
+            : `支线连续性：已记录 ${active} 条未结支线`,
+        'ok',
+    );
+    return { status: 'applied', active, director, held };
 }
 
 function sameTargetExceptContent(left, right) {
@@ -2258,8 +2288,10 @@ async function clearContinuityState() {
 const CONTINUITY_DIRECTOR_LABELS = Object.freeze({
     standalone: '独立活世界调度',
     preset: '预设平行事件桥接',
+    world: '世界引擎桥接',
+    world_preset: '世界引擎＋预设桥接',
     stitches: '缝合怪桥接',
-    mixed: '预设＋缝合怪联合桥接',
+    mixed: '外部剧情系统联合桥接',
 });
 
 function formatLedgerTime(timestamp) {
@@ -2362,8 +2394,117 @@ function buildLedgerThreadCard(thread, {
     return details;
 }
 
+function ledgerSurfaceFrom(root) {
+    if (!root) return null;
+    return {
+        root,
+        summary: root.querySelector('.mvuad-ledger-summary'),
+        empty: root.querySelector('.mvuad-ledger-empty'),
+        active: root.querySelector('.mvuad-ledger-active'),
+        resolved: root.querySelector('.mvuad-ledger-resolved'),
+        resolvedSummary: root.querySelector('.mvuad-ledger-resolved-summary'),
+        resolvedList: root.querySelector('.mvuad-ledger-resolved-list'),
+        echoes: root.querySelector('.mvuad-echo-list'),
+        echoEmpty: root.querySelector('.mvuad-echo-empty'),
+        rendered: false,
+        chatId: '',
+    };
+}
+
+function registerLedgerSurface(root) {
+    const surface = ledgerSurfaceFrom(root);
+    if (!surface?.active || !surface?.summary) return null;
+    ui.ledgerSurfaces ||= [];
+    ui.ledgerSurfaces = ui.ledgerSurfaces.filter((item) => item.root?.isConnected);
+    if (!ui.ledgerSurfaces.some((item) => item.root === root)) {
+        ui.ledgerSurfaces.push(surface);
+    }
+    return surface;
+}
+
+function buildEchoItem(echo, concealSpoiler) {
+    const details = document.createElement('details');
+    details.className = 'mvuad-echo-item';
+    const summary = document.createElement('summary');
+    summary.textContent = concealSpoiler
+        ? '尚未传到角色圈层的风声（点击查看）'
+        : echo.content;
+    const meta = document.createElement('div');
+    meta.className = 'mvuad-echo-meta';
+    meta.textContent = concealSpoiler
+        ? `${echo.content} · 来源事件：${echo.threadTitle}`
+        : `来源事件：${echo.threadTitle}`;
+    details.append(summary, meta);
+    return details;
+}
+
+function renderLedgerSurface(surface, view, namespace, settings, context) {
+    const chatChanged = surface.chatId !== (context?.chatId || '');
+    const previouslyRendered = surface.rendered && !chatChanged;
+    const hadActiveCards = previouslyRendered && surface.active.children.length > 0;
+    const openIds = new Set(
+        [...surface.active.querySelectorAll('.mvuad-thread-card[open]')]
+            .map((element) => element.dataset.threadId),
+    );
+
+    surface.chatId = context?.chatId || '';
+    surface.rendered = true;
+    const tickLabel = CONTINUITY_TICK_LABELS[view.lastTick?.action]
+        || view.lastTick?.action
+        || '尚未调度';
+    surface.summary.textContent = [
+        `${view.activeCount} 条未结`,
+        `${view.resolvedCount} 条已收束`,
+        `${view.echoCount} 条因果风声`,
+        view.turn ? `账本第 ${view.turn} 轮` : '尚未建立账本轮次',
+        `最近调度：${tickLabel}`,
+        view.lastTick?.reason ? `依据：${view.lastTick.reason}` : '',
+        `更新：${formatLedgerTime(view.updatedAt)}`,
+        `来源：${CONTINUITY_DIRECTOR_LABELS[namespace.continuityDirector] || '等待识别'}`,
+        settings.continuityMode === 'off' ? '当前已关闭运行（旧账本仍保留）' : '',
+    ].filter(Boolean).join(' · ');
+
+    surface.active.replaceChildren();
+    const concealById = new Map(view.active.map((thread) => [
+        thread.id,
+        settings.hideContinuitySpoilers && thread.isSpoiler,
+    ]));
+    const firstSafeIndex = view.active.findIndex((thread) => !concealById.get(thread.id));
+    view.active.forEach((thread, index) => {
+        surface.active.appendChild(buildLedgerThreadCard(thread, {
+            open: openIds.has(thread.id)
+                || (!hadActiveCards && index === firstSafeIndex),
+            concealSpoiler: concealById.get(thread.id),
+        }));
+    });
+    surface.empty.hidden = view.activeCount > 0;
+
+    surface.resolvedList.replaceChildren();
+    for (const thread of view.resolved) {
+        surface.resolvedList.appendChild(buildLedgerThreadCard(thread, {
+            concealSpoiler: settings.hideContinuitySpoilers && thread.isSpoiler,
+        }));
+    }
+    surface.resolved.hidden = view.resolvedCount === 0;
+    surface.resolvedSummary.textContent = `已收束支线（${view.resolvedCount}）`;
+
+    if (surface.echoes) {
+        surface.echoes.replaceChildren();
+        for (const echo of view.echoes) {
+            surface.echoes.appendChild(buildEchoItem(
+                echo,
+                settings.hideContinuitySpoilers && echo.isSpoiler,
+            ));
+        }
+        if (surface.echoEmpty) surface.echoEmpty.hidden = view.echoCount > 0;
+    }
+}
+
 function renderContinuityLedger() {
-    if (!ui?.ledgerActive || !ui?.ledgerSummary) return;
+    if (!ui?.ledgerSurfaces?.length) {
+        updateFloatingOrb();
+        return;
+    }
     const context = getContext();
     const settings = getSettings();
     const namespace = readChatNamespace(context);
@@ -2371,48 +2512,274 @@ function renderContinuityLedger() {
         chatId: context?.chatId || '',
         maxThreads: settings.continuityMaxThreads,
     });
-    const chatChanged = ui.ledgerChatId !== (context?.chatId || '');
-    const previouslyRendered = ui.ledgerRendered && !chatChanged;
-    const hadActiveCards = previouslyRendered && ui.ledgerActive.children.length > 0;
-    const openIds = new Set(
-        [...ui.ledgerActive.querySelectorAll('.mvuad-thread-card[open]')]
-            .map((element) => element.dataset.threadId),
-    );
-
-    ui.ledgerChatId = context?.chatId || '';
-    ui.ledgerRendered = true;
-    ui.ledgerSummary.textContent = [
-        `${view.activeCount} 条未结`,
-        `${view.resolvedCount} 条已收束`,
-        view.turn ? `账本第 ${view.turn} 轮` : '尚未建立账本轮次',
-        `更新：${formatLedgerTime(view.updatedAt)}`,
-        `来源：${CONTINUITY_DIRECTOR_LABELS[namespace.continuityDirector] || '等待识别'}`,
-        settings.continuityMode === 'off' ? '当前已关闭运行（旧账本仍保留）' : '',
-    ].filter(Boolean).join(' · ');
-
-    ui.ledgerActive.replaceChildren();
-    const concealById = new Map(view.active.map((thread) => [
-        thread.id,
-        settings.hideContinuitySpoilers && thread.isSpoiler,
-    ]));
-    const firstSafeIndex = view.active.findIndex((thread) => !concealById.get(thread.id));
-    view.active.forEach((thread, index) => {
-        ui.ledgerActive.appendChild(buildLedgerThreadCard(thread, {
-            open: openIds.has(thread.id)
-                || (!hadActiveCards && index === firstSafeIndex),
-            concealSpoiler: concealById.get(thread.id),
-        }));
-    });
-    ui.ledgerEmpty.hidden = view.activeCount > 0;
-
-    ui.ledgerResolvedList.replaceChildren();
-    for (const thread of view.resolved) {
-        ui.ledgerResolvedList.appendChild(buildLedgerThreadCard(thread, {
-            concealSpoiler: settings.hideContinuitySpoilers && thread.isSpoiler,
-        }));
+    ui.ledgerSurfaces = ui.ledgerSurfaces.filter((surface) => surface.root?.isConnected);
+    for (const surface of ui.ledgerSurfaces) {
+        renderLedgerSurface(surface, view, namespace, settings, context);
     }
-    ui.ledgerResolved.hidden = view.resolvedCount === 0;
-    ui.ledgerResolvedSummary.textContent = `已收束支线（${view.resolvedCount}）`;
+    updateFloatingOrb(view);
+}
+
+const FLOATING_ORB_POSITION_KEY = 'mvu-auto-doctor-orb-position-v1';
+
+function readFloatingOrbPosition() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem(FLOATING_ORB_POSITION_KEY) || '{}');
+        return {
+            side: parsed.side === 'left' ? 'left' : 'right',
+            top: Number.isFinite(parsed.top) ? parsed.top : Math.round(window.innerHeight * 0.34),
+            tucked: parsed.tucked === true,
+        };
+    } catch {
+        return { side: 'right', top: Math.round(window.innerHeight * 0.34), tucked: false };
+    }
+}
+
+function saveFloatingOrbPosition(position) {
+    try {
+        localStorage.setItem(FLOATING_ORB_POSITION_KEY, JSON.stringify(position));
+    } catch {
+        // Position persistence is optional.
+    }
+}
+
+function applyFloatingOrbPosition(position = readFloatingOrbPosition()) {
+    const orb = ui?.floatingOrb;
+    if (!orb) return;
+    const size = orb.offsetWidth || 50;
+    const handle = 15;
+    const top = Math.max(8, Math.min(Number(position.top) || 8, window.innerHeight - size - 8));
+    const side = position.side === 'left' ? 'left' : 'right';
+    const left = position.tucked
+        ? (side === 'left' ? handle - size : window.innerWidth - handle)
+        : (side === 'left' ? 10 : window.innerWidth - size - 10);
+    orb.style.left = `${left}px`;
+    orb.style.top = `${top}px`;
+    orb.classList.toggle('mvuad-orb-tucked', !!position.tucked);
+    orb.dataset.side = side;
+}
+
+function tuckFloatingOrb(delay = 0) {
+    clearTimeout(ui?.floatingTuckTimer);
+    if (!ui?.floatingOrb || !getSettings().floatingOrbEnabled) return;
+    ui.floatingTuckTimer = setTimeout(() => {
+        if (!ui?.floatingPanel?.hidden) return;
+        const position = readFloatingOrbPosition();
+        position.tucked = true;
+        saveFloatingOrbPosition(position);
+        applyFloatingOrbPosition(position);
+    }, Math.max(0, delay));
+}
+
+function untuckFloatingOrb() {
+    clearTimeout(ui?.floatingTuckTimer);
+    const position = readFloatingOrbPosition();
+    position.tucked = false;
+    saveFloatingOrbPosition(position);
+    applyFloatingOrbPosition(position);
+}
+
+function showFloatingPanel() {
+    if (!ui?.floatingPanel) return;
+    untuckFloatingOrb();
+    ui.floatingPanel.hidden = false;
+    ui.floatingPanel.classList.add('mvuad-floating-panel-open');
+    renderContinuityLedger();
+    ui.floatingClose?.focus?.({ preventScroll: true });
+}
+
+function hideFloatingPanel() {
+    if (!ui?.floatingPanel) return;
+    ui.floatingPanel.hidden = true;
+    ui.floatingPanel.classList.remove('mvuad-floating-panel-open');
+    tuckFloatingOrb(1800);
+}
+
+function openInstalledForum() {
+    const forumOrb = document.querySelector('#zsd-forum-orb');
+    if (forumOrb instanceof HTMLElement) {
+        hideFloatingPanel();
+        forumOrb.click();
+        return;
+    }
+    const forumMenu = document.querySelector('#zsd-forum-menu-item');
+    if (forumMenu instanceof HTMLElement) {
+        hideFloatingPanel();
+        forumMenu.click();
+        return;
+    }
+    toast('info', '未检测到独立论坛前端。变量医生不会用正文代替刷帖，以免抢占正文篇幅。');
+}
+
+function makeFloatingOrbDraggable(orb) {
+    let dragging = false;
+    let moved = false;
+    let startX = 0;
+    let startY = 0;
+    let startTop = 0;
+
+    orb.addEventListener('pointerdown', (event) => {
+        if (event.button != null && event.button !== 0) return;
+        untuckFloatingOrb();
+        const rect = orb.getBoundingClientRect();
+        dragging = true;
+        moved = false;
+        startX = event.clientX;
+        startY = event.clientY;
+        startTop = rect.top;
+        orb.classList.add('mvuad-orb-dragging');
+        orb.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+    });
+    orb.addEventListener('pointermove', (event) => {
+        if (!dragging) return;
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+        if (!moved) return;
+        const size = orb.offsetWidth || 50;
+        const top = Math.max(8, Math.min(startTop + dy, window.innerHeight - size - 8));
+        orb.style.left = `${Math.max(4, Math.min(event.clientX - size / 2, window.innerWidth - size - 4))}px`;
+        orb.style.top = `${top}px`;
+        event.preventDefault();
+    });
+    const finish = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        orb.classList.remove('mvuad-orb-dragging');
+        orb.releasePointerCapture?.(event.pointerId);
+        if (moved) {
+            const rect = orb.getBoundingClientRect();
+            const side = rect.left + rect.width / 2 < window.innerWidth / 2 ? 'left' : 'right';
+            const position = { side, top: rect.top, tucked: false };
+            saveFloatingOrbPosition(position);
+            applyFloatingOrbPosition(position);
+            tuckFloatingOrb(2600);
+        }
+    };
+    orb.addEventListener('pointerup', finish);
+    orb.addEventListener('pointercancel', finish);
+    orb.addEventListener('click', (event) => {
+        if (moved) {
+            moved = false;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            return;
+        }
+        showFloatingPanel();
+    });
+}
+
+function updateFloatingOrb(view = null) {
+    const orb = ui?.floatingOrb;
+    if (!orb) return;
+    let ledgerView = view;
+    if (!ledgerView) {
+        const context = getContext();
+        ledgerView = continuityLedgerView(readChatNamespace(context).continuity, {
+            chatId: context?.chatId || '',
+            maxThreads: getSettings().continuityMaxThreads,
+        });
+    }
+    const count = Number(ledgerView?.activeCount) || 0;
+    if (ui.floatingCount) ui.floatingCount.textContent = String(count);
+    const statusText = `${latestStatus} ${latestContinuityStatus}`;
+    const kind = /失败|异常|未产生有效/u.test(statusText)
+        ? 'error'
+        : /正在/u.test(statusText)
+            ? 'busy'
+            : /已记录|已审计|已修正|无需修正/u.test(statusText)
+                ? 'ok'
+                : '';
+    orb.dataset.kind = kind;
+    orb.title = `MVU 自动医生：${count} 条未结事件；点击打开世界动态`;
+    orb.setAttribute('aria-label', orb.title);
+}
+
+function syncFloatingUiVisibility() {
+    const enabled = getSettings().floatingOrbEnabled !== false;
+    if (ui?.floatingOrb) ui.floatingOrb.hidden = !enabled;
+    if (!enabled) hideFloatingPanel();
+    else {
+        applyFloatingOrbPosition();
+        tuckFloatingOrb(5200);
+    }
+}
+
+function buildFloatingUi() {
+    if (!document.body) {
+        setTimeout(buildFloatingUi, 300);
+        return;
+    }
+    if (document.querySelector('#mvuad-floating-orb')) return;
+    const orb = document.createElement('button');
+    orb.id = 'mvuad-floating-orb';
+    orb.className = 'mvuad-floating-orb';
+    orb.type = 'button';
+    orb.innerHTML = '<span class="mvuad-orb-core" aria-hidden="true">脉</span><span class="mvuad-orb-count">0</span>';
+
+    const panel = document.createElement('section');
+    panel.id = 'mvuad-floating-panel';
+    panel.hidden = true;
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'MVU 自动医生与世界动态');
+    panel.innerHTML = `
+        <div class="mvuad-floating-header">
+            <div><b>MVU 医生 · 世界动态</b><span>v${VERSION}</span></div>
+            <button class="mvuad-floating-close" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="mvuad-floating-body">
+            <div class="mvuad-floating-statuses">
+                <div class="mvuad-floating-repair-status" role="status"></div>
+                <div class="mvuad-floating-continuity-status" role="status"></div>
+            </div>
+            <div class="mvuad-floating-actions">
+                <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
+                <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
+                <button class="menu_button mvuad-floating-forum" type="button">打开独立论坛</button>
+            </div>
+            <div class="mvuad-ledger" aria-label="悬浮支线账本">
+                <div class="mvuad-ledger-header"><b>事件账本</b><button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button></div>
+                <div class="mvuad-ledger-note">玩家审计视图可能包含角色尚不知道的幕后事实；默认折叠剧透。这里只查看，不会推进剧情或改写变量。</div>
+                <div class="mvuad-ledger-summary"></div>
+                <div class="mvuad-ledger-empty">当前没有未结事件。</div>
+                <div class="mvuad-ledger-active"></div>
+                <details class="mvuad-ledger-resolved"><summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary><div class="mvuad-ledger-resolved-list"></div></details>
+                <div class="mvuad-echo-section">
+                    <b>世界风声</b>
+                    <div class="mvuad-ledger-note">这里是底层事件传出的消息，不把普通水帖硬算成支线。刷帖、吐槽和网友互动仍交给独立论坛。</div>
+                    <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
+                    <div class="mvuad-echo-list"></div>
+                </div>
+            </div>
+        </div>`;
+    document.body.append(orb, panel);
+    Object.assign(ui, {
+        floatingOrb: orb,
+        floatingPanel: panel,
+        floatingClose: panel.querySelector('.mvuad-floating-close'),
+        floatingRepairStatus: panel.querySelector('.mvuad-floating-repair-status'),
+        floatingContinuityStatus: panel.querySelector('.mvuad-floating-continuity-status'),
+        floatingCount: orb.querySelector('.mvuad-orb-count'),
+    });
+    registerLedgerSurface(panel.querySelector('.mvuad-ledger'));
+    ui.floatingClose.addEventListener('click', hideFloatingPanel);
+    panel.querySelector('.mvuad-floating-repair').addEventListener('click', () => {
+        const repair = enqueue(null, { manual: true });
+        repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
+    });
+    panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
+        enqueueContinuity(null, { force: true });
+    });
+    panel.querySelector('.mvuad-floating-forum').addEventListener('click', openInstalledForum);
+    panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
+    makeFloatingOrbDraggable(orb);
+    window.addEventListener('resize', () => applyFloatingOrbPosition());
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !panel.hidden) hideFloatingPanel();
+    });
+    setStatus(latestStatus);
+    setContinuityStatus(latestContinuityStatus);
+    syncFloatingUiVisibility();
 }
 
 function makeCheckbox(label, key) {
@@ -2429,6 +2796,7 @@ function makeCheckbox(label, key) {
             disableStoryOracleAutoIfNeeded();
         }
         if (key === 'hideContinuitySpoilers') renderContinuityLedger();
+        if (key === 'floatingOrbEnabled') syncFloatingUiVisibility();
     });
     const span = document.createElement('span');
     span.textContent = label;
@@ -2512,6 +2880,12 @@ function buildSettingsPanel() {
                             <summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary>
                             <div class="mvuad-ledger-resolved-list"></div>
                         </details>
+                        <div class="mvuad-echo-section">
+                            <b>世界风声</b>
+                            <div class="mvuad-ledger-note">这里只列出与事件因果有关的消息。普通水帖、吐槽和闲聊由卡内贴吧或独立论坛维护，不会被医生强行变成任务。</div>
+                            <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
+                            <div class="mvuad-echo-list"></div>
+                        </div>
                     </div>
                     <div class="mvuad-version">v${VERSION} · 独立安装，不修改角色卡或故事神谕文件</div>
                 </div>
@@ -2558,29 +2932,24 @@ function buildSettingsPanel() {
     });
     wrapper.querySelector('.mvuad-continuity-options').append(
         makeCheckbox('默认折叠未显现的幕后事件，保留惊喜', 'hideContinuitySpoilers'),
+        makeCheckbox('显示可贴边隐藏的悬浮球', 'floatingOrbEnabled'),
     );
     wrapper.querySelector('.mvuad-continuity-run').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
     wrapper.querySelector('.mvuad-continuity-clear').addEventListener('click', clearContinuityState);
-    ui = {
+    Object.assign(ui, {
         wrapper,
         status: wrapper.querySelector('.mvuad-status:not(.mvuad-continuity-status)'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
-        ledgerSummary: wrapper.querySelector('.mvuad-ledger-summary'),
-        ledgerEmpty: wrapper.querySelector('.mvuad-ledger-empty'),
-        ledgerActive: wrapper.querySelector('.mvuad-ledger-active'),
-        ledgerResolved: wrapper.querySelector('.mvuad-ledger-resolved'),
-        ledgerResolvedSummary: wrapper.querySelector('.mvuad-ledger-resolved-summary'),
-        ledgerResolvedList: wrapper.querySelector('.mvuad-ledger-resolved-list'),
-        ledgerRendered: false,
-        ledgerChatId: '',
-    };
+    });
+    registerLedgerSurface(wrapper.querySelector('.mvuad-ledger'));
     wrapper.querySelector('.mvuad-ledger-refresh').addEventListener('click', () => {
         renderContinuityLedger();
     });
     setStatus(latestStatus);
     setContinuityStatus(latestContinuityStatus);
+    syncFloatingUiVisibility();
 }
 
 function bindEvents() {
@@ -2656,6 +3025,7 @@ function initialize() {
     if (window.__MVU_AUTO_DOCTOR_INITIALIZED__) return;
     window.__MVU_AUTO_DOCTOR_INITIALIZED__ = true;
     getSettings();
+    buildFloatingUi();
     buildSettingsPanel();
     bindEvents();
     disableStoryOracleAutoIfNeeded();

@@ -241,7 +241,49 @@ assert.deepEqual(continuityLifecycleStats(causalBase, causalAccepted), {
     added: 1,
     newlyResolved: 0,
     removed: 0,
+    schedulerAdvanced: true,
+    tickAction: 'advanced',
 });
+
+const heldBase = structuredClone(causalAccepted);
+heldBase.turn = 5;
+const heldProposal = structuredClone(heldBase);
+heldProposal.lastTick = {
+    turn: heldBase.turn + 1,
+    action: 'held',
+    threadId: 'WE-行会-议价-01',
+    reason: '正文只过去数秒，行会下一次表决尚未到约定时刻',
+};
+const heldAccepted = enforceContinuityPolicy(heldBase, heldProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.equal(heldAccepted.lastTick.action, 'held');
+assert.equal(heldAccepted.lastTick.threadId, 'WE-行会-议价-01');
+assert.deepEqual(continuityLifecycleStats(heldBase, heldAccepted), {
+    activeBefore: 2,
+    changedExisting: 0,
+    added: 0,
+    newlyResolved: 0,
+    removed: 0,
+    schedulerAdvanced: true,
+    tickAction: 'held',
+});
+
+const vagueHeldProposal = structuredClone(heldBase);
+vagueHeldProposal.lastTick = {
+    turn: heldBase.turn + 1,
+    action: 'held',
+    threadId: 'WE-行会-议价-01',
+    reason: '无变化',
+};
+const vagueHeldAccepted = enforceContinuityPolicy(heldBase, vagueHeldProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.notEqual(vagueHeldAccepted.lastTick.action, 'held', '空泛held不得冒充有效世界调度');
 
 const resolvedProposal = structuredClone(causalAccepted);
 resolvedProposal.turn = 5;
@@ -277,6 +319,13 @@ assert.ok(resolvedAccepted.threads.some((thread) => (
 const aftermathInjection = buildContinuityInjection(resolvedAccepted);
 assert.match(aftermathInjection, /持续影响=旧城药材运输成本下降/u);
 assert.match(aftermathInjection, /仍在传播=商队流传行会高层发生了权力交换/u);
+assert.match(
+    buildContinuityInjection(resolvedAccepted, { director: 'world' }),
+    /世界引擎负责世界推演提案/u,
+);
+const resolvedLedger = continuityLedgerView(resolvedAccepted);
+assert.equal(resolvedLedger.echoCount, 1);
+assert.match(resolvedLedger.echoes[0].content, /权力交换/u);
 
 const resolvedArchive = normalizeContinuityState({
     turn: 20,

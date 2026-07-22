@@ -18,7 +18,7 @@ if (!playwrightPath) {
 const { chromium } = await import(pathToFileURL(playwrightPath).href);
 
 const harness = String.raw`<!doctype html>
-<html><body>
+<html><head><link rel="stylesheet" href="/style.css"></head><body>
 <div id="extensions_settings2"></div>
 <script>
 const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0 };
@@ -208,9 +208,9 @@ try {
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         calls: structuredClone(window.__TEST__.calls),
         version: window.MvuAutoDoctorAPI.version,
-        ledgerText: document.querySelector('.mvuad-ledger')?.textContent || '',
-        cardCount: document.querySelectorAll('.mvuad-thread-card').length,
-        openCardCount: document.querySelectorAll('.mvuad-thread-card[open]').length,
+        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
+        cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
+        openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
     assert.equal(continuity.version, '1.4.0');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
@@ -222,17 +222,17 @@ try {
     assert.match(continuity.ledgerText, /世界脉动/u);
     assert.match(continuity.ledgerText, /保持独立/u);
     assert.equal(
-        await page.locator('.mvuad-thread-card summary .mvuad-thread-title').textContent(),
+        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card summary .mvuad-thread-title').textContent(),
         '幕后独立事件（点击查看剧透）',
     );
-    await page.click('.mvuad-thread-card summary');
+    await page.click('#mvu-auto-doctor-settings .mvuad-thread-card summary');
     assert.match(
-        await page.locator('.mvuad-thread-card .mvuad-thread-body').textContent(),
+        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card .mvuad-thread-body').textContent(),
         /钟楼巡检的缺页交接册/u,
     );
     const mobileLedgerLayout = await page.evaluate(() => {
-        const ledger = document.querySelector('.mvuad-ledger');
-        const field = document.querySelector('.mvuad-thread-field');
+        const ledger = document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger');
+        const field = document.querySelector('#mvu-auto-doctor-settings .mvuad-thread-field');
         const rect = ledger?.getBoundingClientRect();
         return {
             viewportWidth: window.innerWidth,
@@ -244,6 +244,46 @@ try {
     assert.ok(mobileLedgerLayout.left >= 0);
     assert.ok(mobileLedgerLayout.right <= mobileLedgerLayout.viewportWidth + 1);
     assert.doesNotMatch(mobileLedgerLayout.fieldColumns, /\s/u, '手机字段应为单列');
+    const orbBeforeOpen = await page.evaluate(() => {
+        const orb = document.querySelector('#mvuad-floating-orb');
+        const rect = orb?.getBoundingClientRect();
+        return {
+            exists: !!orb,
+            hidden: !!orb?.hidden,
+            top: rect?.top ?? -1,
+            bottom: rect?.bottom ?? Number.MAX_SAFE_INTEGER,
+            count: orb?.querySelector('.mvuad-orb-count')?.textContent,
+        };
+    });
+    assert.equal(orbBeforeOpen.exists, true, '必须建立游玩时悬浮入口');
+    assert.equal(orbBeforeOpen.hidden, false);
+    assert.ok(
+        orbBeforeOpen.top >= 0 && orbBeforeOpen.bottom <= 844,
+        JSON.stringify(orbBeforeOpen),
+    );
+    assert.equal(orbBeforeOpen.count, '1');
+    await page.click('#mvuad-floating-orb');
+    const floatingPanel = await page.evaluate(() => {
+        const panel = document.querySelector('#mvuad-floating-panel');
+        const rect = panel?.getBoundingClientRect();
+        return {
+            hidden: !!panel?.hidden,
+            left: rect?.left ?? -1,
+            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
+            cards: panel?.querySelectorAll('.mvuad-thread-card').length || 0,
+            text: panel?.textContent || '',
+        };
+    });
+    assert.equal(floatingPanel.hidden, false);
+    assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
+    assert.equal(floatingPanel.cards, 1);
+    assert.match(floatingPanel.text, /世界风声/u);
+    assert.match(floatingPanel.text, /打开独立论坛/u);
+    await page.click('#mvuad-floating-panel .mvuad-floating-close');
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel')?.hidden),
+        true,
+    );
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.match(continuity.calls.continuitySystem, /setting_independent/u);
     assert.match(continuity.calls.continuitySystem, /可以永远不与主线相交/u);
@@ -322,7 +362,7 @@ try {
     assert.ok(openingUndo.openingState.suppressed['/契约者/衍生属性/MP_当前']);
 
     const beforeRefreshCalls = continuity.calls.model.length;
-    await page.click('.mvuad-ledger-refresh');
+    await page.click('#mvu-auto-doctor-settings .mvuad-ledger-refresh');
     assert.equal(
         await page.evaluate(() => window.__TEST__.calls.model.length),
         beforeRefreshCalls,
@@ -365,7 +405,7 @@ try {
         '切换到空聊天后不得显示上一个聊天的支线',
     );
     assert.match(
-        await page.evaluate(() => document.querySelector('.mvuad-ledger-empty')?.textContent || ''),
+        await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger-empty')?.textContent || ''),
         /当前没有未结支线/u,
     );
 
@@ -391,7 +431,7 @@ try {
         version: window.MvuAutoDoctorAPI.version,
         calls: structuredClone(window.__TEST__.calls),
         state: window.MvuAutoDoctorAPI.getContinuityState(),
-        ledgerText: document.querySelector('.mvuad-ledger')?.textContent || '',
+        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
     assert.equal(lifecycle.version, '1.4.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
@@ -408,6 +448,51 @@ try {
     assert.match(lifecycle.ledgerText, /烧毁货单后的泄密追查/u);
     assert.match(lifecycle.ledgerText, /已收束支线（1）/u);
     await lifecyclePage.close();
+
+    const heldPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await heldPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await heldPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await heldPage.evaluate(() => {
+        const t = window.__TEST__;
+        const originalRun = window.StoryOracleAPI.run;
+        let localContinuityRuns = 0;
+        window.StoryOracleAPI.run = async (messages) => {
+            const system = messages[0].content;
+            if (!system.includes('活世界事件')) return originalRun(messages);
+            localContinuityRuns += 1;
+            t.calls.model.push('continuity');
+            t.calls.continuityRuns += 1;
+            if (localContinuityRuns === 1) {
+                return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-渡船-潮汐-01","title":"渡船等待退潮","origin":"ambient","relation":"independent","stage":"seeded","summary":"渡船仍系在北岸码头。","nextBeat":"退潮后船工才会检查缆绳。","trigger":"游戏内时间推进到退潮时段。","intersection":"玩家前往北岸码头时可能观察到。","seedBasis":"世界书：港城潮汐与渡船班次","knowledge":"hidden"}]}</ContinuityState>';
+            }
+            return '<ContinuityState>{"turn":2,"lastTick":{"turn":2,"action":"held","threadId":"WE-渡船-潮汐-01","reason":"正文只过去十几秒，尚未到世界书规定的退潮时段"},"threads":[{"id":"WE-渡船-潮汐-01","title":"渡船等待退潮","origin":"ambient","relation":"independent","stage":"seeded","summary":"渡船仍系在北岸码头。","nextBeat":"退潮后船工才会检查缆绳。","trigger":"游戏内时间推进到退潮时段。","intersection":"玩家前往北岸码头时可能观察到。","seedBasis":"世界书：港城潮汐与渡船班次","knowledge":"hidden"}]}</ContinuityState>';
+        };
+    });
+    for (const step of [1, 2]) {
+        await heldPage.evaluate(async (turn) => {
+            const t = window.__TEST__;
+            if (turn === 2) {
+                t.context.chat.push({ is_user: true, is_system: false, mes: '原地看了一眼路牌', swipe_id: 0, extra: {} });
+                t.context.chat.push({ is_user: false, is_system: false, mes: '十几秒后，你仍站在路牌旁。', swipe_id: 0, extra: {} });
+            }
+            const index = t.context.chat.length - 1;
+            await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+            await t.context.eventSource.emit('message_received', index);
+        }, step);
+        await heldPage.waitForFunction((turn) => (
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn === turn
+        ), step, { timeout: 30000 });
+    }
+    const heldResult = await heldPage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+        status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+    }));
+    assert.equal(heldResult.calls.continuityRuns, 2, '有具体依据的held不得触发无意义重试');
+    assert.equal(heldResult.state.lastTick.action, 'held');
+    assert.match(heldResult.state.lastTick.reason, /尚未到/u);
+    assert.match(heldResult.status, /条件未成熟/u);
+    await heldPage.close();
 
     const retryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await retryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

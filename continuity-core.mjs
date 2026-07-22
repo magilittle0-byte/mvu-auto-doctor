@@ -30,6 +30,15 @@ const RELATIONS = new Set([
     'converging',
 ]);
 
+const TICK_ACTIONS = new Set([
+    'created',
+    'advanced',
+    'manifested',
+    'resolved',
+    'dormant',
+    'held',
+]);
+
 export const CONTINUITY_STAGE_LABELS = Object.freeze({
     seeded: '已埋设',
     advancing: '推进中',
@@ -64,6 +73,15 @@ export const CONTINUITY_RELATION_LABELS = Object.freeze({
     latent: '潜在关联',
     independent: '保持独立',
     converging: '正在汇流',
+});
+
+export const CONTINUITY_TICK_LABELS = Object.freeze({
+    created: '新事件成立',
+    advanced: '事件推进',
+    manifested: '影响显现',
+    resolved: '事件结束',
+    dormant: '事件休眠',
+    held: '本轮合理保持',
 });
 
 const CONTINUITY_URGENCY_LABELS = Object.freeze([
@@ -110,6 +128,12 @@ export function emptyContinuityState(chatId = '') {
         version: 2,
         chatId: cleanText(chatId, 180),
         turn: 0,
+        lastTick: {
+            turn: 0,
+            action: '',
+            threadId: '',
+            reason: '',
+        },
         threads: [],
         updatedAt: 0,
     };
@@ -197,6 +221,17 @@ function normalizeThread(value, index, turn) {
     };
 }
 
+function normalizeTick(value, turn) {
+    const source = value && typeof value === 'object' ? value : {};
+    const action = TICK_ACTIONS.has(source.action) ? source.action : '';
+    return {
+        turn: boundedInteger(source.turn, 0, Number.MAX_SAFE_INTEGER, action ? turn : 0),
+        action,
+        threadId: cleanText(source.threadId, 90),
+        reason: cleanText(source.reason, 500),
+    };
+}
+
 export function normalizeContinuityState(value, {
     chatId = '',
     maxThreads = 6,
@@ -229,6 +264,7 @@ export function normalizeContinuityState(value, {
         version: 2,
         chatId: cleanText(chatId || source.chatId, 180),
         turn,
+        lastTick: normalizeTick(source.lastTick, turn),
         threads: [...active, ...resolved],
         updatedAt: boundedInteger(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -268,13 +304,25 @@ export function continuityLedgerView(value, {
         ));
     const active = items.filter((thread) => !thread.isResolved);
     const resolved = items.filter((thread) => thread.isResolved);
+    const echoes = items.flatMap((thread) => thread.rumors.map((content, index) => ({
+        id: `${thread.id}:rumor:${index}`,
+        threadId: thread.id,
+        threadTitle: thread.title,
+        content,
+        knowledge: thread.knowledge,
+        stage: thread.stage,
+        isSpoiler: thread.isSpoiler,
+    }))).slice(0, 16);
     return {
         turn: state.turn,
         updatedAt: state.updatedAt,
+        lastTick: clone(state.lastTick),
         activeCount: active.length,
         resolvedCount: resolved.length,
+        echoCount: echoes.length,
         active,
         resolved,
+        echoes,
     };
 }
 
@@ -304,12 +352,17 @@ export function continuityLifecycleStats(previous, next) {
         return old && stableThreadContent(old) !== stableThreadContent(thread);
     });
     const added = after.threads.filter((thread) => !oldById.has(thread.id));
+    const schedulerAdvanced = after.lastTick.turn > before.lastTick.turn
+        && !!after.lastTick.action
+        && !!after.lastTick.reason;
     return {
         activeBefore: before.threads.filter((thread) => thread.stage !== 'resolved').length,
         changedExisting: changedExisting.length,
         added: added.length,
         newlyResolved: changedExisting.filter((thread) => thread.stage === 'resolved').length,
         removed: before.threads.filter((thread) => !newById.has(thread.id)).length,
+        schedulerAdvanced,
+        tickAction: after.lastTick.action,
     };
 }
 
@@ -418,8 +471,52 @@ export function enforceContinuityPolicy(previous, candidate, {
         threads.push(fresh);
     }
 
+    let lastTick = clone(before.lastTick);
+    if (selectedChangedId) {
+        const changed = threads.find((thread) => thread.id === selectedChangedId);
+        const action = changed?.stage === 'resolved'
+            ? 'resolved'
+            : changed?.stage === 'manifested'
+                ? 'manifested'
+                : changed?.stage === 'dormant'
+                    ? 'dormant'
+                    : 'advanced';
+        lastTick = {
+            turn: before.turn + 1,
+            action,
+            threadId: selectedChangedId,
+            reason: after.lastTick?.reason
+                || changed?.offscreenBeat
+                || changed?.resolution
+                || changed?.summary
+                || '事件状态发生实质变化',
+        };
+    } else if (accepted.filter(Boolean).length) {
+        const created = accepted.find(Boolean);
+        lastTick = {
+            turn: before.turn + 1,
+            action: 'created',
+            threadId: created.id,
+            reason: after.lastTick?.reason || created.seedBasis || '新的持续因果已经成立',
+        };
+    } else if (
+        after.lastTick?.action === 'held'
+        && after.lastTick.reason.length >= 8
+        && after.lastTick.turn > (before.lastTick?.turn || 0)
+        && oldById.has(after.lastTick.threadId)
+        && oldById.get(after.lastTick.threadId)?.stage !== 'resolved'
+    ) {
+        lastTick = {
+            turn: before.turn + 1,
+            action: 'held',
+            threadId: after.lastTick.threadId,
+            reason: after.lastTick.reason,
+        };
+    }
+
     return normalizeContinuityState({
         ...after,
+        lastTick,
         threads,
     }, { chatId: before.chatId || after.chatId, maxThreads });
 }
@@ -564,11 +661,15 @@ export function buildContinuityInjection(state, {
     if (!active.length && !aftermath.length) return '';
     const directorText = director === 'stitches'
         ? '缝合怪负责场景与剧情提案；本账本只约束连续性。'
-        : director === 'preset'
-            ? '当前预设负责平行事件写作；本账本只约束连续性。'
-            : director === 'mixed'
-                ? '当前预设与缝合怪负责剧情提案；本账本只做去重、接续与回收。'
-                : '当前没有检测到外部剧情推进器；可按账本低频推进世界支线。';
+        : director === 'world'
+            ? '世界引擎负责世界推演提案；本账本只补足因果连续性并避免重复推进。'
+            : director === 'world_preset'
+                ? '世界引擎与当前预设负责世界/平行事件提案；本账本只做去重、接续与回收。'
+                : director === 'preset'
+                    ? '当前预设负责平行事件写作；本账本只约束连续性。'
+                    : director === 'mixed'
+                        ? '预设、缝合怪或世界引擎负责剧情与世界提案；本账本只做去重、接续与回收。'
+                        : '当前没有检测到外部剧情推进器；可按账本低频推进世界支线。';
     const rows = active
         .sort((left, right) => right.urgency - left.urgency)
         .map((thread) => [
@@ -595,6 +696,9 @@ export function buildContinuityInjection(state, {
     return [
         '<Parallel_Continuity_Bridge>',
         directorText,
+        normalized.lastTick.action
+            ? `最近世界调度=${CONTINUITY_TICK_LABELS[normalized.lastTick.action] || normalized.lastTick.action}；对象=${normalized.lastTick.threadId || '全局'}；依据=${normalized.lastTick.reason || '未登记'}`
+            : '最近世界调度=尚未运行。',
         '以下内容是支线连续性账本，不是玩家行动授权，也不是要求本回合全部发生。',
         `本回合最多让${Math.max(0, Number(maxVisible) || 1)}条支线产生可观察变化；已有事件优先，不得另造同义支线。`,
         '只可推动NPC、势力、环境、约定与敌方行动；禁止替玩家角色决定、说话、移动、消费资源或追加检定。',
