@@ -30,11 +30,19 @@ import {
     normalizeContinuityState,
     parseContinuityOutput,
 } from './continuity-core.mjs';
+import {
+    applyForumUpdate,
+    emptyForumState,
+    extractForumUpdate,
+    forumDigest,
+    forumView,
+    normalizeForumState,
+} from './forum-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 4;
+const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
@@ -57,20 +65,32 @@ const DEFAULTS = Object.freeze({
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
     continuityMaxTokens: 3200,
+    builtInForumEnabled: true,
+    forumAutoRefresh: true,
+    forumPauseWhenExternal: true,
+    forumRefreshEvery: 1,
+    forumMaxPosts: 36,
+    forumMaxComments: 16,
+    forumContextMessages: 10,
+    forumMaxTokens: 2600,
 });
 
 let mvuPromise = null;
 let runChain = Promise.resolve();
 let continuityChain = Promise.resolve();
+let forumChain = Promise.resolve();
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
 const openingSyncPendingKeys = new Set();
 const openingSyncCompletedKeys = new Set();
 const continuityPendingKeys = new Set();
 const continuityCompletedKeys = new Set();
+const forumPendingKeys = new Set();
+const forumCompletedKeys = new Set();
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
 let latestContinuityStatus = '支线连续性：等待事件';
+let latestForumStatus = '论坛：等待世界消息';
 let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
@@ -166,6 +186,24 @@ function setContinuityStatus(text, kind = '') {
     renderContinuityLedger();
 }
 
+function setForumStatus(text, kind = '') {
+    latestForumStatus = String(text || '');
+    if (ui?.forumStatus) {
+        ui.forumStatus.textContent = latestForumStatus;
+        ui.forumStatus.dataset.kind = kind;
+    }
+    if (ui?.forumSettingsStatus) {
+        ui.forumSettingsStatus.textContent = latestForumStatus;
+        ui.forumSettingsStatus.dataset.kind = kind;
+    }
+    if (ui?.floatingForumStatus) {
+        ui.floatingForumStatus.textContent = latestForumStatus;
+        ui.floatingForumStatus.dataset.kind = kind;
+    }
+    updateFloatingOrb();
+    renderForum();
+}
+
 function invalidateOperations(reason = '') {
     operationEpoch += 1;
     clearTimeout(pendingOpeningSyncTimer);
@@ -176,6 +214,7 @@ function invalidateOperations(reason = '') {
     // prevents it from touching chat or MVU state.
     runChain = Promise.resolve();
     continuityChain = Promise.resolve();
+    forumChain = Promise.resolve();
     if (reason) console.info('[MVU Auto Doctor] 旧任务已失效：', reason);
 }
 
@@ -246,6 +285,8 @@ function readChatNamespace(context = getContext()) {
             },
             continuity: emptyContinuityState(context?.chatId || ''),
             continuityCheckpoint: null,
+            forum: emptyForumState(context?.chatId || ''),
+            forumCheckpoint: null,
         };
     }
     return deepClone(value);
@@ -1969,6 +2010,24 @@ function buildContinuityMessages({
     retryReason = '',
 }) {
     const settings = getSettings();
+    const forumSurface = forumView(readChatNamespace(context).forum, {
+        chatId: captured.chatId,
+        maxPosts: settings.forumMaxPosts,
+        maxComments: settings.forumMaxComments,
+    });
+    const forumSignals = forumSurface.active
+        .filter((post) => post.causalSignal && post.impact)
+        .slice(0, 8)
+        .map((post) => ({
+            id: post.id,
+            board: post.board,
+            title: post.title,
+            kind: post.kind,
+            body: post.body,
+            source: post.source,
+            impact: post.impact,
+            heat: post.heat,
+        }));
     const bridgeOnly = director !== 'standalone';
     const autonomyRule = settings.continuityAutonomy === 'conservative'
         ? '保守：只能登记正文/预设/缝合怪已经提出的未决因果，不得新建世界自主事件。'
@@ -1990,6 +2049,7 @@ function buildContinuityMessages({
         '- 计划、建议、选项、传闻和未来可能性不是已发生事实。',
         '- 已完成的事件标记resolved，不要删除；同时填写resolution与至少一项effects或rumors。若D后果还会继续自行变化，另建新事件并在causedBy填写父事件ID。',
         '- rumors是有来源、有传播范围的世界信息，不等于事实本身；只有传播路径接触主线人物时，knowledge才可变成rumor或observed。论坛、闲聊和吐槽是社会表面，不必全部登记成事件；只有会持续传播或承载因果的信息才写入rumors。',
+        '- 论坛信号不是事实数据库：普通帖子永远留在论坛；只有帖子已经促成可持续的外部行动、传播、短缺、聚集或人物决定时，才能以帖子ID为seedBasis登记后继事件。网友猜测仍只能作为rumor，禁止倒推成真相。',
         '- 暂时没有自然推进条件的单条事件可标记dormant；不能因为一条休眠就让整个世界停止，仍应调度其他事件或按自主度产生世界脉动。',
         '- 独立事件可以永远不与主线相交，也可以在幕后自行解决。禁止把所有世界变化都改造成围着玩家转的任务。',
         '- 只有真实的传播链、因果后果、人物接触、地点重合或时间窗口满足intersection时，relation才可从independent/latent变为converging，再由主回复决定是否形成可观察痕迹。禁止巧合传送和强行汇流。',
@@ -2003,7 +2063,7 @@ function buildContinuityMessages({
         '- 可按世界设定创建尚未登场的普通NPC、小组织、地方事务和日常关系；不得无依据发明核心宇宙法则、改写重要角色过去或凭空制造只为震惊玩家的幕后黑手。',
         `【自主度】${autonomyRule}`,
         bridgeOnly
-            ? '- 已检测到预设平行事件、缝合怪或世界引擎：外部系统保留可见剧情/世界推演提案权；你只维护连续性与缺失因果。若外部系统提出相同因果，合并进原稳定ID，只落地一次。'
+            ? '- 已检测到预设平行事件、缝合怪或世界引擎：外部系统保留可见剧情/世界推演提案权；你只维护连续性与缺失因果。外部未来安排必须保留为成功/失败等条件分支，不得成为裁决目标；先按骰子前端规定的固定位置或顺序消费唯一骰值并结算DC/成功等级，再选匹配分支，禁止从骰池挑成功数字或先写结果后补检定。若外部系统提出相同因果，合并进原稳定ID，只落地一次。'
             : '- 未检测到外部剧情推进器：你负责低频维护世界事件，但仍不得要求主回复展示每一条幕后变化。',
         '',
         '【stage枚举】seeded / advancing / manifested / resolved / dormant',
@@ -2026,6 +2086,9 @@ function buildContinuityMessages({
         '',
         '=== 本回合可识别的预设/缝合怪记录 ===',
         markerText || '无结构化记录；仍可依据下方世界设定低频维护自主事件。',
+        '',
+        '=== 内置论坛的公共信号（普通水帖已过滤，仍不等于事实）===',
+        forumSignals.length ? safeJson(forumSignals) : '无达到事件候选门槛的论坛信号。',
         '',
         '=== 当前MVU时间/地点等锚点（只读）===',
         stateAnchors,
@@ -2285,6 +2348,291 @@ async function clearContinuityState() {
     return true;
 }
 
+function externalForumElements() {
+    return {
+        orb: document.querySelector('#zsd-forum-orb'),
+        menu: document.querySelector('#zsd-forum-menu-item'),
+    };
+}
+
+function hasExternalForum() {
+    const { orb, menu } = externalForumElements();
+    return orb instanceof HTMLElement || menu instanceof HTMLElement;
+}
+
+function forumBase(namespace, captured) {
+    const settings = getSettings();
+    const checkpoint = namespace?.forumCheckpoint;
+    const isReroll = ['swipe', 'regenerate'].includes(captured?.generationType);
+    if (
+        isReroll
+        && checkpoint?.state
+        && checkpoint.targetIndex === captured.index
+        && checkpoint.messageId === captured.messageId
+    ) {
+        return normalizeForumState(checkpoint.state, {
+            chatId: captured.chatId,
+            maxPosts: settings.forumMaxPosts,
+            maxComments: settings.forumMaxComments,
+        });
+    }
+    return normalizeForumState(namespace?.forum, {
+        chatId: captured.chatId,
+        maxPosts: settings.forumMaxPosts,
+        maxComments: settings.forumMaxComments,
+    });
+}
+
+function publicContinuityForForum(namespace, settings) {
+    const state = normalizeContinuityState(namespace?.continuity, {
+        chatId: getContext()?.chatId || '',
+        maxThreads: settings.continuityMaxThreads,
+    });
+    const visible = state.threads.flatMap((thread) => {
+        if (thread.knowledge === 'observed' || thread.stage === 'manifested') {
+            return [{
+                id: thread.id,
+                title: thread.title,
+                knowledge: thread.knowledge,
+                summary: thread.summary,
+                effects: thread.effects,
+                rumors: thread.rumors,
+            }];
+        }
+        if (thread.knowledge === 'rumor' && thread.rumors.length) {
+            return [{
+                id: thread.id,
+                title: '未证实风声',
+                knowledge: 'rumor',
+                summary: '',
+                effects: [],
+                rumors: thread.rumors,
+            }];
+        }
+        return [];
+    });
+    return safeJson(visible, 2);
+}
+
+function buildForumMessages({
+    context,
+    captured,
+    base,
+    namespace,
+    worldContext,
+    retryReason = '',
+}) {
+    const settings = getSettings();
+    const system = [
+        '你是跑团世界中的独立网络论坛模拟器。你不写主回复，只增量维护一个聊天内论坛。',
+        '论坛用于表现这个世界里普通人的生活、交流、争论和有限认知，不是任务生成器，也不是全知剧情播报器。',
+        '',
+        '【硬边界】',
+        '- 不得输出或修改MVU、JSONPatch、数据库、正文、支线账本或玩家角色行动。',
+        '- 帖子与评论只能表现公开可知、合理听闻或纯日常内容。幕后hidden事件、私密对话和玩家独处经历不得泄露。',
+        '- rumor只能以不确定传言表达，网友可以质疑、误解或吐槽，不能把传言写成官方真相。',
+        '- 不要让整个论坛围着玩家转；除非正文明确发生在公众面前且足以被讨论，否则不要提及玩家。',
+        '- 每次刷新新增2至4帖、给0至3个旧帖增加合计2至6条评论；至少一半内容应为日常闲聊、求助、攻略、交易、抱怨、八卦或地方话题。',
+        '- 允许本轮完全没有剧情帖。最多1帖可承载已公开的因果风声或长伏笔表层痕迹，且必须写明source证据。',
+        '- causalSignal默认false。只有帖子已经促成论坛外的持续行动、聚集、传播、短缺或人物决定时才可设为true，并在impact写明已经发生的外部影响；仅仅热门、争论、求助、猜测或像伏笔都不够。',
+        '- 同一作者要有相对稳定的说话习惯；评论应有不同立场，不要所有人异口同声。',
+        '- 只能给已存在postId追加评论、热度或归档；不得改写旧帖正文。不得重复相同帖子。',
+        '- board随世界观自然命名，例如闲聊、攻略、交易、求助、吐槽、八卦；不强套现代互联网术语到不合适的世界。',
+        '- kind枚举：chat（日常交流）/ reaction（公共事件反应）/ rumor（未证实风声）/ guide（攻略求助）/ trade（交易）。',
+        '',
+        '只输出一个<ForumUpdate>包裹的JSON对象，不要解释。',
+        'JSON结构：{"summary":"本页一句话概况","newPosts":[{"id":"稳定且唯一","board":"版块","title":"标题","author":"网名","body":"正文","kind":"chat","tags":["标签"],"source":"公开依据或日常设定","sourceThreadIds":[],"causalSignal":false,"impact":"仅在已造成外部影响时填写","heat":12}],"comments":[{"postId":"旧帖ID","author":"网名","body":"评论","tone":"语气","likes":0}],"heat":[{"postId":"旧帖ID","delta":2}],"archive":["旧帖ID"]}',
+    ].join('\n');
+    const user = [
+        `目标回复：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
+        retryReason ? `上一次输出无有效增量，必须纠正：${retryReason}` : '',
+        '',
+        '=== 当前论坛（只做增量，不重写）===',
+        cropText(forumDigest(base), 30000, '论坛旧帖'),
+        '',
+        '=== 可公开引用的事件与风声（hidden已过滤）===',
+        publicContinuityForForum(namespace, settings),
+        '',
+        `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
+        cropText(worldContext.text, 32000, '论坛世界设定'),
+        '',
+        '=== 最近剧情（只可提取明确公开部分；私密内容不可搬上论坛）===',
+        cropText(
+            recentTranscriptThrough(context, captured.index, settings.forumContextMessages),
+            36000,
+            '论坛剧情上下文',
+        ),
+        '',
+        '现在生成一次有普通人生活感的论坛增量。',
+    ].filter(Boolean).join('\n');
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ];
+}
+
+async function runForumTarget(captured, {
+    force = false,
+    manual = false,
+} = {}) {
+    const token = operationToken(captured);
+    let guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const settings = getSettings();
+    if (!settings.builtInForumEnabled) return { status: 'disabled' };
+    if (!manual && !settings.forumAutoRefresh) return { status: 'disabled' };
+    if (!manual && settings.forumPauseWhenExternal && hasExternalForum()) {
+        setForumStatus('论坛：检测到 Zsd，已暂停内置自动刷帖');
+        return { status: 'external' };
+    }
+
+    const context = getContext();
+    let namespace = readChatNamespace(context);
+    const base = forumBase(namespace, captured);
+    const interval = Math.max(1, Math.min(12, Number(settings.forumRefreshEvery) || 1));
+    const ordinal = assistantMessageOrdinal(context, captured.index);
+    if (!force && base.posts.length && ordinal % interval !== 0) {
+        return { status: 'held', reason: `每${interval}个AI回合刷新一次` };
+    }
+
+    const worldContext = await collectContinuityWorldContext(context, currentCharacter(context));
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    setForumStatus('论坛：正在刷新帖子…', 'busy');
+
+    let next = base;
+    let retryReason = '';
+    let progressed = false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const messages = buildForumMessages({
+            context,
+            captured,
+            base,
+            namespace,
+            worldContext,
+            retryReason,
+        });
+        let output = '';
+        try {
+            output = await callModel(messages, { maxTokens: settings.forumMaxTokens });
+        } catch (error) {
+            retryReason = `模型调用失败：${error.message || error}`;
+            console.warn('[MVU Auto Doctor] 内置论坛模型调用失败：', error);
+        }
+        guard = targetIsCurrent(captured, token);
+        if (!guard.ok) return { status: 'stale', reason: guard.reason };
+        const parsed = extractForumUpdate(output);
+        if (!parsed.update) {
+            retryReason = parsed.error;
+            continue;
+        }
+        const candidate = applyForumUpdate(base, parsed.update, {
+            chatId: captured.chatId,
+            maxPosts: settings.forumMaxPosts,
+            maxComments: settings.forumMaxComments,
+        });
+        progressed = forumDigest(candidate) !== forumDigest(base);
+        if (progressed) {
+            next = candidate;
+            break;
+        }
+        retryReason = '没有新增帖子、评论、热度或归档变化';
+    }
+    if (!progressed) {
+        setForumStatus(`论坛：刷新失败，${retryReason || '没有有效增量'}`, 'error');
+        return { status: 'stalled', reason: retryReason };
+    }
+
+    next.lastSource = {
+        index: captured.index,
+        messageId: captured.messageId,
+        swipeId: String(captured.swipeId),
+    };
+    namespace = readChatNamespace(context);
+    namespace.forum = next;
+    const isReroll = ['swipe', 'regenerate'].includes(captured.generationType);
+    if (!isReroll && !manual) {
+        namespace.forumCheckpoint = {
+            targetIndex: captured.index,
+            messageId: captured.messageId,
+            swipeId: captured.swipeId,
+            state: base,
+        };
+    }
+    guard = targetIsCurrent(captured, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const saved = await writeChatNamespace(namespace, captured.chatId);
+    if (!saved) return { status: 'stale', reason: '聊天已切换，论坛更新未写入' };
+    renderForum();
+    setForumStatus(`论坛：已刷新至第 ${next.turn} 页`, 'ok');
+    return { status: 'applied', turn: next.turn, posts: next.posts.length };
+}
+
+function enqueueForum(targetId, {
+    after = Promise.resolve(),
+    force = false,
+    manual = false,
+    expectedTarget = null,
+} = {}) {
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const expected = expectedTarget || captureTarget(context, resolved);
+    if (!expected) return Promise.resolve({ status: 'missing' });
+    const dedupeKey = capturedTargetKey(expected);
+    if (
+        !force
+        && dedupeKey
+        && (forumPendingKeys.has(dedupeKey) || forumCompletedKeys.has(dedupeKey))
+    ) {
+        return Promise.resolve({ status: 'duplicate' });
+    }
+    if (dedupeKey) forumPendingKeys.add(dedupeKey);
+    forumChain = forumChain
+        .catch(() => undefined)
+        .then(() => after.catch?.(() => undefined) ?? after)
+        .then(() => {
+            if (expected.epoch !== operationEpoch) {
+                return { status: 'stale', reason: '任务已被新的生成作废' };
+            }
+            const fresh = captureTarget(getContext(), expected.index);
+            if (!sameTargetExceptContent(expected, fresh)) {
+                return { status: 'stale', reason: '目标回复身份已经变化' };
+            }
+            return runForumTarget(fresh, { force, manual });
+        })
+        .then((result) => {
+            if (dedupeKey && ['applied', 'disabled', 'external', 'held'].includes(result?.status)) {
+                forumCompletedKeys.add(dedupeKey);
+            }
+            return result;
+        })
+        .catch((error) => {
+            console.error('[MVU Auto Doctor] 内置论坛处理异常：', error);
+            setForumStatus(`论坛异常：${error.message || error}`, 'error');
+            return { status: 'failed', reason: String(error.message || error) };
+        })
+        .finally(() => {
+            if (dedupeKey) forumPendingKeys.delete(dedupeKey);
+        });
+    return forumChain;
+}
+
+async function clearForumState() {
+    const context = getContext();
+    if (!context?.chatId) return false;
+    if (!window.confirm?.('只清空当前聊天的内置论坛？不会删除正文、MVU、数据库、Zsd论坛或支线账本。')) {
+        return false;
+    }
+    const namespace = readChatNamespace(context);
+    namespace.forum = emptyForumState(context.chatId);
+    namespace.forumCheckpoint = null;
+    await writeChatNamespace(namespace, context.chatId, { force: true });
+    setForumStatus('论坛：当前聊天的内置帖子已清空');
+    renderForum();
+    return true;
+}
+
 const CONTINUITY_DIRECTOR_LABELS = Object.freeze({
     standalone: '独立活世界调度',
     preset: '预设平行事件桥接',
@@ -2512,6 +2860,8 @@ function renderContinuityLedger() {
         chatId: context?.chatId || '',
         maxThreads: settings.continuityMaxThreads,
     });
+    if (ui.floatingThreadTabCount) ui.floatingThreadTabCount.textContent = String(view.activeCount);
+    if (ui.floatingEchoTabCount) ui.floatingEchoTabCount.textContent = String(view.echoCount);
     ui.ledgerSurfaces = ui.ledgerSurfaces.filter((surface) => surface.root?.isConnected);
     for (const surface of ui.ledgerSurfaces) {
         renderLedgerSurface(surface, view, namespace, settings, context);
@@ -2520,6 +2870,7 @@ function renderContinuityLedger() {
 }
 
 const FLOATING_ORB_POSITION_KEY = 'mvu-auto-doctor-orb-position-v1';
+const FLOATING_PAGE_KEY = 'mvu-auto-doctor-floating-page-v1';
 
 function readFloatingOrbPosition() {
     try {
@@ -2584,6 +2935,14 @@ function showFloatingPanel() {
     ui.floatingPanel.hidden = false;
     ui.floatingPanel.classList.add('mvuad-floating-panel-open');
     renderContinuityLedger();
+    renderForum();
+    let page = 'threads';
+    try {
+        page = localStorage.getItem(FLOATING_PAGE_KEY) || 'threads';
+    } catch {
+        // Page persistence is optional.
+    }
+    switchFloatingPage(page, { persist: false });
     ui.floatingClose?.focus?.({ preventScroll: true });
 }
 
@@ -2594,20 +2953,293 @@ function hideFloatingPanel() {
     tuckFloatingOrb(1800);
 }
 
-function openInstalledForum() {
-    const forumOrb = document.querySelector('#zsd-forum-orb');
-    if (forumOrb instanceof HTMLElement) {
-        hideFloatingPanel();
-        forumOrb.click();
+function switchFloatingPage(page, { persist = true } = {}) {
+    const allowed = new Set(['threads', 'echoes', 'forum', 'tools']);
+    const selected = allowed.has(page) ? page : 'threads';
+    for (const button of ui?.floatingTabs || []) {
+        const active = button.dataset.page === selected;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', String(active));
+    }
+    for (const section of ui?.floatingPages || []) {
+        section.hidden = section.dataset.page !== selected;
+    }
+    if (persist) {
+        try {
+            localStorage.setItem(FLOATING_PAGE_KEY, selected);
+        } catch {
+            // Page persistence is optional.
+        }
+    }
+}
+
+const FORUM_KIND_LABELS = Object.freeze({
+    chat: '闲聊',
+    reaction: '见闻',
+    rumor: '传闻',
+    guide: '攻略/求助',
+    trade: '交易',
+});
+
+function buildForumPostCard(post) {
+    const card = document.createElement('article');
+    card.className = 'mvuad-forum-post';
+    card.dataset.board = post.board;
+    card.dataset.kind = post.kind;
+    const heading = document.createElement('div');
+    heading.className = 'mvuad-forum-post-heading';
+    const board = document.createElement('span');
+    board.className = 'mvuad-forum-board-badge';
+    board.textContent = post.board;
+    const title = document.createElement('b');
+    title.className = 'mvuad-forum-post-title';
+    title.textContent = post.title;
+    heading.append(board, title);
+
+    const meta = document.createElement('div');
+    meta.className = 'mvuad-forum-post-meta';
+    meta.textContent = [
+        post.author,
+        FORUM_KIND_LABELS[post.kind] || post.kind,
+        `热度 ${post.heat}`,
+        `第 ${post.updatedTurn} 页`,
+        post.causalSignal ? '已形成外部影响' : '',
+    ].filter(Boolean).join(' · ');
+    const body = document.createElement('div');
+    body.className = 'mvuad-forum-post-body';
+    body.textContent = post.body;
+    card.append(heading, meta, body);
+
+    if (post.tags.length) {
+        const tags = document.createElement('div');
+        tags.className = 'mvuad-forum-tags';
+        for (const value of post.tags) {
+            const tag = document.createElement('span');
+            tag.textContent = `#${value}`;
+            tags.appendChild(tag);
+        }
+        card.appendChild(tags);
+    }
+
+    const comments = document.createElement('details');
+    comments.className = 'mvuad-forum-comments';
+    const summary = document.createElement('summary');
+    summary.textContent = `评论 ${post.comments.length}`;
+    comments.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'mvuad-forum-comment-list';
+    if (!post.comments.length) {
+        const empty = document.createElement('div');
+        empty.className = 'mvuad-forum-comment-empty';
+        empty.textContent = '还没有人回帖。';
+        list.appendChild(empty);
+    }
+    for (const comment of post.comments) {
+        const row = document.createElement('div');
+        row.className = 'mvuad-forum-comment';
+        const author = document.createElement('b');
+        author.textContent = comment.author;
+        const content = document.createElement('span');
+        content.textContent = comment.body;
+        const likes = document.createElement('small');
+        likes.textContent = comment.likes ? `赞 ${comment.likes}` : '';
+        row.append(author, content, likes);
+        list.appendChild(row);
+    }
+    comments.appendChild(list);
+    card.appendChild(comments);
+    return card;
+}
+
+function buildFloatingForumPreview(post) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'mvuad-floating-forum-preview-item';
+    const top = document.createElement('span');
+    top.className = 'mvuad-floating-forum-preview-meta';
+    top.textContent = `${post.board} · ${post.author}`;
+    const title = document.createElement('b');
+    title.textContent = post.title;
+    const body = document.createElement('span');
+    body.textContent = post.body.length > 90 ? `${post.body.slice(0, 90)}…` : post.body;
+    item.append(top, title, body);
+    item.addEventListener('click', showForumPanel);
+    return item;
+}
+
+function renderForum() {
+    const panel = ui?.forumPanel;
+    if (!panel) return;
+    const settings = getSettings();
+    const context = getContext();
+    const state = forumView(readChatNamespace(context).forum, {
+        chatId: context?.chatId || '',
+        maxPosts: settings.forumMaxPosts,
+        maxComments: settings.forumMaxComments,
+    });
+    if (ui.floatingForumTabCount) {
+        ui.floatingForumTabCount.textContent = String(state.active.length);
+    }
+    if (ui.floatingForumPreview) {
+        ui.floatingForumPreview.replaceChildren(
+            ...state.active.slice(0, 3).map(buildFloatingForumPreview),
+        );
+    }
+    if (ui.floatingForumEmpty) ui.floatingForumEmpty.hidden = state.active.length > 0;
+    if (ui.forumSummary) {
+        ui.forumSummary.textContent = [
+            state.summary || '世界各处的闲聊、求助与风声',
+            `第 ${state.turn} 页`,
+            `${state.active.length} 个活跃主题`,
+            `更新：${formatLedgerTime(state.updatedAt)}`,
+        ].join(' · ');
+    }
+    if (ui.forumStatus) {
+        ui.forumStatus.textContent = latestForumStatus;
+    }
+
+    const currentFilter = ui.forumBoardFilter || 'all';
+    const filters = [
+        ['all', '全部'],
+        ['kind:chat', '闲聊'],
+        ['kind:reaction', '见闻'],
+        ['kind:rumor', '传闻'],
+        ['kind:guide', '攻略/求助'],
+        ['kind:trade', '交易'],
+        ...state.boards.map((board) => [`board:${board}`, board]),
+    ];
+    const unique = new Map(filters);
+    ui.forumFilters?.replaceChildren();
+    for (const [value, label] of unique.entries()) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'mvuad-forum-filter';
+        button.dataset.filter = value;
+        button.textContent = label;
+        button.classList.toggle('active', value === currentFilter);
+        button.addEventListener('click', () => {
+            ui.forumBoardFilter = value;
+            renderForum();
+        });
+        ui.forumFilters?.appendChild(button);
+    }
+
+    const filtered = state.active.filter((post) => {
+        if (currentFilter === 'all') return true;
+        if (currentFilter.startsWith('kind:')) return post.kind === currentFilter.slice(5);
+        if (currentFilter.startsWith('board:')) return post.board === currentFilter.slice(6);
+        return true;
+    });
+    ui.forumFeed?.replaceChildren(...filtered.map(buildForumPostCard));
+    if (ui.forumEmpty) {
+        ui.forumEmpty.hidden = filtered.length > 0;
+        ui.forumEmpty.textContent = state.active.length
+            ? '这个分类暂时没有帖子。'
+            : '论坛还没有帖子。点击“刷新论坛”，或等待下一条 AI 回复后自动生成。';
+    }
+
+    const external = hasExternalForum();
+    if (ui.forumExternal) ui.forumExternal.hidden = !external;
+}
+
+function refreshForumManual() {
+    const latest = latestAiMessage(getContext());
+    if (latest.index < 0) {
+        toast('warning', '当前聊天还没有可供论坛参考的 AI 回复。');
+        return Promise.resolve({ status: 'missing' });
+    }
+    return enqueueForum(latest.index, {
+        after: continuityChain,
+        force: true,
+        manual: true,
+    });
+}
+
+function showForumPanel() {
+    if (!ui?.forumPanel) return;
+    hideFloatingPanel();
+    ui.forumPanel.hidden = false;
+    ui.forumPanel.classList.add('mvuad-forum-panel-open');
+    renderForum();
+    ui.forumClose?.focus?.({ preventScroll: true });
+    const settings = getSettings();
+    const state = forumView(readChatNamespace().forum, {
+        chatId: getContext()?.chatId || '',
+        maxPosts: settings.forumMaxPosts,
+        maxComments: settings.forumMaxComments,
+    });
+    if (!state.posts.length && settings.builtInForumEnabled) refreshForumManual();
+}
+
+function hideForumPanel() {
+    if (!ui?.forumPanel) return;
+    ui.forumPanel.hidden = true;
+    ui.forumPanel.classList.remove('mvuad-forum-panel-open');
+    tuckFloatingOrb(1800);
+}
+
+function openExternalForum() {
+    const { orb, menu } = externalForumElements();
+    const target = orb instanceof HTMLElement ? orb : menu;
+    if (!(target instanceof HTMLElement)) {
+        toast('info', '没有检测到 Zsd 论坛；内置论坛仍可独立使用。');
         return;
     }
-    const forumMenu = document.querySelector('#zsd-forum-menu-item');
-    if (forumMenu instanceof HTMLElement) {
-        hideFloatingPanel();
-        forumMenu.click();
+    hideForumPanel();
+    target.click();
+}
+
+function buildForumUi() {
+    if (!document.body) {
+        setTimeout(buildForumUi, 300);
         return;
     }
-    toast('info', '未检测到独立论坛前端。变量医生不会用正文代替刷帖，以免抢占正文篇幅。');
+    if (document.querySelector('#mvuad-forum-panel')) return;
+    const panel = document.createElement('section');
+    panel.id = 'mvuad-forum-panel';
+    panel.hidden = true;
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', '世界论坛');
+    panel.innerHTML = `
+        <div class="mvuad-forum-shell">
+            <div class="mvuad-forum-header">
+                <div><b>世界论坛</b><span>独立于正文 · v${VERSION}</span></div>
+                <button class="mvuad-forum-close" type="button" aria-label="关闭论坛">×</button>
+            </div>
+            <div class="mvuad-forum-toolbar">
+                <button class="menu_button mvuad-forum-refresh" type="button">刷新论坛</button>
+                <button class="menu_button mvuad-forum-external" type="button" hidden>打开 Zsd</button>
+                <button class="menu_button mvuad-forum-clear" type="button">清空内置帖子</button>
+            </div>
+            <div class="mvuad-forum-status" role="status"></div>
+            <div class="mvuad-forum-summary"></div>
+            <div class="mvuad-forum-filters" aria-label="论坛分类"></div>
+            <div class="mvuad-forum-empty"></div>
+            <div class="mvuad-forum-feed"></div>
+        </div>`;
+    document.body.appendChild(panel);
+    Object.assign(ui, {
+        forumPanel: panel,
+        forumClose: panel.querySelector('.mvuad-forum-close'),
+        forumStatus: panel.querySelector('.mvuad-forum-status'),
+        forumSummary: panel.querySelector('.mvuad-forum-summary'),
+        forumFilters: panel.querySelector('.mvuad-forum-filters'),
+        forumEmpty: panel.querySelector('.mvuad-forum-empty'),
+        forumFeed: panel.querySelector('.mvuad-forum-feed'),
+        forumExternal: panel.querySelector('.mvuad-forum-external'),
+        forumBoardFilter: 'all',
+    });
+    ui.forumClose.addEventListener('click', hideForumPanel);
+    panel.querySelector('.mvuad-forum-refresh').addEventListener('click', refreshForumManual);
+    panel.querySelector('.mvuad-forum-external').addEventListener('click', openExternalForum);
+    panel.querySelector('.mvuad-forum-clear').addEventListener('click', clearForumState);
+    panel.addEventListener('click', (event) => {
+        if (event.target === panel) hideForumPanel();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !panel.hidden) hideForumPanel();
+    });
+    renderForum();
 }
 
 function makeFloatingOrbDraggable(orb) {
@@ -2682,7 +3314,7 @@ function updateFloatingOrb(view = null) {
     }
     const count = Number(ledgerView?.activeCount) || 0;
     if (ui.floatingCount) ui.floatingCount.textContent = String(count);
-    const statusText = `${latestStatus} ${latestContinuityStatus}`;
+    const statusText = `${latestStatus} ${latestContinuityStatus} ${latestForumStatus}`;
     const kind = /失败|异常|未产生有效/u.test(statusText)
         ? 'error'
         : /正在/u.test(statusText)
@@ -2728,28 +3360,45 @@ function buildFloatingUi() {
             <button class="mvuad-floating-close" type="button" aria-label="关闭">×</button>
         </div>
         <div class="mvuad-floating-body">
-            <div class="mvuad-floating-statuses">
-                <div class="mvuad-floating-repair-status" role="status"></div>
-                <div class="mvuad-floating-continuity-status" role="status"></div>
+            <div class="mvuad-floating-tabs" role="tablist" aria-label="世界动态分页">
+                <button type="button" role="tab" data-page="threads"><span>支线</span><b class="mvuad-floating-thread-tab-count">0</b></button>
+                <button type="button" role="tab" data-page="echoes"><span>风声</span><b class="mvuad-floating-echo-tab-count">0</b></button>
+                <button type="button" role="tab" data-page="forum"><span>论坛</span><b class="mvuad-floating-forum-tab-count">0</b></button>
+                <button type="button" role="tab" data-page="tools"><span>工具</span></button>
             </div>
-            <div class="mvuad-floating-actions">
-                <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
-                <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
-                <button class="menu_button mvuad-floating-forum" type="button">打开独立论坛</button>
-            </div>
-            <div class="mvuad-ledger" aria-label="悬浮支线账本">
-                <div class="mvuad-ledger-header"><b>事件账本</b><button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button></div>
-                <div class="mvuad-ledger-note">玩家审计视图可能包含角色尚不知道的幕后事实；默认折叠剧透。这里只查看，不会推进剧情或改写变量。</div>
-                <div class="mvuad-ledger-summary"></div>
-                <div class="mvuad-ledger-empty">当前没有未结事件。</div>
-                <div class="mvuad-ledger-active"></div>
-                <details class="mvuad-ledger-resolved"><summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary><div class="mvuad-ledger-resolved-list"></div></details>
-                <div class="mvuad-echo-section">
-                    <b>世界风声</b>
-                    <div class="mvuad-ledger-note">这里是底层事件传出的消息，不把普通水帖硬算成支线。刷帖、吐槽和网友互动仍交给独立论坛。</div>
+            <div class="mvuad-ledger mvuad-floating-pages" aria-label="世界动态分页内容">
+                <section class="mvuad-floating-page" data-page="threads">
+                    <div class="mvuad-ledger-header"><b>事件账本</b><button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button></div>
+                    <div class="mvuad-ledger-note">可能包含角色尚不知道的幕后事实；默认折叠剧透。这里只查看，不会推进剧情。</div>
+                    <div class="mvuad-ledger-summary"></div>
+                    <div class="mvuad-ledger-empty">当前没有未结事件。</div>
+                    <div class="mvuad-ledger-active"></div>
+                    <details class="mvuad-ledger-resolved"><summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary><div class="mvuad-ledger-resolved-list"></div></details>
+                </section>
+                <section class="mvuad-floating-page" data-page="echoes" hidden>
+                    <div class="mvuad-floating-page-heading"><b>世界风声</b><span>只显示已形成传播链的消息</span></div>
+                    <div class="mvuad-ledger-note">传言不等于真相；普通水帖、吐槽和网友互动留在论坛。</div>
                     <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
                     <div class="mvuad-echo-list"></div>
-                </div>
+                </section>
+                <section class="mvuad-floating-page" data-page="forum" hidden>
+                    <div class="mvuad-floating-page-heading"><b>论坛速览</b><span>最近 3 个主题</span></div>
+                    <div class="mvuad-floating-forum-empty">还没有帖子；打开完整论坛即可刷新第一页。</div>
+                    <div class="mvuad-floating-forum-preview"></div>
+                    <button class="menu_button mvuad-floating-forum" type="button">打开完整论坛</button>
+                </section>
+                <section class="mvuad-floating-page" data-page="tools" hidden>
+                    <div class="mvuad-floating-page-heading"><b>医生工具</b><span>手动操作集中在这里</span></div>
+                    <div class="mvuad-floating-statuses">
+                        <div class="mvuad-floating-repair-status" role="status"></div>
+                        <div class="mvuad-floating-continuity-status" role="status"></div>
+                        <div class="mvuad-floating-forum-status" role="status"></div>
+                    </div>
+                    <div class="mvuad-floating-actions">
+                        <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
+                        <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
+                    </div>
+                </section>
             </div>
         </div>`;
     document.body.append(orb, panel);
@@ -2759,10 +3408,21 @@ function buildFloatingUi() {
         floatingClose: panel.querySelector('.mvuad-floating-close'),
         floatingRepairStatus: panel.querySelector('.mvuad-floating-repair-status'),
         floatingContinuityStatus: panel.querySelector('.mvuad-floating-continuity-status'),
+        floatingForumStatus: panel.querySelector('.mvuad-floating-forum-status'),
         floatingCount: orb.querySelector('.mvuad-orb-count'),
+        floatingThreadTabCount: panel.querySelector('.mvuad-floating-thread-tab-count'),
+        floatingEchoTabCount: panel.querySelector('.mvuad-floating-echo-tab-count'),
+        floatingForumTabCount: panel.querySelector('.mvuad-floating-forum-tab-count'),
+        floatingForumPreview: panel.querySelector('.mvuad-floating-forum-preview'),
+        floatingForumEmpty: panel.querySelector('.mvuad-floating-forum-empty'),
+        floatingTabs: [...panel.querySelectorAll('.mvuad-floating-tabs [data-page]')],
+        floatingPages: [...panel.querySelectorAll('.mvuad-floating-page[data-page]')],
     });
     registerLedgerSurface(panel.querySelector('.mvuad-ledger'));
     ui.floatingClose.addEventListener('click', hideFloatingPanel);
+    for (const tab of ui.floatingTabs) {
+        tab.addEventListener('click', () => switchFloatingPage(tab.dataset.page));
+    }
     panel.querySelector('.mvuad-floating-repair').addEventListener('click', () => {
         const repair = enqueue(null, { manual: true });
         repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
@@ -2770,7 +3430,7 @@ function buildFloatingUi() {
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
-    panel.querySelector('.mvuad-floating-forum').addEventListener('click', openInstalledForum);
+    panel.querySelector('.mvuad-floating-forum').addEventListener('click', showForumPanel);
     panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
     makeFloatingOrbDraggable(orb);
     window.addEventListener('resize', () => applyFloatingOrbPosition());
@@ -2779,6 +3439,7 @@ function buildFloatingUi() {
     });
     setStatus(latestStatus);
     setContinuityStatus(latestContinuityStatus);
+    setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
 }
 
@@ -2887,6 +3548,22 @@ function buildSettingsPanel() {
                             <div class="mvuad-echo-list"></div>
                         </div>
                     </div>
+                    <div class="mvuad-section-title">内置世界论坛</div>
+                    <div class="mvuad-description">
+                        独立生成日常水帖、求助、攻略、交易、吐槽和公开风声，不占正文；
+                        普通帖子不会变成支线，只有已经造成持续公共行动的信号才会进入下一轮因果调度。
+                    </div>
+                    <div class="mvuad-forum-options"></div>
+                    <label class="mvuad-number">
+                        <span>每几个 AI 回合自动刷新</span>
+                        <input class="text_pole mvuad-forum-interval" type="number" min="1" max="12" step="1">
+                    </label>
+                    <div class="mvuad-actions">
+                        <button class="menu_button mvuad-forum-open" type="button">打开内置论坛</button>
+                        <button class="menu_button mvuad-forum-run" type="button">立即刷新论坛</button>
+                        <button class="menu_button mvuad-forum-clear-settings" type="button">清空内置帖子</button>
+                    </div>
+                    <div class="mvuad-status mvuad-settings-forum-status" role="status"></div>
                     <div class="mvuad-version">v${VERSION} · 独立安装，不修改角色卡或故事神谕文件</div>
                 </div>
             </div>
@@ -2947,8 +3624,28 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-ledger-refresh').addEventListener('click', () => {
         renderContinuityLedger();
     });
+    wrapper.querySelector('.mvuad-forum-options').append(
+        makeCheckbox('启用内置世界论坛', 'builtInForumEnabled'),
+        makeCheckbox('按回合自动刷新内置论坛', 'forumAutoRefresh'),
+        makeCheckbox('检测到 Zsd 时暂停内置自动刷新', 'forumPauseWhenExternal'),
+    );
+    const forumInterval = wrapper.querySelector('.mvuad-forum-interval');
+    forumInterval.value = String(getSettings().forumRefreshEvery);
+    forumInterval.addEventListener('change', () => {
+        getSettings().forumRefreshEvery = Math.max(
+            1,
+            Math.min(12, Number(forumInterval.value) || 1),
+        );
+        forumInterval.value = String(getSettings().forumRefreshEvery);
+        saveSettings();
+    });
+    wrapper.querySelector('.mvuad-forum-open').addEventListener('click', showForumPanel);
+    wrapper.querySelector('.mvuad-forum-run').addEventListener('click', refreshForumManual);
+    wrapper.querySelector('.mvuad-forum-clear-settings').addEventListener('click', clearForumState);
+    ui.forumSettingsStatus = wrapper.querySelector('.mvuad-settings-forum-status');
     setStatus(latestStatus);
     setContinuityStatus(latestContinuityStatus);
+    setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
 }
 
@@ -2989,8 +3686,12 @@ function bindEvents() {
             if (!captured) return;
             const repair = enqueue(resolved, { queuedTarget: captured });
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
-            enqueueContinuity(resolved, {
+            const continuity = enqueueContinuity(resolved, {
                 after: openingSync,
+                expectedTarget: captured,
+            });
+            enqueueForum(resolved, {
+                after: continuity,
                 expectedTarget: captured,
             });
         },
@@ -3005,10 +3706,14 @@ function bindEvents() {
             openingSyncCompletedKeys.clear();
             continuityPendingKeys.clear();
             continuityCompletedKeys.clear();
+            forumPendingKeys.clear();
+            forumCompletedKeys.clear();
             presetContinuityCache = { checkedAt: 0, active: false };
             lastUndo = latestUndoRecord(readChatNamespace());
             setStatus('等待新的 AI 回复');
+            setForumStatus('论坛：等待世界消息');
             applyContinuityInjection();
+            renderForum();
             disableStoryOracleAutoIfNeeded();
             scheduleOpeningResourceSync();
         };
@@ -3026,6 +3731,7 @@ function initialize() {
     window.__MVU_AUTO_DOCTOR_INITIALIZED__ = true;
     getSettings();
     buildFloatingUi();
+    buildForumUi();
     buildSettingsPanel();
     bindEvents();
     disableStoryOracleAutoIfNeeded();
@@ -3040,6 +3746,10 @@ function initialize() {
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),
         clearContinuityState,
+        runForum: refreshForumManual,
+        getForumState: () => deepClone(readChatNamespace().forum),
+        clearForumState,
+        openForum: showForumPanel,
         undoLast,
         getStatus: () => latestStatus,
     });
