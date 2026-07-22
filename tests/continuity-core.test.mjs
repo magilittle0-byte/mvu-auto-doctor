@@ -3,6 +3,7 @@ import {
     appendRepairJournal,
     attachChangedSourceRefs,
     buildContinuityInjection,
+    continuityLifecycleStats,
     continuityLedgerView,
     enforceContinuityPolicy,
     extractContinuityMarkers,
@@ -107,7 +108,7 @@ const injection = buildContinuityInjection(state, {
     director: 'mixed',
     maxVisible: 1,
 });
-assert.match(injection, /预设与缝合怪负责剧情提案/u);
+assert.match(injection, /预设、缝合怪或世界引擎负责剧情与世界提案/u);
 assert.match(injection, /最多让1条支线/u);
 assert.match(injection, /禁止替玩家角色决定/u);
 assert.match(injection, /PE-港口-哨兵-01/u);
@@ -196,6 +197,151 @@ const convergenceGuard = enforceContinuityPolicy(livingBase, prematureLink, {
     maxThreads: 8,
 });
 assert.equal(convergenceGuard.threads[0].relation, 'converging', '独立事件必须先进入汇流阶段');
+
+const causalBase = normalizeContinuityState({
+    chatId: 'causal-chat',
+    turn: 4,
+    threads: [{
+        id: 'WE-行会-议价-01',
+        title: '行会内部议价',
+        origin: 'setting_linked',
+        relation: 'latent',
+        stage: 'advancing',
+        summary: '两派仍在争论运费。',
+        nextBeat: '表决新的临时费率。',
+        seedBasis: '世界书：行会制度',
+        createdTurn: 1,
+        lastAdvancedTurn: 3,
+    }],
+}, { maxThreads: 8 });
+const causalProposal = structuredClone(causalBase);
+causalProposal.threads[0].summary = '行会通过了临时费率。';
+causalProposal.threads[0].offscreenBeat = '中立派倒向低费率方案。';
+causalProposal.threads.push({
+    id: 'PE-玩家-截获货单-01',
+    title: '被截获货单引发的追查',
+    origin: 'main_derivative',
+    relation: 'linked',
+    stage: 'seeded',
+    summary: '玩家本轮截获货单后，仓主派人核查泄密者。',
+    seedBasis: '本轮正文：玩家截获并公开了货单',
+    causedBy: ['ACTION-本轮截获货单'],
+});
+const causalAccepted = enforceContinuityPolicy(causalBase, causalProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.equal(causalAccepted.threads.length, 2, '推进旧事件时仍须允许登记本轮主线直接衍生事件');
+assert.equal(causalAccepted.threads[0].lastAdvancedTurn, 5);
+assert.equal(causalAccepted.threads[1].origin, 'main_derivative');
+assert.deepEqual(continuityLifecycleStats(causalBase, causalAccepted), {
+    activeBefore: 1,
+    changedExisting: 1,
+    added: 1,
+    newlyResolved: 0,
+    removed: 0,
+    schedulerAdvanced: true,
+    tickAction: 'advanced',
+});
+
+const heldBase = structuredClone(causalAccepted);
+heldBase.turn = 5;
+const heldProposal = structuredClone(heldBase);
+heldProposal.lastTick = {
+    turn: heldBase.turn + 1,
+    action: 'held',
+    threadId: 'WE-行会-议价-01',
+    reason: '正文只过去数秒，行会下一次表决尚未到约定时刻',
+};
+const heldAccepted = enforceContinuityPolicy(heldBase, heldProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.equal(heldAccepted.lastTick.action, 'held');
+assert.equal(heldAccepted.lastTick.threadId, 'WE-行会-议价-01');
+assert.deepEqual(continuityLifecycleStats(heldBase, heldAccepted), {
+    activeBefore: 2,
+    changedExisting: 0,
+    added: 0,
+    newlyResolved: 0,
+    removed: 0,
+    schedulerAdvanced: true,
+    tickAction: 'held',
+});
+
+const vagueHeldProposal = structuredClone(heldBase);
+vagueHeldProposal.lastTick = {
+    turn: heldBase.turn + 1,
+    action: 'held',
+    threadId: 'WE-行会-议价-01',
+    reason: '无变化',
+};
+const vagueHeldAccepted = enforceContinuityPolicy(heldBase, vagueHeldProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.notEqual(vagueHeldAccepted.lastTick.action, 'held', '空泛held不得冒充有效世界调度');
+
+const resolvedProposal = structuredClone(causalAccepted);
+resolvedProposal.turn = 5;
+resolvedProposal.threads[0].stage = 'resolved';
+resolvedProposal.threads[0].summary = '临时费率正式生效。';
+resolvedProposal.threads[0].resolution = '行会完成表决并公告新费率。';
+resolvedProposal.threads[0].effects = ['旧城药材运输成本下降'];
+resolvedProposal.threads[0].rumors = ['商队流传行会高层发生了权力交换'];
+resolvedProposal.threads.push({
+    id: 'WE-旧城-药价回落-01',
+    title: '旧城药价开始回落',
+    origin: 'setting_linked',
+    relation: 'latent',
+    stage: 'seeded',
+    summary: '低运费开始传导到旧城药材批发价。',
+    seedBasis: '行会临时费率已生效，世界书规定旧城依赖该运输线',
+    causedBy: ['WE-行会-议价-01'],
+    effects: ['药材批发商准备重列报价'],
+});
+const resolvedAccepted = enforceContinuityPolicy(causalAccepted, resolvedProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+const resolvedParent = resolvedAccepted.threads.find((thread) => thread.id === 'WE-行会-议价-01');
+assert.equal(resolvedParent.stage, 'resolved');
+assert.equal(resolvedParent.resolvedTurn, 5);
+assert.match(resolvedParent.resolution, /完成表决/u);
+assert.ok(resolvedAccepted.threads.some((thread) => (
+    thread.id === 'WE-旧城-药价回落-01'
+    && thread.causedBy.includes('WE-行会-议价-01')
+)), '事件结束时必须允许其持续后果派生新事件');
+const aftermathInjection = buildContinuityInjection(resolvedAccepted);
+assert.match(aftermathInjection, /持续影响=旧城药材运输成本下降/u);
+assert.match(aftermathInjection, /仍在传播=商队流传行会高层发生了权力交换/u);
+assert.match(
+    buildContinuityInjection(resolvedAccepted, { director: 'world' }),
+    /世界引擎负责世界推演提案/u,
+);
+const resolvedLedger = continuityLedgerView(resolvedAccepted);
+assert.equal(resolvedLedger.echoCount, 1);
+assert.match(resolvedLedger.echoes[0].content, /权力交换/u);
+
+const resolvedArchive = normalizeContinuityState({
+    turn: 20,
+    threads: [
+        ...Array.from({ length: 8 }, (_, index) => ({
+            id: `DONE-${index}`,
+            title: `已结束事件${index}`,
+            stage: 'resolved',
+            resolution: '已经结束',
+            resolvedTurn: index + 1,
+        })),
+        { id: 'ACTIVE-NEW', title: '新生世界事件', stage: 'seeded' },
+    ],
+}, { maxThreads: 1, maxResolved: 8 });
+assert.equal(resolvedArchive.threads.filter((thread) => thread.stage !== 'resolved').length, 1);
+assert.ok(resolvedArchive.threads.some((thread) => thread.id === 'ACTIVE-NEW'), '已结束事件不得占满活动事件槽位');
 
 const capped = normalizeContinuityState({
     threads: Array.from({ length: 10 }, (_, index) => ({

@@ -18,10 +18,10 @@ if (!playwrightPath) {
 const { chromium } = await import(pathToFileURL(playwrightPath).href);
 
 const harness = String.raw`<!doctype html>
-<html><body>
+<html><head><link rel="stylesheet" href="/style.css"></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '' };
+const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -101,9 +101,13 @@ window.StoryOracleAPI = {
     const system = messages[0].content;
     calls.model.push(system.includes('活世界事件') ? 'continuity' : 'repair');
     if (system.includes('活世界事件')) {
+      calls.continuityRuns += 1;
       calls.continuitySystem = messages[0].content;
       calls.continuityUser = messages[1].content;
-      return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"seeded","summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}]}</ContinuityState>';
+      if (calls.continuityRuns === 1) return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"seeded","summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}]}</ContinuityState>';
+      if (calls.continuityRuns === 2) return '<ContinuityState>{"turn":2,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"advancing","summary":"巡检员找到上一班抄录员并确认缺页被人为撕走。","offscreenBeat":"两人比对墨迹，锁定缺页发生在昨夜换班。","nextBeat":"他们会查问昨夜进入钟楼的人。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2}]}</ContinuityState>';
+      if (calls.continuityRuns === 3) return '<ContinuityState>{"turn":3,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
+      return '<ContinuityState>{"turn":4,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden"},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"advancing","summary":"仓主从值班表锁定了两名可能接触货单的人。","offscreenBeat":"仓主派人分别试探两名值班人。","nextBeat":"其中一人会试图向外求助。","trigger":"追查持续进行。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
     }
     if (mode === 'defer') {
       return await new Promise((resolve) => { deferredResolve = resolve; });
@@ -204,11 +208,11 @@ try {
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         calls: structuredClone(window.__TEST__.calls),
         version: window.MvuAutoDoctorAPI.version,
-        ledgerText: document.querySelector('.mvuad-ledger')?.textContent || '',
-        cardCount: document.querySelectorAll('.mvuad-thread-card').length,
-        openCardCount: document.querySelectorAll('.mvuad-thread-card[open]').length,
+        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
+        cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
+        openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.3.1');
+    assert.equal(continuity.version, '1.4.0');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
@@ -218,17 +222,17 @@ try {
     assert.match(continuity.ledgerText, /世界脉动/u);
     assert.match(continuity.ledgerText, /保持独立/u);
     assert.equal(
-        await page.locator('.mvuad-thread-card summary .mvuad-thread-title').textContent(),
+        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card summary .mvuad-thread-title').textContent(),
         '幕后独立事件（点击查看剧透）',
     );
-    await page.click('.mvuad-thread-card summary');
+    await page.click('#mvu-auto-doctor-settings .mvuad-thread-card summary');
     assert.match(
-        await page.locator('.mvuad-thread-card .mvuad-thread-body').textContent(),
+        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card .mvuad-thread-body').textContent(),
         /钟楼巡检的缺页交接册/u,
     );
     const mobileLedgerLayout = await page.evaluate(() => {
-        const ledger = document.querySelector('.mvuad-ledger');
-        const field = document.querySelector('.mvuad-thread-field');
+        const ledger = document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger');
+        const field = document.querySelector('#mvu-auto-doctor-settings .mvuad-thread-field');
         const rect = ledger?.getBoundingClientRect();
         return {
             viewportWidth: window.innerWidth,
@@ -240,6 +244,46 @@ try {
     assert.ok(mobileLedgerLayout.left >= 0);
     assert.ok(mobileLedgerLayout.right <= mobileLedgerLayout.viewportWidth + 1);
     assert.doesNotMatch(mobileLedgerLayout.fieldColumns, /\s/u, '手机字段应为单列');
+    const orbBeforeOpen = await page.evaluate(() => {
+        const orb = document.querySelector('#mvuad-floating-orb');
+        const rect = orb?.getBoundingClientRect();
+        return {
+            exists: !!orb,
+            hidden: !!orb?.hidden,
+            top: rect?.top ?? -1,
+            bottom: rect?.bottom ?? Number.MAX_SAFE_INTEGER,
+            count: orb?.querySelector('.mvuad-orb-count')?.textContent,
+        };
+    });
+    assert.equal(orbBeforeOpen.exists, true, '必须建立游玩时悬浮入口');
+    assert.equal(orbBeforeOpen.hidden, false);
+    assert.ok(
+        orbBeforeOpen.top >= 0 && orbBeforeOpen.bottom <= 844,
+        JSON.stringify(orbBeforeOpen),
+    );
+    assert.equal(orbBeforeOpen.count, '1');
+    await page.click('#mvuad-floating-orb');
+    const floatingPanel = await page.evaluate(() => {
+        const panel = document.querySelector('#mvuad-floating-panel');
+        const rect = panel?.getBoundingClientRect();
+        return {
+            hidden: !!panel?.hidden,
+            left: rect?.left ?? -1,
+            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
+            cards: panel?.querySelectorAll('.mvuad-thread-card').length || 0,
+            text: panel?.textContent || '',
+        };
+    });
+    assert.equal(floatingPanel.hidden, false);
+    assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
+    assert.equal(floatingPanel.cards, 1);
+    assert.match(floatingPanel.text, /世界风声/u);
+    assert.match(floatingPanel.text, /打开独立论坛/u);
+    await page.click('#mvuad-floating-panel .mvuad-floating-close');
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel')?.hidden),
+        true,
+    );
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.match(continuity.calls.continuitySystem, /setting_independent/u);
     assert.match(continuity.calls.continuitySystem, /可以永远不与主线相交/u);
@@ -318,7 +362,7 @@ try {
     assert.ok(openingUndo.openingState.suppressed['/契约者/衍生属性/MP_当前']);
 
     const beforeRefreshCalls = continuity.calls.model.length;
-    await page.click('.mvuad-ledger-refresh');
+    await page.click('#mvu-auto-doctor-settings .mvuad-ledger-refresh');
     assert.equal(
         await page.evaluate(() => window.__TEST__.calls.model.length),
         beforeRefreshCalls,
@@ -361,9 +405,126 @@ try {
         '切换到空聊天后不得显示上一个聊天的支线',
     );
     assert.match(
-        await page.evaluate(() => document.querySelector('.mvuad-ledger-empty')?.textContent || ''),
+        await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger-empty')?.textContent || ''),
         /当前没有未结支线/u,
     );
+
+    const lifecyclePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await lifecyclePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await lifecyclePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    for (const turn of [1, 2, 3, 4]) {
+        await lifecyclePage.evaluate(async (step) => {
+            const t = window.__TEST__;
+            if (step > 1) {
+                t.context.chat.push({ is_user: true, is_system: false, mes: step === 2 ? '烧毁异常货单' : '继续处理眼前事务', swipe_id: 0, extra: {} });
+                t.context.chat.push({ is_user: false, is_system: false, mes: step === 2 ? '货单烧毁，仓主察觉有人动过仓库记录。' : `第${step}回合主线回复`, swipe_id: 0, extra: {} });
+            }
+            const index = t.context.chat.length - 1;
+            await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+            await t.context.eventSource.emit('message_received', index);
+        }, turn);
+        await lifecyclePage.waitForFunction((expected) => (
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn === expected
+        ), turn, { timeout: 30000 });
+    }
+    const lifecycle = await lifecyclePage.evaluate(() => ({
+        version: window.MvuAutoDoctorAPI.version,
+        calls: structuredClone(window.__TEST__.calls),
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
+    }));
+    assert.equal(lifecycle.version, '1.4.0');
+    assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
+    assert.equal(lifecycle.state.turn, 4);
+    assert.equal(lifecycle.state.threads.find((thread) => thread.id === 'PE-货单-追查-01').stage, 'advancing');
+    const ended = lifecycle.state.threads.find((thread) => thread.id === 'WE-港城-钟楼-01');
+    assert.equal(ended.stage, 'resolved');
+    assert.match(ended.effects.join(''), /双人签字/u);
+    assert.match(ended.rumors.join(''), /秘密复核/u);
+    assert.ok(lifecycle.state.threads.some((thread) => (
+        thread.id === 'WE-钟楼-双签-01'
+        && thread.causedBy.includes('WE-港城-钟楼-01')
+    )));
+    assert.match(lifecycle.ledgerText, /烧毁货单后的泄密追查/u);
+    assert.match(lifecycle.ledgerText, /已收束支线（1）/u);
+    await lifecyclePage.close();
+
+    const heldPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await heldPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await heldPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await heldPage.evaluate(() => {
+        const t = window.__TEST__;
+        const originalRun = window.StoryOracleAPI.run;
+        let localContinuityRuns = 0;
+        window.StoryOracleAPI.run = async (messages) => {
+            const system = messages[0].content;
+            if (!system.includes('活世界事件')) return originalRun(messages);
+            localContinuityRuns += 1;
+            t.calls.model.push('continuity');
+            t.calls.continuityRuns += 1;
+            if (localContinuityRuns === 1) {
+                return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-渡船-潮汐-01","title":"渡船等待退潮","origin":"ambient","relation":"independent","stage":"seeded","summary":"渡船仍系在北岸码头。","nextBeat":"退潮后船工才会检查缆绳。","trigger":"游戏内时间推进到退潮时段。","intersection":"玩家前往北岸码头时可能观察到。","seedBasis":"世界书：港城潮汐与渡船班次","knowledge":"hidden"}]}</ContinuityState>';
+            }
+            return '<ContinuityState>{"turn":2,"lastTick":{"turn":2,"action":"held","threadId":"WE-渡船-潮汐-01","reason":"正文只过去十几秒，尚未到世界书规定的退潮时段"},"threads":[{"id":"WE-渡船-潮汐-01","title":"渡船等待退潮","origin":"ambient","relation":"independent","stage":"seeded","summary":"渡船仍系在北岸码头。","nextBeat":"退潮后船工才会检查缆绳。","trigger":"游戏内时间推进到退潮时段。","intersection":"玩家前往北岸码头时可能观察到。","seedBasis":"世界书：港城潮汐与渡船班次","knowledge":"hidden"}]}</ContinuityState>';
+        };
+    });
+    for (const step of [1, 2]) {
+        await heldPage.evaluate(async (turn) => {
+            const t = window.__TEST__;
+            if (turn === 2) {
+                t.context.chat.push({ is_user: true, is_system: false, mes: '原地看了一眼路牌', swipe_id: 0, extra: {} });
+                t.context.chat.push({ is_user: false, is_system: false, mes: '十几秒后，你仍站在路牌旁。', swipe_id: 0, extra: {} });
+            }
+            const index = t.context.chat.length - 1;
+            await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+            await t.context.eventSource.emit('message_received', index);
+        }, step);
+        await heldPage.waitForFunction((turn) => (
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn === turn
+        ), step, { timeout: 30000 });
+    }
+    const heldResult = await heldPage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+        status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+    }));
+    assert.equal(heldResult.calls.continuityRuns, 2, '有具体依据的held不得触发无意义重试');
+    assert.equal(heldResult.state.lastTick.action, 'held');
+    assert.match(heldResult.state.lastTick.reason, /尚未到/u);
+    assert.match(heldResult.status, /条件未成熟/u);
+    await heldPage.close();
+
+    const retryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await retryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await retryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await retryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const originalRun = window.StoryOracleAPI.run;
+        let localContinuityRuns = 0;
+        window.StoryOracleAPI.run = async (messages) => {
+            const system = messages[0].content;
+            if (!system.includes('活世界事件')) return originalRun(messages);
+            localContinuityRuns += 1;
+            t.calls.model.push('continuity');
+            t.calls.continuityRuns += 1;
+            if (localContinuityRuns === 1) {
+                return '<ContinuityState>{"turn":1,"threads":[]}</ContinuityState>';
+            }
+            return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-重试-街巷-01","title":"街巷水管检修","origin":"ambient","relation":"independent","stage":"seeded","summary":"维修队封闭了一段旧街。","nextBeat":"商户会协商临时进货路线。","trigger":"市政检修按日程推进。","intersection":"玩家进入旧街时才可能观察到。","seedBasis":"世界书：港城街区与市政维护","knowledge":"hidden"}]}</ContinuityState>';
+        };
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await retryPage.waitForFunction(() => (
+        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn === 1
+    ), null, { timeout: 30000 });
+    const retryResult = await retryPage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+    }));
+    assert.equal(retryResult.calls.continuityRuns, 2, '无实质世界节拍时必须自动重试一次');
+    assert.equal(retryResult.state.threads[0].id, 'WE-重试-街巷-01');
+    await retryPage.close();
 } finally {
     await browser.close();
     server.close();
