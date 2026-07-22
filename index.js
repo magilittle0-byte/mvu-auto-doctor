@@ -40,7 +40,7 @@ import {
 } from './forum-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -67,12 +67,13 @@ const DEFAULTS = Object.freeze({
     continuityMaxTokens: 3200,
     builtInForumEnabled: true,
     forumAutoRefresh: true,
-    forumPauseWhenExternal: true,
+    forumProvider: 'builtin',
+    forumSettingsVersion: 2,
     forumRefreshEvery: 1,
     forumMaxPosts: 36,
     forumMaxComments: 16,
     forumContextMessages: 10,
-    forumMaxTokens: 2600,
+    forumMaxTokens: 3600,
 });
 
 let mvuPromise = null;
@@ -111,6 +112,7 @@ function getSettings() {
     if (!isPlainObject(root[PLUGIN_ID])) root[PLUGIN_ID] = {};
     const settings = root[PLUGIN_ID];
     const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
+    const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -135,6 +137,16 @@ function getSettings() {
     if (previousContinuitySettingsVersion < 3) {
         if (Number(settings.continuityMaxTokens) === 2200) settings.continuityMaxTokens = 3200;
         settings.continuitySettingsVersion = 3;
+        changed = true;
+    }
+    if (!['builtin', 'zsd'].includes(settings.forumProvider)) {
+        settings.forumProvider = 'builtin';
+        changed = true;
+    }
+    if (previousForumSettingsVersion < 2) {
+        settings.forumProvider = 'builtin';
+        settings.forumSettingsVersion = 2;
+        if (Number(settings.forumMaxTokens) === 2600) settings.forumMaxTokens = 3600;
         changed = true;
     }
     if (previousContinuitySettingsVersion < 4) {
@@ -2423,6 +2435,10 @@ function buildForumMessages({
     retryReason = '',
 }) {
     const settings = getSettings();
+    const orphanPosts = base.posts
+        .filter((post) => post.status === 'active' && post.comments.length === 0)
+        .slice(0, 10)
+        .map((post) => ({ id: post.id, board: post.board, title: post.title }));
     const system = [
         '你是跑团世界中的独立网络论坛模拟器。你不写主回复，只增量维护一个聊天内论坛。',
         '论坛用于表现这个世界里普通人的生活、交流、争论和有限认知，不是任务生成器，也不是全知剧情播报器。',
@@ -2432,11 +2448,13 @@ function buildForumMessages({
         '- 帖子与评论只能表现公开可知、合理听闻或纯日常内容。幕后hidden事件、私密对话和玩家独处经历不得泄露。',
         '- rumor只能以不确定传言表达，网友可以质疑、误解或吐槽，不能把传言写成官方真相。',
         '- 不要让整个论坛围着玩家转；除非正文明确发生在公众面前且足以被讨论，否则不要提及玩家。',
-        '- 每次刷新新增2至4帖、给0至3个旧帖增加合计2至6条评论；至少一半内容应为日常闲聊、求助、攻略、交易、抱怨、八卦或地方话题。',
+        '- 首次刷新必须新增4至5帖，每个新帖都至少获得1条回复，并生成合计6至12条评论；不得出现孤零零的无回复帖子。',
+        '- 后续刷新新增2至4帖，并生成合计6至12条评论：优先回复现有零回复帖，同时让至少一半新帖自带1至3条回复。评论可以回复本次newPosts里的ID。',
+        '- 至少一半帖子应为日常闲聊、求助、攻略、交易、抱怨、八卦或地方话题；回复者要互相补充、质疑、开玩笑或跑题，不能只是复述楼主。',
         '- 允许本轮完全没有剧情帖。最多1帖可承载已公开的因果风声或长伏笔表层痕迹，且必须写明source证据。',
         '- causalSignal默认false。只有帖子已经促成论坛外的持续行动、聚集、传播、短缺或人物决定时才可设为true，并在impact写明已经发生的外部影响；仅仅热门、争论、求助、猜测或像伏笔都不够。',
         '- 同一作者要有相对稳定的说话习惯；评论应有不同立场，不要所有人异口同声。',
-        '- 只能给已存在postId追加评论、热度或归档；不得改写旧帖正文。不得重复相同帖子。',
+        '- comments可以引用旧帖ID或同一份newPosts中刚建立的ID；不得引用不存在的ID。旧帖正文不得改写，不得重复相同帖子。',
         '- board随世界观自然命名，例如闲聊、攻略、交易、求助、吐槽、八卦；不强套现代互联网术语到不合适的世界。',
         '- kind枚举：chat（日常交流）/ reaction（公共事件反应）/ rumor（未证实风声）/ guide（攻略求助）/ trade（交易）。',
         '',
@@ -2449,6 +2467,9 @@ function buildForumMessages({
         '',
         '=== 当前论坛（只做增量，不重写）===',
         cropText(forumDigest(base), 30000, '论坛旧帖'),
+        '',
+        '=== 当前零回复孤帖（本轮优先补回复）===',
+        orphanPosts.length ? safeJson(orphanPosts) : '无。',
         '',
         '=== 可公开引用的事件与风声（hidden已过滤）===',
         publicContinuityForForum(namespace, settings),
@@ -2471,6 +2492,46 @@ function buildForumMessages({
     ];
 }
 
+function forumBatchQualityIssue(base, candidate) {
+    const baseById = new Map(base.posts.map((post) => [post.id, post]));
+    const newPosts = candidate.posts.filter((post) => !baseById.has(post.id));
+    const commentedTargets = candidate.posts.filter((post) => (
+        post.comments.length > (baseById.get(post.id)?.comments.length || 0)
+    ));
+    const addedComments = commentedTargets.reduce((sum, post) => (
+        sum + post.comments.length - (baseById.get(post.id)?.comments.length || 0)
+    ), 0);
+    const commentedNew = newPosts.filter((post) => commentedTargets.some((item) => item.id === post.id));
+    const orphanIds = new Set(
+        base.posts
+            .filter((post) => post.status === 'active' && post.comments.length === 0)
+            .map((post) => post.id),
+    );
+    const repairedOrphan = commentedTargets.some((post) => orphanIds.has(post.id));
+
+    if (!base.posts.length) {
+        if (newPosts.length < 4) return `首刷只有${newPosts.length}帖，至少需要4帖`;
+        if (newPosts.length > 5) return `首刷生成了${newPosts.length}帖，最多保留5帖的节奏`;
+        if (addedComments < 6) return `首刷只有${addedComments}条回复，至少需要6条`;
+        if (addedComments > 12) return `首刷生成了${addedComments}条回复，最多需要12条`;
+        if (commentedNew.length < newPosts.length) {
+            return `首刷仍有${newPosts.length - commentedNew.length}个新帖没有回复`;
+        }
+        return '';
+    }
+    if (newPosts.length < 2) return `后续刷新只有${newPosts.length}个新帖，至少需要2个`;
+    if (newPosts.length > 4) return `后续刷新生成了${newPosts.length}个新帖，最多需要4个`;
+    if (addedComments < 6) return `后续刷新只有${addedComments}条回复，至少需要6条`;
+    if (addedComments > 12) return `后续刷新生成了${addedComments}条回复，最多需要12条`;
+    if (commentedNew.length < Math.ceil(newPosts.length / 2)) {
+        return '至少一半的新帖必须自带回复';
+    }
+    if (orphanIds.size && !repairedOrphan) {
+        return '存在零回复旧帖，但本轮没有给任何孤帖补楼';
+    }
+    return '';
+}
+
 async function runForumTarget(captured, {
     force = false,
     manual = false,
@@ -2481,8 +2542,13 @@ async function runForumTarget(captured, {
     const settings = getSettings();
     if (!settings.builtInForumEnabled) return { status: 'disabled' };
     if (!manual && !settings.forumAutoRefresh) return { status: 'disabled' };
-    if (!manual && settings.forumPauseWhenExternal && hasExternalForum()) {
-        setForumStatus('论坛：检测到 Zsd，已暂停内置自动刷帖');
+    if (!manual && settings.forumProvider === 'zsd') {
+        setForumStatus(
+            hasExternalForum()
+                ? '论坛：当前来源为 Zsd，内置自动刷新未运行'
+                : '论坛：已选择 Zsd，但当前未检测到它的前端',
+            hasExternalForum() ? '' : 'error',
+        );
         return { status: 'external' };
     }
 
@@ -2532,6 +2598,12 @@ async function runForumTarget(captured, {
             maxComments: settings.forumMaxComments,
         });
         progressed = forumDigest(candidate) !== forumDigest(base);
+        const qualityIssue = progressed ? forumBatchQualityIssue(base, candidate) : '';
+        if (qualityIssue) {
+            progressed = false;
+            retryReason = qualityIssue;
+            continue;
+        }
         if (progressed) {
             next = candidate;
             break;
@@ -2981,7 +3053,7 @@ const FORUM_KIND_LABELS = Object.freeze({
     trade: '交易',
 });
 
-function buildForumPostCard(post) {
+function buildForumPostCard(post, { openComments = false } = {}) {
     const card = document.createElement('article');
     card.className = 'mvuad-forum-post';
     card.dataset.board = post.board;
@@ -3023,6 +3095,7 @@ function buildForumPostCard(post) {
 
     const comments = document.createElement('details');
     comments.className = 'mvuad-forum-comments';
+    comments.open = openComments && post.comments.length > 0;
     const summary = document.createElement('summary');
     summary.textContent = `评论 ${post.comments.length}`;
     comments.appendChild(summary);
@@ -3057,7 +3130,7 @@ function buildFloatingForumPreview(post) {
     item.className = 'mvuad-floating-forum-preview-item';
     const top = document.createElement('span');
     top.className = 'mvuad-floating-forum-preview-meta';
-    top.textContent = `${post.board} · ${post.author}`;
+    top.textContent = `${post.board} · ${post.author} · ${post.comments.length} 回复`;
     const title = document.createElement('b');
     title.textContent = post.title;
     const body = document.createElement('span');
@@ -3065,6 +3138,55 @@ function buildFloatingForumPreview(post) {
     item.append(top, title, body);
     item.addEventListener('click', showForumPanel);
     return item;
+}
+
+function forumProviderLabel(provider = getSettings().forumProvider) {
+    return provider === 'zsd' ? 'Zsd 论坛' : '医生内置论坛';
+}
+
+function syncForumProviderUi() {
+    const provider = getSettings().forumProvider;
+    for (const select of ui?.forumProviderSelects || []) {
+        select.value = provider;
+    }
+    if (ui?.floatingForumOpen) {
+        ui.floatingForumOpen.textContent = provider === 'zsd'
+            ? '打开 Zsd 论坛'
+            : '打开完整论坛';
+    }
+    if (ui?.forumSettingsOpen) {
+        ui.forumSettingsOpen.textContent = provider === 'zsd'
+            ? '打开 Zsd 论坛'
+            : '打开内置论坛';
+    }
+}
+
+function registerForumProviderSelect(select) {
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (!Array.isArray(ui.forumProviderSelects)) ui.forumProviderSelects = [];
+    ui.forumProviderSelects.push(select);
+    select.value = getSettings().forumProvider;
+    select.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.forumProvider = select.value === 'zsd' ? 'zsd' : 'builtin';
+        saveSettings();
+        syncForumProviderUi();
+        if (settings.forumProvider === 'zsd') {
+            setForumStatus(
+                hasExternalForum()
+                    ? '论坛：已切换到 Zsd；医生内置自动刷新已暂停'
+                    : '论坛：已选择 Zsd，但当前没有检测到它的前端',
+                hasExternalForum() ? 'ok' : 'error',
+            );
+        } else {
+            setForumStatus(
+                settings.forumAutoRefresh
+                    ? `论坛：内置自动刷新已启用（每 ${settings.forumRefreshEvery} 个 AI 回合）`
+                    : '论坛：已切换到内置来源；自动刷新当前关闭',
+                settings.forumAutoRefresh ? 'ok' : '',
+            );
+        }
+    });
 }
 
 function renderForum() {
@@ -3087,8 +3209,15 @@ function renderForum() {
     }
     if (ui.floatingForumEmpty) ui.floatingForumEmpty.hidden = state.active.length > 0;
     if (ui.forumSummary) {
+        const autoState = settings.forumProvider === 'zsd'
+            ? '内置自动：已暂停（来源为 Zsd）'
+            : settings.builtInForumEnabled && settings.forumAutoRefresh
+                ? `内置自动：每 ${settings.forumRefreshEvery} 个 AI 回合`
+                : '内置自动：关闭';
         ui.forumSummary.textContent = [
             state.summary || '世界各处的闲聊、求助与风声',
+            `来源：${forumProviderLabel(settings.forumProvider)}`,
+            autoState,
             `第 ${state.turn} 页`,
             `${state.active.length} 个活跃主题`,
             `更新：${formatLedgerTime(state.updatedAt)}`,
@@ -3130,7 +3259,9 @@ function renderForum() {
         if (currentFilter.startsWith('board:')) return post.board === currentFilter.slice(6);
         return true;
     });
-    ui.forumFeed?.replaceChildren(...filtered.map(buildForumPostCard));
+    ui.forumFeed?.replaceChildren(...filtered.map((post, index) => (
+        buildForumPostCard(post, { openComments: index === 0 })
+    )));
     if (ui.forumEmpty) {
         ui.forumEmpty.hidden = filtered.length > 0;
         ui.forumEmpty.textContent = state.active.length
@@ -3140,6 +3271,18 @@ function renderForum() {
 
     const external = hasExternalForum();
     if (ui.forumExternal) ui.forumExternal.hidden = !external;
+    if (ui.forumSourceNote) {
+        const selectedExternalMissing = settings.forumProvider === 'zsd' && !external;
+        const bothInstalled = settings.forumProvider === 'builtin' && external;
+        ui.forumSourceNote.hidden = !selectedExternalMissing && !bothInstalled;
+        ui.forumSourceNote.dataset.kind = selectedExternalMissing ? 'error' : 'notice';
+        ui.forumSourceNote.textContent = selectedExternalMissing
+            ? '当前选择了 Zsd，但没有检测到它。请先安装并启用 Zsd，或把来源切回“医生内置论坛”。'
+            : bothInstalled
+                ? 'Zsd 已安装，但当前来源是医生内置论坛：两边帖子数据不会互相覆盖；若 Zsd 自己的自动生成也开启，会额外产生模型请求。'
+                : '';
+    }
+    syncForumProviderUi();
 }
 
 function refreshForumManual() {
@@ -3189,6 +3332,14 @@ function openExternalForum() {
     target.click();
 }
 
+function openSelectedForum() {
+    if (getSettings().forumProvider === 'zsd') {
+        openExternalForum();
+        return;
+    }
+    showForumPanel();
+}
+
 function buildForumUi() {
     if (!document.body) {
         setTimeout(buildForumUi, 300);
@@ -3207,10 +3358,18 @@ function buildForumUi() {
                 <button class="mvuad-forum-close" type="button" aria-label="关闭论坛">×</button>
             </div>
             <div class="mvuad-forum-toolbar">
-                <button class="menu_button mvuad-forum-refresh" type="button">刷新论坛</button>
+                <label class="mvuad-forum-provider">
+                    <span>论坛来源</span>
+                    <select class="text_pole mvuad-forum-provider-select">
+                        <option value="builtin">医生内置论坛</option>
+                        <option value="zsd">Zsd 论坛</option>
+                    </select>
+                </label>
+                <button class="menu_button mvuad-forum-refresh" type="button">刷新内置内容</button>
                 <button class="menu_button mvuad-forum-external" type="button" hidden>打开 Zsd</button>
                 <button class="menu_button mvuad-forum-clear" type="button">清空内置帖子</button>
             </div>
+            <div class="mvuad-forum-source-note" hidden></div>
             <div class="mvuad-forum-status" role="status"></div>
             <div class="mvuad-forum-summary"></div>
             <div class="mvuad-forum-filters" aria-label="论坛分类"></div>
@@ -3227,8 +3386,10 @@ function buildForumUi() {
         forumEmpty: panel.querySelector('.mvuad-forum-empty'),
         forumFeed: panel.querySelector('.mvuad-forum-feed'),
         forumExternal: panel.querySelector('.mvuad-forum-external'),
+        forumSourceNote: panel.querySelector('.mvuad-forum-source-note'),
         forumBoardFilter: 'all',
     });
+    registerForumProviderSelect(panel.querySelector('.mvuad-forum-provider-select'));
     ui.forumClose.addEventListener('click', hideForumPanel);
     panel.querySelector('.mvuad-forum-refresh').addEventListener('click', refreshForumManual);
     panel.querySelector('.mvuad-forum-external').addEventListener('click', openExternalForum);
@@ -3415,6 +3576,7 @@ function buildFloatingUi() {
         floatingForumTabCount: panel.querySelector('.mvuad-floating-forum-tab-count'),
         floatingForumPreview: panel.querySelector('.mvuad-floating-forum-preview'),
         floatingForumEmpty: panel.querySelector('.mvuad-floating-forum-empty'),
+        floatingForumOpen: panel.querySelector('.mvuad-floating-forum'),
         floatingTabs: [...panel.querySelectorAll('.mvuad-floating-tabs [data-page]')],
         floatingPages: [...panel.querySelectorAll('.mvuad-floating-page[data-page]')],
     });
@@ -3430,7 +3592,7 @@ function buildFloatingUi() {
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
-    panel.querySelector('.mvuad-floating-forum').addEventListener('click', showForumPanel);
+    panel.querySelector('.mvuad-floating-forum').addEventListener('click', openSelectedForum);
     panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
     makeFloatingOrbDraggable(orb);
     window.addEventListener('resize', () => applyFloatingOrbPosition());
@@ -3441,6 +3603,7 @@ function buildFloatingUi() {
     setContinuityStatus(latestContinuityStatus);
     setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
+    syncForumProviderUi();
 }
 
 function makeCheckbox(label, key) {
@@ -3458,6 +3621,15 @@ function makeCheckbox(label, key) {
         }
         if (key === 'hideContinuitySpoilers') renderContinuityLedger();
         if (key === 'floatingOrbEnabled') syncFloatingUiVisibility();
+        if (key === 'builtInForumEnabled' || key === 'forumAutoRefresh') {
+            const settings = getSettings();
+            setForumStatus(
+                settings.builtInForumEnabled && settings.forumAutoRefresh
+                    ? `论坛：内置自动刷新已启用（每 ${settings.forumRefreshEvery} 个 AI 回合）`
+                    : '论坛：内置自动刷新当前关闭',
+                settings.builtInForumEnabled && settings.forumAutoRefresh ? 'ok' : '',
+            );
+        }
     });
     const span = document.createElement('span');
     span.textContent = label;
@@ -3553,14 +3725,21 @@ function buildSettingsPanel() {
                         独立生成日常水帖、求助、攻略、交易、吐槽和公开风声，不占正文；
                         普通帖子不会变成支线，只有已经造成持续公共行动的信号才会进入下一轮因果调度。
                     </div>
+                    <label class="mvuad-select">
+                        <span>论坛来源</span>
+                        <select class="text_pole mvuad-forum-provider-settings">
+                            <option value="builtin">医生内置论坛（自动刷新）</option>
+                            <option value="zsd">Zsd 论坛（由 Zsd 自己刷新）</option>
+                        </select>
+                    </label>
                     <div class="mvuad-forum-options"></div>
                     <label class="mvuad-number">
                         <span>每几个 AI 回合自动刷新</span>
                         <input class="text_pole mvuad-forum-interval" type="number" min="1" max="12" step="1">
                     </label>
                     <div class="mvuad-actions">
-                        <button class="menu_button mvuad-forum-open" type="button">打开内置论坛</button>
-                        <button class="menu_button mvuad-forum-run" type="button">立即刷新论坛</button>
+                        <button class="menu_button mvuad-forum-open" type="button">打开所选论坛</button>
+                        <button class="menu_button mvuad-forum-run" type="button">刷新内置论坛</button>
                         <button class="menu_button mvuad-forum-clear-settings" type="button">清空内置帖子</button>
                     </div>
                     <div class="mvuad-status mvuad-settings-forum-status" role="status"></div>
@@ -3627,8 +3806,9 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-forum-options').append(
         makeCheckbox('启用内置世界论坛', 'builtInForumEnabled'),
         makeCheckbox('按回合自动刷新内置论坛', 'forumAutoRefresh'),
-        makeCheckbox('检测到 Zsd 时暂停内置自动刷新', 'forumPauseWhenExternal'),
     );
+    const forumProvider = wrapper.querySelector('.mvuad-forum-provider-settings');
+    registerForumProviderSelect(forumProvider);
     const forumInterval = wrapper.querySelector('.mvuad-forum-interval');
     forumInterval.value = String(getSettings().forumRefreshEvery);
     forumInterval.addEventListener('change', () => {
@@ -3638,15 +3818,23 @@ function buildSettingsPanel() {
         );
         forumInterval.value = String(getSettings().forumRefreshEvery);
         saveSettings();
+        setForumStatus(
+            getSettings().forumAutoRefresh
+                ? `论坛：内置自动刷新已设为每 ${getSettings().forumRefreshEvery} 个 AI 回合`
+                : '论坛：内置自动刷新当前关闭',
+            getSettings().forumAutoRefresh ? 'ok' : '',
+        );
     });
-    wrapper.querySelector('.mvuad-forum-open').addEventListener('click', showForumPanel);
+    wrapper.querySelector('.mvuad-forum-open').addEventListener('click', openSelectedForum);
     wrapper.querySelector('.mvuad-forum-run').addEventListener('click', refreshForumManual);
     wrapper.querySelector('.mvuad-forum-clear-settings').addEventListener('click', clearForumState);
     ui.forumSettingsStatus = wrapper.querySelector('.mvuad-settings-forum-status');
+    ui.forumSettingsOpen = wrapper.querySelector('.mvuad-forum-open');
     setStatus(latestStatus);
     setContinuityStatus(latestContinuityStatus);
     setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
+    syncForumProviderUi();
 }
 
 function bindEvents() {
