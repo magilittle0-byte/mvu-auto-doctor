@@ -45,6 +45,44 @@ assert.equal(state.threads[0].knowledge, 'hidden');
 assert.equal(state.threads[0].origin, 'main_derivative');
 assert.equal(state.threads[0].relation, 'linked');
 
+const preservedMarkerState = mergeMarkerRecords({
+    chatId: 'chat-a',
+    turn: 8,
+    threads: [{
+        id: 'PE-港口-哨兵-01',
+        title: '异常货单的后续追查',
+        stage: 'resolved',
+        summary: '巡逻队已经完成核对。',
+        resolution: '异常货单被归档为证物。',
+        causedBy: ['ACTION-烧毁货单'],
+        effects: ['港区门禁改为双人核验'],
+        rumors: ['商队传言巡逻队正在倒查旧账'],
+        actors: ['哨兵', '巡逻队'],
+        locations: ['港口'],
+        knowledge: 'observed',
+        urgency: 3,
+        createdTurn: 2,
+        lastAdvancedTurn: 7,
+        resolvedTurn: 7,
+    }],
+}, extractContinuityMarkers(`
+<parallel_event_record>
+[事件ID|PE-港口-哨兵-01]
+[状态|推进中]
+[新增变化|巡逻队继续整理已经归档的货单]
+</parallel_event_record>`).records, { chatId: 'chat-a', maxThreads: 4 });
+const preservedMarker = preservedMarkerState.threads[0];
+assert.equal(preservedMarker.stage, 'resolved', '重复标记不得把已结束事件降级');
+assert.equal(preservedMarker.title, '异常货单的后续追查');
+assert.deepEqual(preservedMarker.causedBy, ['ACTION-烧毁货单']);
+assert.deepEqual(preservedMarker.effects, ['港区门禁改为双人核验']);
+assert.deepEqual(preservedMarker.rumors, ['商队传言巡逻队正在倒查旧账']);
+assert.equal(preservedMarker.resolution, '异常货单被归档为证物。');
+assert.equal(preservedMarker.knowledge, 'observed');
+assert.equal(preservedMarker.urgency, 3);
+assert.equal(preservedMarker.createdTurn, 2);
+assert.equal(preservedMarker.resolvedTurn, 7);
+
 const parsed = parseContinuityOutput(`
 <ContinuityState>
 {
@@ -133,6 +171,27 @@ const livingBase = normalizeContinuityState({
         lastAdvancedTurn: 5,
     }],
 }, { maxThreads: 8 });
+const hiddenBackstageInjection = buildContinuityInjection(livingBase);
+assert.match(hiddenBackstageInjection, /WE-旧城-药房-01/u);
+assert.doesNotMatch(hiddenBackstageInjection, /旧城药房的断供|库存只能支撑三天|向邻城商队发出询价/u);
+const hiddenTickState = structuredClone(livingBase);
+hiddenTickState.lastTick = {
+    turn: 6,
+    action: 'advanced',
+    threadId: 'WE-旧城-药房-01',
+    reason: '秘密依据：药房地下室只剩一箱禁药，店主准备深夜灭口',
+};
+const hiddenTickInjection = buildContinuityInjection(hiddenTickState);
+assert.match(hiddenTickInjection, /幕后条件变化已记录（细节已折叠）/u);
+assert.doesNotMatch(
+    hiddenTickInjection,
+    /秘密依据|地下室|禁药|深夜灭口/u,
+    'hidden independent/latent 的 lastTick.reason 不得绕过正文注入折叠',
+);
+const rumoredLivingBase = structuredClone(livingBase);
+rumoredLivingBase.threads[0].knowledge = 'rumor';
+assert.match(buildContinuityInjection(rumoredLivingBase), /库存只能支撑三天/u);
+assert.match(buildContinuityInjection(rumoredLivingBase), /旧城药房的断供/u);
 
 const livingProposal = normalizeContinuityState({
     chatId: 'living-chat',
@@ -197,6 +256,23 @@ const convergenceGuard = enforceContinuityPolicy(livingBase, prematureLink, {
     maxThreads: 8,
 });
 assert.equal(convergenceGuard.threads[0].relation, 'converging', '独立事件必须先进入汇流阶段');
+
+const hallucinatedRumor = structuredClone(livingBase);
+hallucinatedRumor.threads[0].summary = '药房仍在私下寻找货源。';
+hallucinatedRumor.threads[0].offscreenBeat = '账房只向店主报告了库存。';
+hallucinatedRumor.threads[0].knowledge = 'rumor';
+hallucinatedRumor.threads[0].rumors = ['全城都知道了药房的私密库存'];
+const rumorGate = enforceContinuityPolicy(livingBase, hallucinatedRumor, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 8,
+});
+assert.equal(rumorGate.threads[0].knowledge, 'hidden');
+assert.deepEqual(
+    rumorGate.threads[0].rumors,
+    [],
+    '未显现且未汇流的独立事件不得仅凭模型声称升级成公开传闻',
+);
 
 const causalBase = normalizeContinuityState({
     chatId: 'causal-chat',
@@ -317,8 +393,16 @@ assert.ok(resolvedAccepted.threads.some((thread) => (
     && thread.causedBy.includes('WE-行会-议价-01')
 )), '事件结束时必须允许其持续后果派生新事件');
 const aftermathInjection = buildContinuityInjection(resolvedAccepted);
-assert.match(aftermathInjection, /持续影响=旧城药材运输成本下降/u);
-assert.match(aftermathInjection, /仍在传播=商队流传行会高层发生了权力交换/u);
+assert.doesNotMatch(
+    aftermathInjection,
+    /行会内部议价|完成表决|旧城药材运输成本下降|权力交换/u,
+    '未显现的 latent 已收束事件及其后果不得注入正文',
+);
+const publicResolved = structuredClone(resolvedAccepted);
+publicResolved.threads.find((thread) => thread.id === 'WE-行会-议价-01').knowledge = 'observed';
+const publicAftermathInjection = buildContinuityInjection(publicResolved);
+assert.match(publicAftermathInjection, /持续影响=旧城药材运输成本下降/u);
+assert.match(publicAftermathInjection, /仍在传播=商队流传行会高层发生了权力交换/u);
 assert.match(
     buildContinuityInjection(resolvedAccepted, { director: 'world' }),
     /世界引擎负责世界推演提案/u,
@@ -349,7 +433,39 @@ const capped = normalizeContinuityState({
         title: `事件${index}`,
     })),
 }, { maxThreads: 4 });
-assert.equal(capped.threads.length, 4);
+assert.equal(capped.threads.length, 10, '超上限未结事件不得从账本消失');
+assert.equal(
+    capped.threads.filter((thread) => !['resolved', 'dormant'].includes(thread.stage)).length,
+    4,
+);
+assert.equal(capped.threads.filter((thread) => thread.stage === 'dormant').length, 6);
+assert.equal(capped.droppedCount, 6);
+
+const markerOverflow = mergeMarkerRecords(null, Array.from({ length: 10 }, (_, index) => ({
+    id: `MARKER-${index}`,
+    title: `批量预设事件${index}`,
+    stage: 'advancing',
+    seedBasis: `预设标记${index}`,
+})), { chatId: 'marker-overflow', maxThreads: 4 });
+assert.equal(markerOverflow.threads.length, 10);
+assert.equal(markerOverflow.threads.filter((thread) => thread.stage === 'dormant').length, 6);
+assert.equal(markerOverflow.droppedCount, 6);
+
+const wakeProposal = structuredClone(capped);
+wakeProposal.turn = 1;
+wakeProposal.threads[4].stage = 'advancing';
+wakeProposal.threads[4].summary = '容量提高后，休眠事件重新进入调度。';
+const awakened = enforceContinuityPolicy(capped, wakeProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 5,
+});
+assert.equal(
+    awakened.threads.filter((thread) => !['resolved', 'dormant'].includes(thread.stage)).length,
+    5,
+    '容量恢复后调度器应能唤醒保留的 dormant 事件',
+);
+assert.equal(awakened.threads.find((thread) => thread.id === 'PE-4').stage, 'advancing');
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',
@@ -367,5 +483,40 @@ namespace = appendRepairJournal(namespace, {
 }, { maxSnapshotChars: 20 });
 assert.equal(namespace.repairJournal.at(-1).snapshot, undefined);
 assert.equal(namespace.repairJournal.at(-1).snapshotOmitted, true);
+assert.equal(
+    latestUndoRecord(namespace).id,
+    'repair-big',
+    'the latest omitted snapshot must remain visible so UI can explain why undo is unavailable',
+);
+
+namespace = appendRepairJournal(namespace, {
+    id: 'repair-upsert',
+    status: 'applied',
+    frontendSynced: false,
+    snapshot: { stat_data: { value: 1 } },
+});
+namespace = appendRepairJournal(namespace, {
+    id: 'repair-upsert',
+    status: 'applied',
+    frontendSynced: true,
+    snapshot: { stat_data: { value: 1 } },
+});
+assert.equal(
+    namespace.repairJournal.filter((record) => record.id === 'repair-upsert').length,
+    1,
+    'repair journal updates must upsert instead of duplicating one repair',
+);
+assert.equal(namespace.repairJournal.at(-1).frontendSynced, true);
+
+namespace = appendRepairJournal(namespace, {
+    id: 'repair-rolled-back',
+    status: 'rolled_back',
+    snapshot: { stat_data: { value: 2 } },
+});
+assert.equal(
+    latestUndoRecord(namespace).id,
+    'repair-upsert',
+    '已回滚或失败的终态记录不得遮挡最近一次可撤销修复',
+);
 
 console.log('continuity core tests passed');

@@ -309,6 +309,30 @@ export function preparePatch(patchBlock, oldData) {
     };
 }
 
+function leafPaths(value, parts = [], result = []) {
+    if (Array.isArray(value)) {
+        if (!value.length) result.push(pointerPath(parts));
+        else value.forEach((item, index) => leafPaths(item, [...parts, String(index)], result));
+        return result;
+    }
+    if (isPlainObject(value)) {
+        const entries = Object.entries(value);
+        if (!entries.length) result.push(pointerPath(parts));
+        else entries.forEach(([key, item]) => leafPaths(item, [...parts, key], result));
+        return result;
+    }
+    result.push(pointerPath(parts));
+    return result;
+}
+
+function pathCoveredByTouched(path, touched) {
+    return (touched || []).some((candidate) => (
+        candidate === ''
+        || path === candidate
+        || path.startsWith(`${candidate}/`)
+    ));
+}
+
 export function validatePatchResult(oldData, newData, prepared) {
     const oldStat = statDataOf(oldData);
     if (
@@ -365,6 +389,25 @@ export function validatePatchResult(oldData, newData, prepared) {
             });
         }
     }
+    for (const path of leafPaths(oldStat)) {
+        if (pathCoveredByTouched(path, prepared.touched)) continue;
+        const oldHit = pointerGet(oldStat, path);
+        const actualHit = pointerGet(actual, path);
+        if (
+            !actualHit.found
+            // MVU may legitimately recompute present derived/read-only fields
+            // while applying an unrelated patch. Their removal is still unsafe.
+            || (!pathHasReadonlySegment(path) && !deepSubset(oldHit.value, actualHit.value))
+        ) {
+            rejected.push(path || '/');
+            details.push({
+                path: path || '/',
+                expected: oldHit.found ? deepClone(oldHit.value) : '(路径应存在)',
+                actual: actualHit.found ? deepClone(actualHit.value) : '(路径不存在)',
+                reason: '补丁未触碰的旧字段必须保留',
+            });
+        }
+    }
     return rejected.length
         ? {
             ok: false,
@@ -374,6 +417,38 @@ export function validatePatchResult(oldData, newData, prepared) {
             reason: `有 ${rejected.length} 个目标未按补丁落地：${rejected.slice(0, 5).join('、')}`,
         }
         : { ok: true, nochange: false, rejected: [], details: [] };
+}
+
+/**
+ * Restore only the paths touched by a rejected repair.  Values written by
+ * other MVU actors outside those paths are deliberately preserved.
+ */
+export function restoreTouchedPaths(currentData, snapshotData, touchedPaths = []) {
+    const restored = deepClone(currentData);
+    const snapshotStat = statDataOf(snapshotData);
+    let restoredStat = statDataOf(restored);
+    if (!restoredStat || !snapshotStat) return null;
+
+    for (const path of touchedPaths || []) {
+        if (path === '') {
+            if (isPlainObject(restored) && isPlainObject(restored.stat_data)) {
+                restored.stat_data = deepClone(snapshotStat);
+                restoredStat = restored.stat_data;
+                continue;
+            }
+            return deepClone(snapshotData);
+        }
+        const destination = parentInfo(restoredStat, path);
+        if (!destination) return null;
+        const original = pointerGet(snapshotStat, path);
+        if (original.found) {
+            destination.parent[destination.key] = deepClone(original.value);
+        } else {
+            const removed = removeAt(destination.parent, destination.key);
+            if (!removed.ok) return null;
+        }
+    }
+    return restored;
 }
 
 function extensionRoots(character) {
@@ -523,20 +598,24 @@ function unquoteYamlScalar(value) {
         }
         return text.slice(1, -1).replace(/''/gu, "'");
     }
-    if (/^(?:null|~)$/iu.test(text)) return null;
-    if (/^(?:true|false)$/iu.test(text)) return text.toLowerCase() === 'true';
-    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/iu.test(text)) {
-        const number = Number(text);
+    const uncommented = text.replace(/\s+#.*$/u, '').trim();
+    if (/^(?:null|~)$/iu.test(uncommented)) return null;
+    if (/^(?:true|false)$/iu.test(uncommented)) {
+        return uncommented.toLowerCase() === 'true';
+    }
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/iu.test(uncommented)) {
+        const number = Number(uncommented);
         if (Number.isFinite(number)) return number;
     }
-    if (text === '{}') return {};
-    if (text === '[]') return [];
-    return text.replace(/\s+#.*$/u, '').trim();
+    if (uncommented === '{}') return {};
+    if (uncommented === '[]') return [];
+    return uncommented;
 }
 
 /**
  * Parse the conservative YAML subset commonly used by [initvar] lorebook
- * entries. Unsupported list/block constructs are ignored instead of guessed.
+ * entries. Mapping and block-sequence containers are selected from indentation;
+ * unsupported block scalar/anchor constructs are still ignored instead of guessed.
  */
 export function parseInitializationText(source) {
     const original = String(source || '')
@@ -554,22 +633,75 @@ export function parseInitializationText(source) {
         }
     }
 
-    const root = {};
-    const stack = [{ indent: -1, value: root }];
-    let parsedFields = 0;
-    for (const rawLine of original.split(/\r?\n/u)) {
-        if (!rawLine.trim() || /^\s*(?:#|---\s*$|\.\.\.\s*$)/u.test(rawLine)) continue;
-        if (/^\s*-\s+/u.test(rawLine)) continue;
-        const match = rawLine.match(/^(\s*)([^:#][^:]*?):(?:\s*(.*))?$/u);
-        if (!match) continue;
-        const indent = match[1].replace(/\t/gu, '    ').length;
-        let key = match[2].trim();
+    const lines = original.split(/\r?\n/u);
+    const lineIndent = (line) => String(line.match(/^(\s*)/u)?.[1] || '')
+        .replace(/\t/gu, '    ').length;
+    const ignorable = (line) => (
+        !line.trim()
+        || /^\s*(?:#|---\s*$|\.\.\.\s*$)/u.test(line)
+    );
+    const childContainer = (index, indent) => {
+        for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+            const next = lines[cursor];
+            if (ignorable(next)) continue;
+            if (lineIndent(next) <= indent) return {};
+            return /^\s*-\s+/u.test(next) ? [] : {};
+        }
+        return {};
+    };
+    const normalizeKey = (rawKey) => {
+        let key = String(rawKey || '').trim();
         if (
             (key.startsWith('"') && key.endsWith('"'))
             || (key.startsWith("'") && key.endsWith("'"))
         ) {
             key = String(unquoteYamlScalar(key));
         }
+        return key;
+    };
+
+    const root = {};
+    const stack = [{ indent: -1, value: root }];
+    let parsedFields = 0;
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        const rawLine = lines[lineIndex];
+        if (ignorable(rawLine)) continue;
+        const sequence = rawLine.match(/^(\s*)-\s+(.*)$/u);
+        if (sequence) {
+            const indent = sequence[1].replace(/\t/gu, '    ').length;
+            while (stack.length > 1 && stack.at(-1).indent >= indent) stack.pop();
+            const parent = stack.at(-1).value;
+            if (!Array.isArray(parent)) continue;
+            const itemSource = sequence[2].trim();
+            const mapping = itemSource.match(/^([^:#][^:]*?):(?:\s*(.*))?$/u);
+            if (!mapping) {
+                parent.push(unquoteYamlScalar(itemSource));
+                parsedFields += 1;
+                continue;
+            }
+            const item = {};
+            parent.push(item);
+            stack.push({ indent, value: item });
+            const key = normalizeKey(mapping[1]);
+            if (!key || key === '<<') continue;
+            const scalar = String(mapping[2] ?? '').trim();
+            if (!scalar || /^[|>][+-]?$/u.test(scalar)) {
+                if (/^[|>]/u.test(scalar)) continue;
+                const child = childContainer(lineIndex, indent);
+                item[key] = child;
+                // The key starts after "- ", so siblings at indent + 2 must
+                // pop this child while deeper lines remain nested inside it.
+                stack.push({ indent: indent + 2, value: child });
+            } else {
+                item[key] = unquoteYamlScalar(scalar);
+                parsedFields += 1;
+            }
+            continue;
+        }
+        const match = rawLine.match(/^(\s*)([^:#][^:]*?):(?:\s*(.*))?$/u);
+        if (!match) continue;
+        const indent = match[1].replace(/\t/gu, '    ').length;
+        const key = normalizeKey(match[2]);
         if (!key || key === '<<') continue;
         while (stack.length > 1 && stack.at(-1).indent >= indent) stack.pop();
         const parent = stack.at(-1).value;
@@ -577,7 +709,7 @@ export function parseInitializationText(source) {
         const scalar = String(match[3] ?? '').trim();
         if (!scalar || /^[|>][+-]?$/u.test(scalar)) {
             if (/^[|>]/u.test(scalar)) continue;
-            const child = {};
+            const child = childContainer(lineIndex, indent);
             parent[key] = child;
             stack.push({ indent, value: child });
         } else {
@@ -591,11 +723,11 @@ export function parseInitializationText(source) {
 function resourceKeyPart(key, kind) {
     const source = String(key || '').trim();
     const suffix = kind === 'current'
-        ? /^(.*?)(?:[_\s.·-]*)(当前|现值|current|cur)$/iu
-        : /^(.*?)(?:[_\s.·-]*)(最大|上限|maximum|max)$/iu;
+        ? /^(.*?)(?:[_\s.·-]*)(当前值?|现值|current(?:[_\s.·-]*value)?|cur(?:[_\s.·-]*value)?)$/iu
+        : /^(.*?)(?:[_\s.·-]*)(最大值?|上限值?|maximum(?:[_\s.·-]*value)?|max(?:[_\s.·-]*value)?)$/iu;
     const prefix = kind === 'current'
-        ? /^(当前|现值|current|cur)(?:[_\s.·-]*)(.+)$/iu
-        : /^(最大|上限|maximum|max)(?:[_\s.·-]*)(.+)$/iu;
+        ? /^(当前值?|现值|current(?:[_\s.·-]*value)?|cur(?:[_\s.·-]*value)?)(?:[_\s.·-]*)(.+)$/iu
+        : /^(最大值?|上限值?|maximum(?:[_\s.·-]*value)?|max(?:[_\s.·-]*value)?)(?:[_\s.·-]*)(.+)$/iu;
     const suffixMatch = source.match(suffix);
     const rawBase = suffixMatch?.[1] || source.match(prefix)?.[2] || '';
     const base = rawBase.replace(/[_\s.·-]+/gu, '').toLowerCase();
@@ -620,13 +752,26 @@ function numericPairAt(stat, pair) {
 function collectResourcePairs(root) {
     const pairs = [];
     function walk(value, parts) {
+        if (Array.isArray(value)) {
+            value.forEach((item, index) => {
+                if (item && typeof item === 'object') walk(item, [...parts, String(index)]);
+            });
+            return;
+        }
         if (!isPlainObject(value)) return;
         const currentByBase = new Map();
         const maximumByBase = new Map();
+        const nestedBase = String(parts.at(-1) || '')
+            .replace(/[_\s.·-]+/gu, '')
+            .toLowerCase();
         for (const [key, item] of Object.entries(value)) {
             if (typeof item !== 'number' || !Number.isFinite(item)) continue;
-            const currentBase = resourceKeyPart(key, 'current');
-            const maximumBase = resourceKeyPart(key, 'maximum');
+            const currentBase = resourceKeyPart(key, 'current')
+                || (/^(?:当前值?|现值|current(?:[_\s.·-]*value)?|cur(?:[_\s.·-]*value)?)$/iu.test(key)
+                    ? nestedBase : '');
+            const maximumBase = resourceKeyPart(key, 'maximum')
+                || (/^(?:最大值?|上限值?|maximum(?:[_\s.·-]*value)?|max(?:[_\s.·-]*value)?)$/iu.test(key)
+                    ? nestedBase : '');
             if (currentBase) currentByBase.set(currentBase, key);
             if (maximumBase) maximumByBase.set(maximumBase, key);
         }
@@ -642,7 +787,7 @@ function collectResourcePairs(root) {
             });
         }
         for (const [key, item] of Object.entries(value)) {
-            if (isPlainObject(item)) walk(item, [...parts, key]);
+            if (item && typeof item === 'object') walk(item, [...parts, key]);
         }
     }
     walk(root, []);
@@ -661,8 +806,9 @@ function pathWasTouched(path, touchedPaths) {
 /**
  * Find resource fields which were full in the declared/previous initial state,
  * whose derived maximum then increased while the current value stayed frozen.
- * This deliberately does not use resource names such as HP/MP, so it works for
- * arbitrary MVU cards while refusing capacity pairs (for example load 0/25).
+ * A declared initvar full value is authoritative for arbitrary field names.
+ * Previous-floor inference is intentionally restricted to resource semantics,
+ * so counters such as floor/chapter 10/20 are not silently filled to 20.
  */
 export function findOpeningResourceMismatches(currentData, {
     initialStates = [],
@@ -687,13 +833,21 @@ export function findOpeningResourceMismatches(currentData, {
             const initial = numericPairAt(initialStat, pair);
             return !!(
                 initial
+                && initial.maximum > 0
                 && initial.current === initial.maximum
                 && now.current === initial.current
             );
         });
         const previous = numericPairAt(previousStat, pair);
+        const progressLikePair = /进度|阶段|任务|完成度|次数|层数|周目|章节|等级|级别|回合|轮数|天数|progress|stage|quest|count|charge|floor|chapter|level|round|turn|day/iu.test(pair.base);
+        const resourceLikePair = (
+            /生命|血量|气血|体力|耐力|精力|法力|魔力|灵力|气力|理智|心智|能量|health|mana|stamina|vitality|sanity|energy|resource/iu.test(pair.base)
+            || /^(?:hp|mp|sp|san)$/iu.test(pair.base)
+        );
         const derivedIncreaseFromFull = !!(
-            previous
+            !progressLikePair
+            && resourceLikePair
+            && previous
             && previous.current === previous.maximum
             && now.current === previous.current
             && now.maximum > previous.maximum
