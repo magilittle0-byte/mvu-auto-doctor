@@ -109,15 +109,20 @@ export function normalizeForumState(value, {
         seenContent.add(contentKey);
         deduped.push(post);
     }
+    const postLimit = Math.max(8, integer(maxPosts, 36, 8, 100));
+    const sortedPosts = deduped
+        .sort((left, right) => right.updatedTurn - left.updatedTurn || right.createdTurn - left.createdTurn);
+    const retainedPosts = [
+        ...sortedPosts.filter((post) => post.status === 'active').slice(0, postLimit),
+        ...sortedPosts.filter((post) => post.status === 'archived').slice(0, postLimit),
+    ].sort((left, right) => right.updatedTurn - left.updatedTurn || right.createdTurn - left.createdTurn);
     return {
         version: 1,
         chatId: String(chatId || source.chatId || ''),
         turn,
         updatedAt: integer(source.updatedAt, 0, 0),
         summary: text(source.summary, 500),
-        posts: deduped
-            .sort((left, right) => right.updatedTurn - left.updatedTurn || right.createdTurn - left.createdTurn)
-            .slice(0, Math.max(8, integer(maxPosts, 36, 8, 100))),
+        posts: retainedPosts,
         lastSource: plainObject(source.lastSource) ? {
             index: integer(source.lastSource.index, -1, -1, 999999),
             messageId: text(source.lastSource.messageId, 160),

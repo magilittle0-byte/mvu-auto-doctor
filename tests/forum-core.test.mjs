@@ -48,6 +48,35 @@ const archived = applyForumUpdate(second, {
 const view = forumView(archived, { chatId: 'chat-a' });
 assert.equal(view.active.length, 1);
 assert.equal(view.archived.length, 1);
+
+const capacityPosts = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+        id: `ARCHIVE-${index}`,
+        board: '归档',
+        title: `归档帖${index}`,
+        author: '旧网友',
+        body: '已经结束的旧话题。',
+        status: 'archived',
+        createdTurn: index + 1,
+        updatedTurn: 100 + index,
+    })),
+    ...Array.from({ length: 8 }, (_, index) => ({
+        id: `ACTIVE-${index}`,
+        board: '当前',
+        title: `活跃帖${index}`,
+        author: '新网友',
+        body: '仍在讨论的当前话题。',
+        status: 'active',
+        createdTurn: 200 + index,
+        updatedTurn: index + 1,
+    })),
+];
+const capacityView = forumView({ chatId: 'chat-capacity', posts: capacityPosts }, {
+    chatId: 'chat-capacity',
+    maxPosts: 8,
+});
+assert.equal(capacityView.active.length, 8, 'recent archives must not evict active posts');
+assert.equal(capacityView.archived.length, 8, 'archives use an independent bounded capacity');
 assert.ok(view.boards.includes('求助区'));
 
 const normalized = normalizeForumState({

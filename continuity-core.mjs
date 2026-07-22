@@ -15,6 +15,7 @@ const KINDS = new Set([
 ]);
 
 const KNOWLEDGE = new Set(['hidden', 'rumor', 'observed']);
+const KNOWLEDGE_RANK = Object.freeze({ hidden: 0, rumor: 1, observed: 2 });
 
 const ORIGINS = new Set([
     'main_derivative',
@@ -134,6 +135,7 @@ export function emptyContinuityState(chatId = '') {
             threadId: '',
             reason: '',
         },
+        lastSource: null,
         threads: [],
         updatedAt: 0,
     };
@@ -250,9 +252,18 @@ export function normalizeContinuityState(value, {
     }
     const activeLimit = boundedInteger(maxThreads, 1, 24, 6);
     const resolvedLimit = boundedInteger(maxResolved, 0, 24, 12);
-    const active = allThreads
-        .filter((thread) => thread.stage !== 'resolved')
-        .slice(0, activeLimit);
+    const runnable = allThreads.filter((thread) => (
+        thread.stage !== 'resolved' && thread.stage !== 'dormant'
+    ));
+    const active = runnable.slice(0, activeLimit);
+    const overflow = runnable.slice(activeLimit).map((thread) => ({
+        ...thread,
+        stage: 'dormant',
+    }));
+    const dormant = [
+        ...allThreads.filter((thread) => thread.stage === 'dormant'),
+        ...overflow,
+    ];
     const resolved = allThreads
         .filter((thread) => thread.stage === 'resolved')
         .sort((left, right) => (
@@ -265,7 +276,10 @@ export function normalizeContinuityState(value, {
         chatId: cleanText(chatId || source.chatId, 180),
         turn,
         lastTick: normalizeTick(source.lastTick, turn),
-        threads: [...active, ...resolved],
+        lastSource: normalizeSourceRef(source.lastSource),
+        threads: [...active, ...dormant, ...resolved],
+        droppedCount: overflow.length,
+        deferredCount: dormant.length,
         updatedAt: boundedInteger(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
 }
@@ -318,6 +332,7 @@ export function continuityLedgerView(value, {
         updatedAt: state.updatedAt,
         lastTick: clone(state.lastTick),
         activeCount: active.length,
+        dormantCount: active.filter((thread) => thread.stage === 'dormant').length,
         resolvedCount: resolved.length,
         echoCount: echoes.length,
         active,
@@ -373,6 +388,21 @@ export function enforceContinuityPolicy(previous, candidate, {
 } = {}) {
     const before = normalizeContinuityState(previous, { maxThreads });
     const after = normalizeContinuityState(candidate, { maxThreads });
+    const gateUnmanifestedKnowledge = (baseline, proposed) => {
+        const protectedThread = clone(proposed);
+        const mayBePublic = ['linked', 'converging'].includes(protectedThread.relation)
+            || ['manifested', 'resolved'].includes(protectedThread.stage);
+        if (
+            !mayBePublic
+            && ['independent', 'latent'].includes(protectedThread.relation)
+            && (baseline?.knowledge || 'hidden') === 'hidden'
+            && protectedThread.knowledge !== 'hidden'
+        ) {
+            protectedThread.knowledge = 'hidden';
+            protectedThread.rumors = clone(baseline?.rumors || []);
+        }
+        return protectedThread;
+    };
     const oldById = new Map(before.threads.map((thread) => [thread.id, thread]));
     const newById = new Map(after.threads.map((thread) => [thread.id, thread]));
     const changedExisting = after.threads
@@ -387,7 +417,7 @@ export function enforceContinuityPolicy(previous, candidate, {
     const selectedChangedId = changedExisting[0]?.id || '';
     const threads = before.threads.map((old) => {
         if (old.id !== selectedChangedId) return clone(old);
-        const proposed = clone(newById.get(old.id));
+        const proposed = gateUnmanifestedKnowledge(old, newById.get(old.id));
         proposed.origin = old.origin;
         proposed.createdTurn = old.createdTurn;
         proposed.lastAdvancedTurn = before.turn + 1;
@@ -420,6 +450,7 @@ export function enforceContinuityPolicy(previous, candidate, {
     const autonomousBefore = before.threads.filter((thread) => (
         thread.origin !== 'main_derivative'
         && thread.stage !== 'resolved'
+        && thread.stage !== 'dormant'
     ));
     const cadence = autonomy === 'expansive' ? 2 : 3;
     const autonomousLimit = autonomy === 'expansive' ? 4 : 3;
@@ -431,7 +462,9 @@ export function enforceContinuityPolicy(previous, candidate, {
         || before.turn - latestAutonomousCreation >= cadence;
 
     const activeIds = new Set(
-        threads.filter((thread) => thread.stage !== 'resolved').map((thread) => thread.id),
+        threads
+            .filter((thread) => !['resolved', 'dormant'].includes(thread.stage))
+            .map((thread) => thread.id),
     );
     let remaining = Math.max(0, maxThreads - activeIds.size);
     const accepted = [];
@@ -451,7 +484,7 @@ export function enforceContinuityPolicy(previous, candidate, {
     for (const thread of causal) {
         if (remaining <= 0 || accepted.length >= 2) break;
         accepted.push(thread);
-        remaining -= thread.stage === 'resolved' ? 0 : 1;
+        remaining -= ['resolved', 'dormant'].includes(thread.stage) ? 0 : 1;
     }
     if (
         remaining > 0
@@ -464,7 +497,7 @@ export function enforceContinuityPolicy(previous, candidate, {
         accepted.push(autonomous[0]);
     }
     for (const item of accepted.filter(Boolean)) {
-        const fresh = clone(item);
+        const fresh = gateUnmanifestedKnowledge(null, item);
         fresh.createdTurn = before.turn + 1;
         fresh.lastAdvancedTurn = before.turn + 1;
         if (fresh.stage === 'resolved') fresh.resolvedTurn = before.turn + 1;
@@ -633,18 +666,49 @@ export function mergeMarkerRecords(state, records, {
         const incoming = normalizeThread(raw, byId.size, normalized.turn);
         if (!incoming) continue;
         const old = byId.get(incoming.id);
-        byId.set(incoming.id, old ? {
+        if (!old) {
+            byId.set(incoming.id, incoming);
+            continue;
+        }
+        const stage = old.stage === 'resolved' && incoming.stage !== 'resolved'
+            ? 'resolved'
+            : incoming.stage === 'seeded' && old.stage !== 'seeded'
+                ? old.stage
+                : incoming.stage;
+        const knowledge = KNOWLEDGE_RANK[incoming.knowledge] >= KNOWLEDGE_RANK[old.knowledge]
+            ? incoming.knowledge
+            : old.knowledge;
+        byId.set(incoming.id, {
             ...old,
             ...incoming,
+            title: incoming.title === incoming.id ? old.title : incoming.title || old.title,
+            stage,
             origin: old.origin || incoming.origin,
             relation: incoming.relation === 'linked' ? 'linked' : old.relation,
+            offscreenBeat: incoming.offscreenBeat || old.offscreenBeat,
+            nextBeat: incoming.nextBeat || old.nextBeat,
+            trigger: incoming.trigger || old.trigger,
             seedBasis: incoming.seedBasis || old.seedBasis,
             intersection: incoming.intersection || old.intersection,
+            causedBy: incoming.causedBy.length ? incoming.causedBy : old.causedBy,
+            effects: incoming.effects.length ? incoming.effects : old.effects,
+            rumors: incoming.rumors.length ? incoming.rumors : old.rumors,
+            resolution: incoming.resolution || old.resolution,
+            actors: incoming.actors.length ? incoming.actors : old.actors,
+            locations: incoming.locations.length ? incoming.locations : old.locations,
+            knowledge,
+            urgency: Math.max(old.urgency, incoming.urgency),
+            createdTurn: old.createdTurn,
+            resolvedTurn: stage === 'resolved'
+                ? old.resolvedTurn || incoming.resolvedTurn
+                : 0,
             sourceRefs: old.sourceRefs || [],
-        } : incoming);
+        });
     }
-    normalized.threads = [...byId.values()].slice(0, maxThreads);
-    return normalized;
+    return normalizeContinuityState({
+        ...normalized,
+        threads: [...byId.values()],
+    }, { chatId, maxThreads });
 }
 
 export function buildContinuityInjection(state, {
@@ -652,13 +716,23 @@ export function buildContinuityInjection(state, {
     maxVisible = 1,
 } = {}) {
     const normalized = normalizeContinuityState(state, { maxThreads: 12 });
+    const isHiddenBackstage = (thread) => !!thread
+        && thread.knowledge === 'hidden'
+        && ['independent', 'latent'].includes(thread.relation);
     const active = normalized.threads.filter((thread) => thread.stage !== 'resolved');
     const aftermath = normalized.threads.filter((thread) => (
         thread.stage === 'resolved'
         && normalized.turn - thread.resolvedTurn <= 6
         && (thread.effects.length || thread.rumors.length)
+        && !isHiddenBackstage(thread)
     ));
     if (!active.length && !aftermath.length) return '';
+    const tickThread = normalized.threads.find(
+        (thread) => thread.id === normalized.lastTick.threadId,
+    );
+    const tickReason = tickThread && !isHiddenBackstage(tickThread)
+        ? normalized.lastTick.reason || '未登记'
+        : '幕后条件变化已记录（细节已折叠）';
     const directorText = director === 'stitches'
         ? '缝合怪负责场景与剧情提案；本账本只约束连续性。'
         : director === 'world'
@@ -672,21 +746,34 @@ export function buildContinuityInjection(state, {
                         : '当前没有检测到外部剧情推进器；可按账本低频推进世界支线。';
     const rows = active
         .sort((left, right) => right.urgency - left.urgency)
-        .map((thread) => [
-            `[${thread.id}] ${thread.title}`,
-            `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
-            `来源=${CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin}`,
-            `主线关系=${CONTINUITY_RELATION_LABELS[thread.relation] || thread.relation}`,
-            `认知=${thread.knowledge}`,
-            `现状=${thread.summary || '无新增事实'}`,
-            `幕后变化=${thread.offscreenBeat || '本轮未推进'}`,
-            `触发=${thread.trigger || '等待自然接口'}`,
-            `下一拍=${thread.nextBeat || '保持，不强推'}`,
-            `汇流条件=${thread.intersection || '无；允许独立发展或在幕后结束'}`,
-            thread.causedBy.length ? `因果父项=${thread.causedBy.join('、')}` : '',
-            thread.effects.length ? `已生效影响=${thread.effects.join('；')}` : '',
-            thread.rumors.length ? `传播中的流言=${thread.rumors.join('；')}` : '',
-        ].filter(Boolean).join('；'));
+        .map((thread) => {
+            const hiddenBackstage = isHiddenBackstage(thread);
+            if (hiddenBackstage) {
+                return [
+                    `[${thread.id}] 幕后事件（标题已折叠）`,
+                    `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
+                    `来源=${CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin}`,
+                    `主线关系=${CONTINUITY_RELATION_LABELS[thread.relation] || thread.relation}`,
+                    '认知=hidden',
+                    '调度=按账本条件只在幕后推进；正文仅在真实传播、时空重合或因果汇流成立后显示可观察痕迹',
+                ].join('；');
+            }
+            return [
+                `[${thread.id}] ${thread.title}`,
+                `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
+                `来源=${CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin}`,
+                `主线关系=${CONTINUITY_RELATION_LABELS[thread.relation] || thread.relation}`,
+                `认知=${thread.knowledge}`,
+                `现状=${thread.summary || '无新增事实'}`,
+                `幕后变化=${thread.offscreenBeat || '本轮未推进'}`,
+                `触发=${thread.trigger || '等待自然接口'}`,
+                `下一拍=${thread.nextBeat || '保持，不强推'}`,
+                `汇流条件=${thread.intersection || '无；允许独立发展或在幕后结束'}`,
+                thread.causedBy.length ? `因果父项=${thread.causedBy.join('、')}` : '',
+                thread.effects.length ? `已生效影响=${thread.effects.join('；')}` : '',
+                thread.rumors.length ? `传播中的流言=${thread.rumors.join('；')}` : '',
+            ].filter(Boolean).join('；');
+        });
     const aftermathRows = aftermath.map((thread) => [
         `[${thread.id}] ${thread.title}（已结束）`,
         `收束=${thread.resolution || thread.summary || '事件已经结束'}`,
@@ -697,7 +784,7 @@ export function buildContinuityInjection(state, {
         '<Parallel_Continuity_Bridge>',
         directorText,
         normalized.lastTick.action
-            ? `最近世界调度=${CONTINUITY_TICK_LABELS[normalized.lastTick.action] || normalized.lastTick.action}；对象=${normalized.lastTick.threadId || '全局'}；依据=${normalized.lastTick.reason || '未登记'}`
+            ? `最近世界调度=${CONTINUITY_TICK_LABELS[normalized.lastTick.action] || normalized.lastTick.action}；对象=${normalized.lastTick.threadId || '全局'}；依据=${tickReason}`
             : '最近世界调度=尚未运行。',
         '以下内容是支线连续性账本，不是玩家行动授权，也不是要求本回合全部发生。',
         `本回合最多让${Math.max(0, Number(maxVisible) || 1)}条支线产生可观察变化；已有事件优先，不得另造同义支线。`,
@@ -726,7 +813,7 @@ export function appendRepairJournal(namespace, record, {
     maxSnapshotChars = 180000,
 } = {}) {
     const next = namespace && typeof namespace === 'object' ? clone(namespace) : {};
-    const journal = Array.isArray(next.repairJournal) ? next.repairJournal : [];
+    const journal = Array.isArray(next.repairJournal) ? clone(next.repairJournal) : [];
     const clean = clone(record || {});
     if (clean.snapshot) {
         try {
@@ -739,7 +826,11 @@ export function appendRepairJournal(namespace, record, {
             clean.snapshotOmitted = true;
         }
     }
-    journal.push(clean);
+    const existingIndex = clean.id
+        ? journal.findIndex((item) => item?.id === clean.id)
+        : -1;
+    if (existingIndex >= 0) journal[existingIndex] = clean;
+    else journal.push(clean);
     next.repairJournal = journal.slice(-Math.max(1, Number(maxEntries) || 5));
     return next;
 }
@@ -750,7 +841,7 @@ export function latestUndoRecord(namespace) {
         : [];
     for (let index = journal.length - 1; index >= 0; index -= 1) {
         const record = journal[index];
-        if (record?.snapshot && record?.status !== 'undone') return clone(record);
+        if (['applied', 'prepared'].includes(record?.status)) return clone(record);
     }
     return null;
 }
