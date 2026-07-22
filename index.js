@@ -40,7 +40,7 @@ import {
 } from './forum-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.4.2';
+const VERSION = '1.4.3';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -203,6 +203,7 @@ function setForumStatus(text, kind = '') {
     if (ui?.forumStatus) {
         ui.forumStatus.textContent = latestForumStatus;
         ui.forumStatus.dataset.kind = kind;
+        ui.forumStatus.hidden = !kind;
     }
     if (ui?.forumSettingsStatus) {
         ui.forumSettingsStatus.textContent = latestForumStatus;
@@ -2824,6 +2825,7 @@ function ledgerSurfaceFrom(root) {
         resolved: root.querySelector('.mvuad-ledger-resolved'),
         resolvedSummary: root.querySelector('.mvuad-ledger-resolved-summary'),
         resolvedList: root.querySelector('.mvuad-ledger-resolved-list'),
+        settingsFoldSummary: root.querySelector('.mvuad-settings-fold-summary'),
         echoes: root.querySelector('.mvuad-echo-list'),
         echoEmpty: root.querySelector('.mvuad-echo-empty'),
         rendered: false,
@@ -2907,6 +2909,12 @@ function renderLedgerSurface(surface, view, namespace, settings, context) {
     }
     surface.resolved.hidden = view.resolvedCount === 0;
     surface.resolvedSummary.textContent = `已收束支线（${view.resolvedCount}）`;
+    if (surface.settingsFoldSummary) {
+        const detailCount = view.activeCount + view.resolvedCount + view.echoCount;
+        surface.settingsFoldSummary.textContent = detailCount
+            ? `查看支线与风声明细（${detailCount} 项）`
+            : '查看支线与风声明细';
+    }
 
     if (surface.echoes) {
         surface.echoes.replaceChildren();
@@ -3058,6 +3066,9 @@ function buildForumPostCard(post, { openComments = false } = {}) {
     card.className = 'mvuad-forum-post';
     card.dataset.board = post.board;
     card.dataset.kind = post.kind;
+    const heatValue = Math.max(0, Number(post.heat) || 0);
+    card.dataset.heat = String(heatValue);
+    card.dataset.heatTier = heatValue > 50 ? 'hot' : heatValue > 20 ? 'warm' : 'normal';
     const heading = document.createElement('div');
     heading.className = 'mvuad-forum-post-heading';
     const board = document.createElement('span');
@@ -3066,21 +3077,48 @@ function buildForumPostCard(post, { openComments = false } = {}) {
     const title = document.createElement('b');
     title.className = 'mvuad-forum-post-title';
     title.textContent = post.title;
-    heading.append(board, title);
+    const heat = document.createElement('span');
+    heat.className = 'mvuad-forum-heat';
+    heat.title = `帖子热度 ${heatValue}`;
+    heat.textContent = heatValue > 50
+        ? `🔥🔥 ${heatValue}`
+        : heatValue > 20
+            ? `🔥 ${heatValue}`
+            : `热 ${heatValue}`;
+    heading.append(board, title, heat);
 
     const meta = document.createElement('div');
     meta.className = 'mvuad-forum-post-meta';
+    meta.dataset.kind = post.kind;
     meta.textContent = [
         post.author,
         FORUM_KIND_LABELS[post.kind] || post.kind,
-        `热度 ${post.heat}`,
         `第 ${post.updatedTurn} 页`,
         post.causalSignal ? '已形成外部影响' : '',
     ].filter(Boolean).join(' · ');
-    const body = document.createElement('div');
-    body.className = 'mvuad-forum-post-body';
-    body.textContent = post.body;
-    card.append(heading, meta, body);
+    card.append(heading, meta);
+
+    const bodyText = String(post.body || '');
+    if (bodyText.length > 180) {
+        const bodyDetails = document.createElement('details');
+        bodyDetails.className = 'mvuad-forum-body-details';
+        const bodySummary = document.createElement('summary');
+        bodySummary.setAttribute('aria-label', '展开或收起帖子全文');
+        const preview = document.createElement('div');
+        preview.className = 'mvuad-forum-post-body mvuad-forum-post-preview';
+        preview.textContent = bodyText;
+        bodySummary.appendChild(preview);
+        const fullBody = document.createElement('div');
+        fullBody.className = 'mvuad-forum-post-body mvuad-forum-post-full';
+        fullBody.textContent = bodyText;
+        bodyDetails.append(bodySummary, fullBody);
+        card.appendChild(bodyDetails);
+    } else {
+        const body = document.createElement('div');
+        body.className = 'mvuad-forum-post-body';
+        body.textContent = bodyText;
+        card.appendChild(body);
+    }
 
     if (post.tags.length) {
         const tags = document.createElement('div');
@@ -3107,16 +3145,22 @@ function buildForumPostCard(post, { openComments = false } = {}) {
         empty.textContent = '还没有人回帖。';
         list.appendChild(empty);
     }
-    for (const comment of post.comments) {
+    for (const [commentIndex, comment] of post.comments.entries()) {
         const row = document.createElement('div');
         row.className = 'mvuad-forum-comment';
+        row.dataset.floor = String(commentIndex + 1);
+        const floor = document.createElement('span');
+        floor.className = 'mvuad-forum-comment-floor';
+        floor.textContent = `${commentIndex + 1}楼`;
         const author = document.createElement('b');
         author.textContent = comment.author;
         const content = document.createElement('span');
         content.textContent = comment.body;
         const likes = document.createElement('small');
-        likes.textContent = comment.likes ? `赞 ${comment.likes}` : '';
-        row.append(author, content, likes);
+        likes.className = 'mvuad-forum-comment-likes';
+        likes.title = '点赞数';
+        likes.textContent = `▲ ${Math.max(0, Number(comment.likes) || 0)}`;
+        row.append(floor, author, content, likes);
         list.appendChild(row);
     }
     comments.appendChild(list);
@@ -3214,17 +3258,26 @@ function renderForum() {
             : settings.builtInForumEnabled && settings.forumAutoRefresh
                 ? `内置自动：每 ${settings.forumRefreshEvery} 个 AI 回合`
                 : '内置自动：关闭';
-        ui.forumSummary.textContent = [
-            state.summary || '世界各处的闲聊、求助与风声',
+        const summaryLead = document.createElement('span');
+        summaryLead.className = 'mvuad-forum-summary-lead';
+        summaryLead.textContent = state.summary || '世界各处的闲聊、求助与风声';
+        const chips = [
             `来源：${forumProviderLabel(settings.forumProvider)}`,
             autoState,
             `第 ${state.turn} 页`,
             `${state.active.length} 个活跃主题`,
             `更新：${formatLedgerTime(state.updatedAt)}`,
-        ].join(' · ');
+        ].map((value) => {
+            const chip = document.createElement('span');
+            chip.className = 'mvuad-forum-chip';
+            chip.textContent = value;
+            return chip;
+        });
+        ui.forumSummary.replaceChildren(summaryLead, ...chips);
     }
     if (ui.forumStatus) {
         ui.forumStatus.textContent = latestForumStatus;
+        ui.forumStatus.hidden = !ui.forumStatus.dataset.kind;
     }
 
     const currentFilter = ui.forumBoardFilter || 'all';
@@ -3259,9 +3312,18 @@ function renderForum() {
         if (currentFilter.startsWith('board:')) return post.board === currentFilter.slice(6);
         return true;
     });
-    ui.forumFeed?.replaceChildren(...filtered.map((post, index) => (
-        buildForumPostCard(post, { openComments: index === 0 })
-    )));
+    if (ui.forumFeed) {
+        const cards = filtered.map((post, index) => (
+            buildForumPostCard(post, { openComments: index === 0 })
+        ));
+        if (filtered.length) {
+            const end = document.createElement('div');
+            end.className = 'mvuad-forum-feed-end';
+            end.textContent = `— 共 ${filtered.length} 个主题 · 第 ${state.turn} 页 —`;
+            cards.push(end);
+        }
+        ui.forumFeed.replaceChildren(...cards);
+    }
     if (ui.forumEmpty) {
         ui.forumEmpty.hidden = filtered.length > 0;
         ui.forumEmpty.textContent = state.active.length
@@ -3367,11 +3429,13 @@ function buildForumUi() {
                 </label>
                 <button class="menu_button mvuad-forum-refresh" type="button">刷新内置内容</button>
                 <button class="menu_button mvuad-forum-external" type="button" hidden>打开 Zsd</button>
-                <button class="menu_button mvuad-forum-clear" type="button">清空内置帖子</button>
             </div>
             <div class="mvuad-forum-source-note" hidden></div>
-            <div class="mvuad-forum-status" role="status"></div>
+            <div class="mvuad-forum-status" role="status" hidden></div>
             <div class="mvuad-forum-summary"></div>
+            <div class="mvuad-forum-utility">
+                <button class="mvuad-forum-clear" type="button">清空当前内置帖子</button>
+            </div>
             <div class="mvuad-forum-filters" aria-label="论坛分类"></div>
             <div class="mvuad-forum-empty"></div>
             <div class="mvuad-forum-feed"></div>
@@ -3708,17 +3772,22 @@ function buildSettingsPanel() {
                         </div>
                         <div class="mvuad-ledger-summary"></div>
                         <div class="mvuad-ledger-empty">当前没有未结支线。生成新回复后会自动整理，也可点击“立即整理支线”。</div>
-                        <div class="mvuad-ledger-active"></div>
-                        <details class="mvuad-ledger-resolved">
-                            <summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary>
-                            <div class="mvuad-ledger-resolved-list"></div>
+                        <details class="mvuad-settings-fold">
+                            <summary class="mvuad-settings-fold-summary">查看支线与风声明细</summary>
+                            <div class="mvuad-settings-fold-body">
+                                <div class="mvuad-ledger-active"></div>
+                                <details class="mvuad-ledger-resolved">
+                                    <summary class="mvuad-ledger-resolved-summary">已收束支线（0）</summary>
+                                    <div class="mvuad-ledger-resolved-list"></div>
+                                </details>
+                                <div class="mvuad-echo-section">
+                                    <b>世界风声</b>
+                                    <div class="mvuad-ledger-note">这里只列出与事件因果有关的消息。普通水帖、吐槽和闲聊由卡内贴吧或独立论坛维护，不会被医生强行变成任务。</div>
+                                    <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
+                                    <div class="mvuad-echo-list"></div>
+                                </div>
+                            </div>
                         </details>
-                        <div class="mvuad-echo-section">
-                            <b>世界风声</b>
-                            <div class="mvuad-ledger-note">这里只列出与事件因果有关的消息。普通水帖、吐槽和闲聊由卡内贴吧或独立论坛维护，不会被医生强行变成任务。</div>
-                            <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
-                            <div class="mvuad-echo-list"></div>
-                        </div>
                     </div>
                     <div class="mvuad-section-title">内置世界论坛</div>
                     <div class="mvuad-description">

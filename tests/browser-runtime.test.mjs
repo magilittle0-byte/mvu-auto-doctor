@@ -18,7 +18,31 @@ if (!playwrightPath) {
 const { chromium } = await import(pathToFileURL(playwrightPath).href);
 
 const harness = String.raw`<!doctype html>
-<html><head><link rel="stylesheet" href="/style.css"></head><body>
+<html><head><link rel="stylesheet" href="/style.css"><style>
+:root {
+  --SmartThemeBodyColor: #dbe8f1;
+  --SmartThemeEmColor: #91a9ba;
+  --SmartThemeQuoteColor: #79c8ee;
+  --SmartThemeBlurTintColor: #101b27;
+  --SmartThemeBorderColor: #415668;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 12px;
+  color: var(--SmartThemeBodyColor);
+  background: #0d1721;
+  font: 14px/1.45 "Microsoft YaHei UI", system-ui, sans-serif;
+}
+button, select, input {
+  min-height: 32px;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 7px;
+  color: var(--SmartThemeBodyColor);
+  background: #162432;
+}
+input[type="checkbox"] { min-height: auto; }
+</style></head><body>
 <div id="extensions_settings2"></div>
 <script>
 const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
@@ -110,7 +134,7 @@ window.StoryOracleAPI = {
       const firstPage = messages[1].content.includes('"posts":[]');
       const pageMark = firstPage ? '' : '（续页' + calls.forumRuns + '）';
       const newPosts = [
-        { id: id + '-A', board: '闲聊广场', title: '北门面摊今天是不是淡了点' + pageMark, author: '盐汽水', body: '路过吃了一碗，老板说盐车晚到了。' + pageMark, kind: 'chat', tags: ['吃喝', '北门'], source: '港城普通生活', heat: 7 },
+        { id: id + '-A', board: '闲聊广场', title: '北门面摊今天是不是淡了点' + pageMark, author: '盐汽水', body: '路过吃了一碗，老板说盐车晚到了。排队时又听见后厨的人讨论北门进货，说昨夜那场雨把盐车堵在旧桥外，今天午后才可能送到。有人觉得只是清淡一点，也有人说汤底和前几日完全不同。摊主没有涨价，还给等得久的人添了半勺肉末。旁边卖饼的倒是趁机忙了起来，不少人端着面去配咸饼。要是傍晚补货真的到了，我再来回一帖，省得大家白跑。顺便提醒第一次去的人，北门这家没有挂大招牌，看到修鞋摊之后往里走十几步就是。午时人最多，想坐靠窗的位置最好提前一点。今天还有两个外地客误以为摊子关门，绕去南街后才听说只是盐车晚到。老板说晚饭照常开火，汤底补齐以后不会另外加价，已经买过午饭的人拿木牌回来还能添一小碗。' + pageMark, kind: 'chat', tags: ['吃喝', '北门'], source: '港城普通生活', heat: 57 },
         { id: id + '-B', board: '求助攻略', title: '夜里去北岸要注意什么' + pageMark, author: '赶夜路的人', body: '第一次走北岸，求问渡船和照明情况。' + pageMark, kind: 'guide', tags: ['求助'], source: '世界书中的港城交通', heat: 4 },
         { id: id + '-C', board: '交易集市', title: '收两盏防风提灯', author: '旧船票', body: '码头风大，普通灯罩用不了多久。', kind: 'trade', tags: ['收购'], source: '港城普通交易', heat: 5 },
         { id: id + '-D', board: '街巷杂谈', title: '钟楼旁那群灰鸽子又回来了', author: '晒网人', body: '一到午后就落满屋檐，看着挺热闹。', kind: 'chat', tags: ['日常'], source: '港城普通生活', heat: 6 },
@@ -253,7 +277,7 @@ try {
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.4.2');
+    assert.equal(continuity.version, '1.4.3');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
@@ -271,6 +295,15 @@ try {
     assert.match(continuity.ledgerText, /幕后独立事件（点击查看剧透）/u);
     assert.match(continuity.ledgerText, /世界脉动/u);
     assert.match(continuity.ledgerText, /保持独立/u);
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-settings-fold')?.open),
+        false,
+        '设置页低频账本明细必须默认收起',
+    );
+    if (process.env.MVUAD_SETTINGS_SCREENSHOT) {
+        await page.locator('#mvu-auto-doctor-settings').screenshot({ path: process.env.MVUAD_SETTINGS_SCREENSHOT });
+    }
+    await page.click('#mvu-auto-doctor-settings .mvuad-settings-fold-summary');
     assert.equal(
         await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card summary .mvuad-thread-title').textContent(),
         '幕后独立事件（点击查看剧透）',
@@ -338,19 +371,33 @@ try {
         true,
         '支线页不得与世界风声纵向堆叠',
     );
+    if (process.env.MVUAD_FLOATING_THREADS_SCREENSHOT) {
+        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_THREADS_SCREENSHOT });
+    }
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="echoes"]');
     assert.equal(
         await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
         true,
     );
+    if (process.env.MVUAD_FLOATING_ECHOES_SCREENSHOT) {
+        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_ECHOES_SCREENSHOT });
+    }
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="forum"]');
     assert.equal(
         await page.evaluate(() => document.querySelectorAll('#mvuad-floating-panel .mvuad-floating-forum-preview-item').length),
         3,
     );
+    if (process.env.MVUAD_FLOATING_FORUM_SCREENSHOT) {
+        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_FORUM_SCREENSHOT });
+    }
     if (process.env.MVUAD_FLOATING_SCREENSHOT) {
         await page.screenshot({ path: process.env.MVUAD_FLOATING_SCREENSHOT });
     }
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="tools"]');
+    if (process.env.MVUAD_FLOATING_TOOLS_SCREENSHOT) {
+        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_TOOLS_SCREENSHOT });
+    }
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="forum"]');
     await page.click('#mvuad-floating-panel .mvuad-floating-forum');
     await page.waitForFunction(() => !document.querySelector('#mvuad-forum-panel')?.hidden);
     const forumPanel = await page.evaluate(() => {
@@ -364,6 +411,15 @@ try {
             posts: panel?.querySelectorAll('.mvuad-forum-post').length || 0,
             comments: panel?.querySelectorAll('.mvuad-forum-comment').length || 0,
             openComments: panel?.querySelectorAll('.mvuad-forum-comments[open]').length || 0,
+            chips: panel?.querySelectorAll('.mvuad-forum-chip').length || 0,
+            floors: panel?.querySelectorAll('.mvuad-forum-comment-floor').length || 0,
+            heatBadges: panel?.querySelectorAll('.mvuad-forum-heat').length || 0,
+            hotPosts: panel?.querySelectorAll('.mvuad-forum-post[data-heat-tier="hot"]').length || 0,
+            longBodies: panel?.querySelectorAll('.mvuad-forum-body-details').length || 0,
+            feedEnds: panel?.querySelectorAll('.mvuad-forum-feed-end').length || 0,
+            clearInsideToolbar: panel?.querySelectorAll('.mvuad-forum-toolbar .mvuad-forum-clear').length || 0,
+            statusHidden: !!panel?.querySelector('.mvuad-forum-status')?.hidden,
+            statusKind: panel?.querySelector('.mvuad-forum-status')?.dataset.kind || '',
             text: panel?.textContent || '',
             externalHidden: !!panel?.querySelector('.mvuad-forum-external')?.hidden,
         };
@@ -373,11 +429,32 @@ try {
     assert.equal(forumPanel.posts, 4);
     assert.equal(forumPanel.comments, 6);
     assert.equal(forumPanel.openComments, 1, '首个活跃帖应默认展开回复，让论坛打开即有互动感');
+    assert.equal(forumPanel.chips, 5);
+    assert.equal(forumPanel.floors, 6);
+    assert.equal(forumPanel.heatBadges, 4);
+    assert.equal(forumPanel.hotPosts, 1);
+    assert.equal(forumPanel.longBodies, 1);
+    assert.equal(forumPanel.feedEnds, 1);
+    assert.equal(forumPanel.clearInsideToolbar, 0, '清空操作不得继续与刷新按钮同级拥挤');
+    assert.equal(forumPanel.statusHidden, false);
+    assert.equal(forumPanel.statusKind, 'ok', '刚完成刷新时只保留明确的成功状态行');
     assert.match(forumPanel.text, /北门面摊/u);
     assert.match(forumPanel.text, /评论 2/u);
     assert.match(forumPanel.text, /来源：医生内置论坛/u);
     assert.match(forumPanel.text, /内置自动：每 1 个 AI 回合/u);
     assert.equal(forumPanel.externalHidden, true, '未安装Zsd时仍必须显示内置论坛，而不是空跳转');
+    await page.click('.mvuad-forum-body-details > summary');
+    assert.equal(
+        await page.evaluate(() => document.querySelector('.mvuad-forum-body-details')?.open),
+        true,
+        '长帖必须可以展开查看全文',
+    );
+    await page.click('.mvuad-forum-body-details > summary');
+    if (process.env.MVUAD_FORUM_PANEL_SCREENSHOT) {
+        await page.locator('#mvuad-forum-panel .mvuad-forum-shell').screenshot({
+            path: process.env.MVUAD_FORUM_PANEL_SCREENSHOT,
+        });
+    }
     if (process.env.MVUAD_SCREENSHOT) {
         await page.screenshot({ path: process.env.MVUAD_SCREENSHOT, fullPage: true });
     }
@@ -558,7 +635,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.4.2');
+    assert.equal(lifecycle.version, '1.4.3');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

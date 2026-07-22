@@ -1,16 +1,25 @@
+:is(#mvu-auto-doctor-settings, #mvuad-floating-orb, #mvuad-floating-panel, .mvuad-forum-shell) {
+    --mvuad-accent: #7fd8ff;
+    --mvuad-accent-text: color-mix(in srgb, var(--mvuad-accent) 72%, var(--SmartThemeBodyColor));
+    --mvuad-accent-border: color-mix(in srgb, var(--mvuad-accent) 45%, var(--SmartThemeBorderColor));
+    --mvuad-control-radius: 9px;
+    --mvuad-card-radius: 10px;
+    --mvuad-panel-radius: 14px;
+}
+
 #mvu-auto-doctor-settings .mvuad-body {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     padding: 4px 2px 10px;
 }
 
 #mvu-auto-doctor-settings .mvuad-description,
 #mvu-auto-doctor-settings .mvuad-version {
     color: var(--SmartThemeBodyColor);
-    opacity: 0.78;
-    font-size: 0.9em;
-    line-height: 1.45;
+    opacity: 0.72;
+    font-size: 0.85em;
+    line-height: 1.5;
 }
 
 #mvu-auto-doctor-settings .mvuad-options {
@@ -31,14 +40,20 @@
     justify-content: space-between;
 }
 
+#mvu-auto-doctor-settings .mvuad-check {
+    min-height: 32px;
+    padding: 2px 0;
+}
+
 #mvu-auto-doctor-settings .mvuad-number input,
 #mvu-auto-doctor-settings .mvuad-select select {
     width: min(150px, 42vw);
+    min-height: 34px;
 }
 
 #mvu-auto-doctor-settings .mvuad-section-title {
-    margin-top: 6px;
-    padding-top: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
     border-top: 1px solid var(--SmartThemeBorderColor);
     font-weight: 700;
 }
@@ -50,12 +65,13 @@
 }
 
 #mvu-auto-doctor-settings .mvuad-status {
-    min-height: 38px;
-    padding: 9px 10px;
+    min-height: 34px;
+    padding: 8px 10px;
     border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 75%, transparent);
-    line-height: 1.4;
+    border-radius: var(--mvuad-control-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
+    font-size: 0.84em;
+    line-height: 1.45;
     overflow-wrap: anywhere;
 }
 
@@ -96,7 +112,7 @@
 #mvu-auto-doctor-settings .mvuad-ledger-note,
 #mvu-auto-doctor-settings .mvuad-ledger-summary,
 #mvu-auto-doctor-settings .mvuad-ledger-empty {
-    font-size: 0.88em;
+    font-size: 0.84em;
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
@@ -113,11 +129,52 @@
 }
 
 #mvu-auto-doctor-settings .mvuad-ledger-empty {
-    padding: 12px;
+    padding: 14px 10px;
     border: 1px dashed var(--SmartThemeBorderColor);
-    border-radius: 8px;
+    border-radius: var(--mvuad-card-radius);
     text-align: center;
-    opacity: 0.75;
+    opacity: 0.72;
+}
+
+#mvu-auto-doctor-settings .mvuad-settings-fold { min-width: 0; }
+
+#mvu-auto-doctor-settings .mvuad-settings-fold > summary {
+    position: relative;
+    padding: 8px 34px 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: var(--mvuad-card-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
+    cursor: pointer;
+    font-size: 0.86em;
+    font-weight: 650;
+    line-height: 1.45;
+    list-style: none;
+}
+
+#mvu-auto-doctor-settings .mvuad-settings-fold > summary::-webkit-details-marker { display: none; }
+
+#mvu-auto-doctor-settings .mvuad-settings-fold > summary::after {
+    position: absolute;
+    top: 50%;
+    right: 11px;
+    content: '⌄';
+    transform: translateY(-54%);
+    transition: transform 180ms ease;
+    opacity: 0.66;
+}
+
+#mvu-auto-doctor-settings .mvuad-settings-fold[open] > summary {
+    margin-bottom: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+}
+
+#mvu-auto-doctor-settings .mvuad-settings-fold[open] > summary::after {
+    transform: translateY(-42%) rotate(180deg);
+}
+
+#mvu-auto-doctor-settings .mvuad-settings-fold-body {
+    display: grid;
+    gap: 8px;
 }
 
 #mvu-auto-doctor-settings .mvuad-ledger-active,
@@ -135,7 +192,7 @@
 
 #mvu-auto-doctor-settings .mvuad-thread-card {
     border: 1px solid var(--SmartThemeBorderColor);
-    border-left-width: 4px;
+    border-left-width: 3px;
     border-radius: 9px;
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
     overflow: clip;
@@ -160,7 +217,7 @@
 
 #mvu-auto-doctor-settings .mvuad-thread-card > summary {
     display: grid;
-    gap: 7px;
+    gap: 6px;
     padding: 10px;
     cursor: pointer;
     list-style-position: inside;
@@ -175,7 +232,7 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 5px;
 }
 
 #mvu-auto-doctor-settings .mvuad-thread-heading {
@@ -188,7 +245,7 @@
 }
 
 #mvu-auto-doctor-settings .mvuad-thread-id {
-    font-size: 0.78em;
+    font-size: 0.74em;
     opacity: 0.58;
     overflow-wrap: anywhere;
 }
@@ -196,8 +253,8 @@
 #mvu-auto-doctor-settings .mvuad-thread-badge {
     display: inline-flex;
     align-items: center;
-    min-height: 22px;
-    padding: 2px 7px;
+    min-height: 20px;
+    padding: 1px 6px;
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 999px;
     font-size: 0.76em;
@@ -226,11 +283,11 @@
 
 #mvu-auto-doctor-settings .mvuad-thread-field {
     display: grid;
-    grid-template-columns: minmax(88px, 0.28fr) 1fr;
-    gap: 9px;
-    padding: 7px 0;
-    border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
-    font-size: 0.88em;
+    grid-template-columns: minmax(76px, 0.3fr) 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 50%, transparent);
+    font-size: 0.86em;
     line-height: 1.48;
 }
 
@@ -239,14 +296,19 @@
 }
 
 #mvu-auto-doctor-settings .mvuad-thread-field-label {
-    font-weight: 650;
-    opacity: 0.76;
+    font-weight: 600;
+    opacity: 0.7;
 }
 
 #mvu-auto-doctor-settings .mvuad-thread-field-value {
     min-width: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+#mvu-auto-doctor-settings :is(input, select, button, summary):focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--mvuad-accent) 60%, transparent);
+    outline-offset: 1px;
 }
 
 @media (max-width: 600px) {
@@ -280,7 +342,7 @@
     width: 50px;
     height: 50px;
     padding: 0;
-    border: 1px solid color-mix(in srgb, #7fd8ff 74%, white);
+    border: 1px solid color-mix(in srgb, var(--mvuad-accent) 74%, white);
     border-radius: 50%;
     color: #eefaff;
     background:
@@ -303,7 +365,17 @@
 }
 
 #mvuad-floating-orb.mvuad-orb-tucked {
-    opacity: 0.62;
+    opacity: 0.55;
+}
+
+#mvuad-floating-orb[data-side="right"].mvuad-orb-tucked {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+#mvuad-floating-orb[data-side="left"].mvuad-orb-tucked {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
 }
 
 #mvuad-floating-orb.mvuad-orb-dragging {
@@ -351,9 +423,19 @@
     border: 1px solid rgba(255, 255, 255, 0.34);
     border-radius: 10px;
     color: white;
-    background: #172438;
+    background: color-mix(in srgb, var(--mvuad-accent) 42%, #172438);
     font-size: 10px;
     font-weight: 800;
+}
+
+#mvuad-floating-orb[data-side="right"] .mvuad-orb-count {
+    right: auto;
+    left: -4px;
+}
+
+#mvuad-floating-orb[data-side="left"] .mvuad-orb-count {
+    right: -4px;
+    left: auto;
 }
 
 @keyframes mvuad-orb-pulse {
@@ -369,11 +451,11 @@
     flex-direction: column;
     width: min(480px, calc(100vw - 24px));
     max-height: min(78vh, 760px);
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--mvuad-accent) 30%, var(--SmartThemeBorderColor));
+    border-radius: var(--mvuad-panel-radius);
     color: var(--SmartThemeBodyColor);
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 94%, #09111d 6%);
-    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.58);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, transparent);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
     overflow: hidden;
     backdrop-filter: blur(14px);
 }
@@ -434,7 +516,7 @@
 #mvuad-floating-panel .mvuad-floating-tabs {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 5px;
+    gap: 6px;
     padding: 4px;
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 11px;
@@ -447,7 +529,7 @@
     justify-content: center;
     gap: 5px;
     min-width: 0;
-    min-height: 34px;
+    min-height: 36px;
     padding: 5px 7px;
     border: 1px solid transparent;
     border-radius: 8px;
@@ -458,9 +540,12 @@
 }
 
 #mvuad-floating-panel .mvuad-floating-tabs button.active {
-    border-color: color-mix(in srgb, #7fd8ff 55%, var(--SmartThemeBorderColor));
-    background: color-mix(in srgb, #3a9bc4 22%, transparent);
-    box-shadow: inset 0 0 12px rgba(78, 183, 228, 0.1);
+    border-color: color-mix(in srgb, var(--mvuad-accent) 55%, var(--SmartThemeBorderColor));
+    background: color-mix(in srgb, var(--mvuad-accent) 22%, transparent);
+}
+
+#mvuad-floating-panel .mvuad-floating-tabs button:not(.active):hover {
+    background: color-mix(in srgb, var(--mvuad-accent) 8%, transparent);
 }
 
 #mvuad-floating-panel .mvuad-floating-tabs b {
@@ -470,8 +555,8 @@
     height: 18px;
     padding: 0 4px;
     border-radius: 9px;
-    color: #eaf9ff;
-    background: color-mix(in srgb, #2e7fa5 55%, transparent);
+    color: inherit;
+    background: color-mix(in srgb, var(--mvuad-accent) 40%, transparent);
     font-size: 0.72em;
 }
 
@@ -480,9 +565,10 @@
     gap: 4px;
     padding: 8px 10px;
     border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 9px;
+    border-radius: var(--mvuad-control-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
     font-size: 0.84em;
-    line-height: 1.4;
+    line-height: 1.45;
     overflow-wrap: anywhere;
 }
 
@@ -550,18 +636,18 @@
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 9px;
     color: inherit;
-    background: color-mix(in srgb, #2f7fa2 9%, transparent);
+    background: color-mix(in srgb, var(--mvuad-accent) 9%, transparent);
     text-align: left;
     cursor: pointer;
 }
 
 #mvuad-floating-panel .mvuad-floating-forum-preview-item:hover {
-    border-color: color-mix(in srgb, #7fd8ff 55%, var(--SmartThemeBorderColor));
-    background: color-mix(in srgb, #2f7fa2 16%, transparent);
+    border-color: color-mix(in srgb, var(--mvuad-accent) 65%, var(--SmartThemeBorderColor));
+    background: color-mix(in srgb, var(--mvuad-accent) 16%, transparent);
 }
 
 #mvuad-floating-panel .mvuad-floating-forum-preview-meta {
-    color: #83cdec;
+    color: var(--mvuad-accent-text);
     font-size: 0.72em;
 }
 
@@ -572,9 +658,9 @@
 }
 
 #mvuad-floating-panel .mvuad-floating-forum-empty {
-    padding: 15px 10px;
+    padding: 14px 10px;
     border: 1px dashed var(--SmartThemeBorderColor);
-    border-radius: 9px;
+    border-radius: var(--mvuad-card-radius);
     text-align: center;
     font-size: 0.84em;
     line-height: 1.5;
@@ -616,9 +702,9 @@
 
 #mvuad-floating-panel .mvuad-ledger-empty,
 #mvuad-floating-panel .mvuad-echo-empty {
-    padding: 10px;
+    padding: 14px 10px;
     border: 1px dashed var(--SmartThemeBorderColor);
-    border-radius: 8px;
+    border-radius: var(--mvuad-card-radius);
     text-align: center;
     opacity: 0.72;
 }
@@ -639,7 +725,7 @@
 
 #mvuad-floating-panel .mvuad-thread-card {
     border: 1px solid var(--SmartThemeBorderColor);
-    border-left: 4px solid #8da2c7;
+    border-left: 3px solid #8da2c7;
     border-radius: 9px;
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
     overflow: clip;
@@ -652,7 +738,7 @@
 
 #mvuad-floating-panel .mvuad-thread-card > summary {
     display: grid;
-    gap: 7px;
+    gap: 6px;
     padding: 10px;
     cursor: pointer;
     list-style-position: inside;
@@ -667,22 +753,22 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 5px;
 }
 
 #mvuad-floating-panel .mvuad-thread-heading { justify-content: space-between; }
 #mvuad-floating-panel .mvuad-thread-title { font-weight: 700; overflow-wrap: anywhere; }
-#mvuad-floating-panel .mvuad-thread-id { font-size: 0.76em; opacity: 0.58; overflow-wrap: anywhere; }
+#mvuad-floating-panel .mvuad-thread-id { font-size: 0.74em; opacity: 0.58; overflow-wrap: anywhere; }
 
 #mvuad-floating-panel .mvuad-thread-badge {
     display: inline-flex;
     align-items: center;
-    min-height: 22px;
-    padding: 2px 7px;
+    min-height: 20px;
+    padding: 1px 6px;
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 999px;
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
-    font-size: 0.74em;
+    font-size: 0.72em;
     line-height: 1.2;
 }
 
@@ -697,17 +783,22 @@
 
 #mvuad-floating-panel .mvuad-thread-field {
     display: grid;
-    grid-template-columns: minmax(88px, 0.28fr) 1fr;
-    gap: 9px;
-    padding: 7px 0;
-    border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+    grid-template-columns: minmax(76px, 0.3fr) 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 50%, transparent);
     font-size: 0.86em;
     line-height: 1.46;
 }
 
 #mvuad-floating-panel .mvuad-thread-field:last-child { border-bottom: 0; }
-#mvuad-floating-panel .mvuad-thread-field-label { font-weight: 650; opacity: 0.76; }
+#mvuad-floating-panel .mvuad-thread-field-label { font-weight: 600; opacity: 0.7; }
 #mvuad-floating-panel .mvuad-thread-field-value { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#mvuad-floating-panel :is(button, summary):focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--mvuad-accent) 60%, transparent);
+    outline-offset: -2px;
+}
 
 :is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-echo-section {
     display: grid;
@@ -744,7 +835,7 @@
     display: grid;
     place-items: center;
     padding: 18px;
-    background: rgba(2, 8, 18, 0.66);
+    background: rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(5px);
 }
 
@@ -758,12 +849,11 @@
     width: min(760px, calc(100vw - 36px));
     max-height: min(88vh, 920px);
     overflow: hidden;
-    border: 1px solid color-mix(in srgb, #75c8ee 50%, var(--mvuad-forum-border));
-    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--mvuad-accent) 30%, var(--mvuad-forum-border));
+    border-radius: var(--mvuad-panel-radius);
     color: var(--mvuad-forum-text);
-    background:
-        linear-gradient(160deg, color-mix(in srgb, #173956 28%, var(--SmartThemeBlurTintColor, #101722)), var(--SmartThemeBlurTintColor, #101722));
-    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.62), 0 0 24px rgba(63, 164, 212, 0.2);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #101722) 90%, transparent);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
 }
 
 .mvuad-forum-header {
@@ -773,7 +863,7 @@
     gap: 12px;
     padding: 13px 15px;
     border-bottom: 1px solid var(--mvuad-forum-border);
-    background: color-mix(in srgb, #1d5879 22%, transparent);
+    background: color-mix(in srgb, var(--mvuad-accent) 8%, transparent);
 }
 
 .mvuad-forum-header > div {
@@ -801,8 +891,9 @@
     display: flex;
     flex-wrap: wrap;
     align-items: end;
-    gap: 8px;
-    padding: 10px 12px 4px;
+    gap: 6px;
+    padding: 6px 12px 2px;
+    font-size: 0.72em;
 }
 
 .mvuad-forum-provider {
@@ -815,16 +906,16 @@
 
 .mvuad-forum-provider select {
     width: 100%;
-    min-height: 34px;
+    min-height: 30px;
 }
 
 .mvuad-forum-source-note {
-    margin: 8px 12px 3px;
-    padding: 9px 11px;
-    border: 1px solid color-mix(in srgb, #f1c75b 55%, var(--mvuad-forum-border));
+    margin: 6px 12px 2px;
+    padding: 7px 10px;
+    border: 1px solid color-mix(in srgb, #f1c75b 38%, var(--mvuad-forum-border));
     border-radius: 10px;
-    background: color-mix(in srgb, #f1c75b 10%, transparent);
-    font-size: 0.8em;
+    background: color-mix(in srgb, #f1c75b 6%, transparent);
+    font-size: 0.76em;
     line-height: 1.55;
 }
 
@@ -840,44 +931,113 @@
     padding: 4px 13px;
     font-size: 0.82em;
     line-height: 1.45;
-    opacity: 0.78;
 }
 
+.mvuad-forum-status {
+    margin: 4px 12px 1px;
+    padding: 5px 9px;
+    border: 1px solid var(--mvuad-forum-border);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--mvuad-forum-text) 4%, transparent);
+    font-size: 0.78em;
+    opacity: 0.82;
+}
+
+.mvuad-forum-status[hidden] { display: none; }
 .mvuad-forum-status[data-kind="busy"] { color: #f1c75b; }
 .mvuad-forum-status[data-kind="ok"] { color: #78d69c; }
 .mvuad-forum-status[data-kind="error"] { color: #ff8e8e; }
 
+.mvuad-forum-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    padding-top: 6px;
+}
+
+.mvuad-forum-summary-lead {
+    flex: 1 0 100%;
+    margin-bottom: 1px;
+    font-size: 0.95em;
+    opacity: 0.78;
+}
+
+.mvuad-forum-chip {
+    flex: 0 0 auto;
+    max-width: 100%;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--mvuad-accent) 22%, var(--mvuad-forum-border));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--mvuad-accent) 8%, transparent);
+    font-size: 0.78em;
+    line-height: 1.4;
+    opacity: 0.68;
+    overflow-wrap: anywhere;
+}
+
+.mvuad-forum-utility {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 12px 0;
+}
+
+.mvuad-forum-clear {
+    min-height: 28px;
+    padding: 3px 8px;
+    border: 1px solid var(--mvuad-forum-border);
+    border-radius: 8px;
+    color: inherit;
+    background: transparent;
+    font-size: 0.72em;
+    opacity: 0.55;
+    cursor: pointer;
+}
+
+.mvuad-forum-clear:hover,
+.mvuad-forum-clear:focus-visible {
+    border-color: color-mix(in srgb, #ff8e8e 45%, var(--mvuad-forum-border));
+    opacity: 0.9;
+}
+
 .mvuad-forum-filters {
     display: flex;
-    gap: 6px;
-    padding: 8px 12px;
+    gap: 5px;
+    padding: 6px 12px;
     overflow-x: auto;
     scrollbar-width: thin;
+    -webkit-mask-image: linear-gradient(90deg, #000 0 90%, transparent 100%);
+    mask-image: linear-gradient(90deg, #000 0 90%, transparent 100%);
 }
 
 .mvuad-forum-filter {
     flex: 0 0 auto;
-    min-height: 30px;
-    padding: 4px 10px;
+    min-height: 32px;
+    padding: 4px 11px;
     border: 1px solid var(--mvuad-forum-border);
     border-radius: 999px;
     color: inherit;
     background: transparent;
     cursor: pointer;
-    font-size: 0.78em;
+    font-size: 0.76em;
+}
+
+.mvuad-forum-filter:not(.active):hover {
+    border-color: color-mix(in srgb, var(--mvuad-accent) 45%, var(--mvuad-forum-border));
 }
 
 .mvuad-forum-filter.active {
-    border-color: #72c9ef;
-    background: color-mix(in srgb, #3696be 26%, transparent);
+    border-color: color-mix(in srgb, var(--mvuad-accent) 55%, var(--mvuad-forum-border));
+    background: color-mix(in srgb, var(--mvuad-accent) 28%, transparent);
 }
 
 .mvuad-forum-empty {
     margin: 12px;
-    padding: 20px 14px;
+    padding: 14px 10px;
     border: 1px dashed var(--mvuad-forum-border);
-    border-radius: 12px;
+    border-radius: var(--mvuad-card-radius);
     text-align: center;
+    font-size: 0.84em;
     line-height: 1.55;
     opacity: 0.72;
 }
@@ -886,20 +1046,40 @@
 
 .mvuad-forum-feed {
     display: grid;
-    gap: 10px;
+    gap: 9px;
     padding: 4px 12px max(16px, env(safe-area-inset-bottom));
     overflow: auto;
     overscroll-behavior: contain;
 }
 
+.mvuad-forum-feed-end {
+    margin-top: 2px;
+    padding: 12px 10px;
+    border: 1px dashed var(--mvuad-forum-border);
+    border-radius: 10px;
+    text-align: center;
+    font-size: 0.72em;
+    opacity: 0.58;
+}
+
 .mvuad-forum-post {
+    --mvuad-forum-kind-accent: #75c8ee;
     display: grid;
     gap: 8px;
-    padding: 12px;
+    padding: 11px;
     border: 1px solid var(--mvuad-forum-border);
+    border-left: 3px solid var(--mvuad-forum-kind-accent);
     border-radius: 12px;
-    background: color-mix(in srgb, var(--mvuad-forum-text) 5%, transparent);
+    background:
+        linear-gradient(105deg, color-mix(in srgb, var(--mvuad-forum-kind-accent) 7%, transparent), transparent 38%),
+        color-mix(in srgb, var(--mvuad-forum-text) 5%, transparent);
 }
+
+.mvuad-forum-post[data-kind="chat"] { --mvuad-forum-kind-accent: #66c7ef; }
+.mvuad-forum-post[data-kind="reaction"] { --mvuad-forum-kind-accent: #70d49c; }
+.mvuad-forum-post[data-kind="rumor"] { --mvuad-forum-kind-accent: #bb8ee8; }
+.mvuad-forum-post[data-kind="guide"] { --mvuad-forum-kind-accent: #e6c85f; }
+.mvuad-forum-post[data-kind="trade"] { --mvuad-forum-kind-accent: #ee9d65; }
 
 .mvuad-forum-post-heading {
     display: flex;
@@ -910,32 +1090,96 @@
 .mvuad-forum-board-badge {
     flex: 0 0 auto;
     padding: 2px 7px;
-    border: 1px solid color-mix(in srgb, #77c9ef 55%, var(--mvuad-forum-border));
+    border: 1px solid color-mix(in srgb, var(--mvuad-forum-kind-accent) 55%, var(--mvuad-forum-border));
     border-radius: 999px;
-    color: #8bd8fa;
+    color: color-mix(in srgb, var(--mvuad-forum-kind-accent) 82%, var(--mvuad-forum-text));
     font-size: 0.72em;
     line-height: 1.45;
 }
 
-.mvuad-forum-post-title { min-width: 0; overflow-wrap: anywhere; }
+.mvuad-forum-post-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.mvuad-forum-heat {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, #efaf67 35%, var(--mvuad-forum-border));
+    border-radius: 999px;
+    color: color-mix(in srgb, #efbd76 85%, var(--mvuad-forum-text));
+    background: color-mix(in srgb, #df8f3c 7%, transparent);
+    font-size: 0.68em;
+    line-height: 1.55;
+    white-space: nowrap;
+    opacity: 0.72;
+}
+
+.mvuad-forum-post[data-heat-tier="warm"] .mvuad-forum-heat { opacity: 0.9; }
+.mvuad-forum-post[data-heat-tier="hot"] .mvuad-forum-heat {
+    border-color: color-mix(in srgb, #ff9c58 64%, var(--mvuad-forum-border));
+    background: color-mix(in srgb, #ef7438 13%, transparent);
+    opacity: 1;
+}
 
 .mvuad-forum-post-meta {
     font-size: 0.76em;
     opacity: 0.62;
 }
 
+.mvuad-forum-post-meta::before {
+    display: inline-block;
+    width: 0.48em;
+    height: 0.48em;
+    margin-right: 5px;
+    border-radius: 50%;
+    background: var(--mvuad-forum-kind-accent);
+    content: '';
+    vertical-align: 0.06em;
+}
+
 .mvuad-forum-post-body {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     font-size: 0.92em;
-    line-height: 1.62;
+    line-height: 1.58;
 }
+
+.mvuad-forum-body-details > summary {
+    display: grid;
+    gap: 6px;
+    list-style: none;
+    cursor: pointer;
+}
+
+.mvuad-forum-body-details > summary::-webkit-details-marker { display: none; }
+
+.mvuad-forum-body-details > summary::after {
+    justify-self: start;
+    color: var(--mvuad-accent-text);
+    content: '展开全文';
+    font-size: 0.76em;
+    opacity: 0.84;
+}
+
+.mvuad-forum-body-details[open] > summary::after { content: '收起全文'; }
+
+.mvuad-forum-post-preview {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+}
+
+.mvuad-forum-body-details[open] .mvuad-forum-post-preview { display: none; }
+.mvuad-forum-post-full { padding-top: 4px; }
 
 .mvuad-forum-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    color: #78c5e8;
+    color: var(--mvuad-accent-text);
     font-size: 0.74em;
 }
 
@@ -945,27 +1189,53 @@
     opacity: 0.76;
 }
 
+.mvuad-forum-comments > summary:hover { opacity: 0.95; }
+
 .mvuad-forum-comment-list {
     display: grid;
-    gap: 7px;
-    margin-top: 8px;
+    gap: 6px;
+    margin-top: 7px;
     padding-top: 8px;
     border-top: 1px dashed var(--mvuad-forum-border);
 }
 
 .mvuad-forum-comment {
     display: grid;
-    grid-template-columns: minmax(70px, 0.22fr) 1fr auto;
-    gap: 8px;
+    grid-template-columns: auto minmax(64px, 0.2fr) 1fr auto;
+    gap: 6px 8px;
     align-items: start;
-    font-size: 0.82em;
-    line-height: 1.5;
+    padding: 6px 8px;
+    border-left: 2px solid color-mix(in srgb, var(--mvuad-forum-kind-accent, #75c8ee) 56%, var(--mvuad-forum-border));
+    border-radius: 0 8px 8px 0;
+    background: color-mix(in srgb, var(--mvuad-forum-text) 3.5%, transparent);
+    font-size: 0.8em;
+    line-height: 1.45;
 }
 
 .mvuad-forum-comment b,
 .mvuad-forum-comment span { overflow-wrap: anywhere; }
-.mvuad-forum-comment small { opacity: 0.58; }
+.mvuad-forum-comment b {
+    color: var(--mvuad-accent-text);
+}
+.mvuad-forum-comment-floor {
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--mvuad-forum-text) 5%, transparent);
+    font-size: 0.82em;
+    white-space: nowrap;
+    opacity: 0.5;
+}
+.mvuad-forum-comment-likes {
+    color: color-mix(in srgb, #e7bd69 70%, var(--mvuad-forum-text));
+    white-space: nowrap;
+    opacity: 0.78;
+}
 .mvuad-forum-comment-empty { font-size: 0.8em; opacity: 0.62; }
+
+.mvuad-forum-shell :is(button, select, summary):focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--mvuad-accent) 60%, transparent);
+    outline-offset: 1px;
+}
 
 @media (max-width: 600px) {
     #mvuad-floating-panel {
@@ -1004,13 +1274,22 @@
     .mvuad-forum-header { padding-top: max(12px, env(safe-area-inset-top)); }
     .mvuad-forum-toolbar { display: grid; grid-template-columns: 1fr 1fr; }
     .mvuad-forum-provider { grid-column: 1 / -1; }
-    .mvuad-forum-clear { grid-column: 1 / -1; }
-    .mvuad-forum-comment { grid-template-columns: 1fr; gap: 2px; }
+    .mvuad-forum-provider > span { display: none; }
+    .mvuad-forum-summary { gap: 5px; }
+    .mvuad-forum-chip { font-size: 0.76em; }
+    .mvuad-forum-filters { scrollbar-width: none; }
+    .mvuad-forum-filters::-webkit-scrollbar { display: none; }
+    .mvuad-forum-comment { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .mvuad-forum-comment > b { align-self: center; }
+    .mvuad-forum-comment > span:not(.mvuad-forum-comment-floor) { grid-column: 1 / -1; }
+    .mvuad-forum-comment-likes { grid-column: 3; grid-row: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    #mvuad-floating-orb,
-    #mvuad-floating-orb[data-kind="busy"] {
+    :is(#mvu-auto-doctor-settings, #mvuad-floating-orb, #mvuad-floating-panel, .mvuad-forum-shell),
+    :is(#mvu-auto-doctor-settings, #mvuad-floating-orb, #mvuad-floating-panel, .mvuad-forum-shell) *,
+    :is(#mvu-auto-doctor-settings, #mvuad-floating-orb, #mvuad-floating-panel, .mvuad-forum-shell) *::before,
+    :is(#mvu-auto-doctor-settings, #mvuad-floating-orb, #mvuad-floating-panel, .mvuad-forum-shell) *::after {
         animation: none;
         transition-duration: 1ms;
     }
