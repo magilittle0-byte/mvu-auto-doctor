@@ -108,7 +108,7 @@ const injection = buildContinuityInjection(state, {
     director: 'mixed',
     maxVisible: 1,
 });
-assert.match(injection, /预设与缝合怪负责剧情提案/u);
+assert.match(injection, /预设、缝合怪或世界引擎负责剧情与世界提案/u);
 assert.match(injection, /最多让1条支线/u);
 assert.match(injection, /禁止替玩家角色决定/u);
 assert.match(injection, /PE-港口-哨兵-01/u);
