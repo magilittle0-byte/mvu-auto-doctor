@@ -21,7 +21,7 @@ const harness = String.raw`<!doctype html>
 <html><head><link rel="stylesheet" href="/style.css"></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0 };
+const calls = { model: [], replace: [], prompts: [], saves: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -99,7 +99,16 @@ window.StoryOracleAPI = {
   context: { getSettings: () => ({ autoDiagnoseEnabled: false }) },
   async run(messages) {
     const system = messages[0].content;
-    calls.model.push(system.includes('活世界事件') ? 'continuity' : 'repair');
+    const isContinuity = system.includes('活世界事件');
+    const isForum = system.includes('独立网络论坛模拟器');
+    calls.model.push(isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
+    if (isForum) {
+      calls.forumRuns += 1;
+      calls.forumSystem = messages[0].content;
+      calls.forumUser = messages[1].content;
+      const id = 'FP-' + calls.forumRuns;
+      return '<ForumUpdate>{"summary":"港城网友正在聊日常与公开见闻","newPosts":[{"id":"' + id + '","board":"闲聊广场","title":"北门面摊今天是不是淡了点","author":"盐汽水","body":"路过吃了一碗，老板说盐车晚到了。","kind":"chat","tags":["吃喝","北门"],"source":"港城普通生活","heat":7},{"id":"' + id + '-G","board":"求助攻略","title":"夜里去北岸要注意什么","author":"赶夜路的人","body":"第一次走北岸，求问渡船和照明情况。","kind":"guide","tags":["求助"],"source":"世界书中的港城交通","heat":4}],"comments":[],"heat":[],"archive":[]}</ForumUpdate>';
+    }
     if (system.includes('活世界事件')) {
       calls.continuityRuns += 1;
       calls.continuitySystem = messages[0].content;
@@ -204,18 +213,25 @@ try {
         })));
         throw error;
     });
+    await page.waitForFunction(() => (
+        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.forum?.turn === 1
+    ), null, { timeout: 20000 });
     const continuity = await page.evaluate(() => ({
         state: window.MvuAutoDoctorAPI.getContinuityState(),
+        forumState: window.MvuAutoDoctorAPI.getForumState(),
         calls: structuredClone(window.__TEST__.calls),
         version: window.MvuAutoDoctorAPI.version,
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.4.0');
+    assert.equal(continuity.version, '1.4.1');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
+    assert.equal(continuity.forumState.posts.length, 2);
+    assert.equal(continuity.calls.forumRuns, 1);
+    assert.match(continuity.calls.forumSystem, /至少一半内容应为日常闲聊/u);
     assert.equal(continuity.cardCount, 1);
     assert.equal(continuity.openCardCount, 0, '未显现的幕后事件默认折叠');
     assert.match(continuity.ledgerText, /幕后独立事件（点击查看剧透）/u);
@@ -278,15 +294,62 @@ try {
     assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
     assert.equal(floatingPanel.cards, 1);
     assert.match(floatingPanel.text, /世界风声/u);
-    assert.match(floatingPanel.text, /打开独立论坛/u);
-    await page.click('#mvuad-floating-panel .mvuad-floating-close');
+    assert.match(floatingPanel.text, /打开完整论坛/u);
     assert.equal(
-        await page.evaluate(() => document.querySelector('#mvuad-floating-panel')?.hidden),
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
+        false,
+    );
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="echoes"]')?.hidden),
+        true,
+        '支线页不得与世界风声纵向堆叠',
+    );
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="echoes"]');
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
+        true,
+    );
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="forum"]');
+    assert.equal(
+        await page.evaluate(() => document.querySelectorAll('#mvuad-floating-panel .mvuad-floating-forum-preview-item').length),
+        2,
+    );
+    if (process.env.MVUAD_FLOATING_SCREENSHOT) {
+        await page.screenshot({ path: process.env.MVUAD_FLOATING_SCREENSHOT });
+    }
+    await page.click('#mvuad-floating-panel .mvuad-floating-forum');
+    await page.waitForFunction(() => !document.querySelector('#mvuad-forum-panel')?.hidden);
+    const forumPanel = await page.evaluate(() => {
+        const panel = document.querySelector('#mvuad-forum-panel');
+        const shell = panel?.querySelector('.mvuad-forum-shell');
+        const rect = shell?.getBoundingClientRect();
+        return {
+            hidden: !!panel?.hidden,
+            left: rect?.left ?? -1,
+            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
+            posts: panel?.querySelectorAll('.mvuad-forum-post').length || 0,
+            text: panel?.textContent || '',
+            externalHidden: !!panel?.querySelector('.mvuad-forum-external')?.hidden,
+        };
+    });
+    assert.equal(forumPanel.hidden, false);
+    assert.ok(forumPanel.left >= 0 && forumPanel.right <= 391);
+    assert.equal(forumPanel.posts, 2);
+    assert.match(forumPanel.text, /北门面摊/u);
+    assert.match(forumPanel.text, /评论 0/u);
+    assert.equal(forumPanel.externalHidden, true, '未安装Zsd时仍必须显示内置论坛，而不是空跳转');
+    if (process.env.MVUAD_SCREENSHOT) {
+        await page.screenshot({ path: process.env.MVUAD_SCREENSHOT, fullPage: true });
+    }
+    await page.click('#mvuad-forum-panel .mvuad-forum-close');
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-forum-panel')?.hidden),
         true,
     );
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.match(continuity.calls.continuitySystem, /setting_independent/u);
     assert.match(continuity.calls.continuitySystem, /可以永远不与主线相交/u);
+    assert.match(continuity.calls.continuitySystem, /禁止从骰池挑成功数字或先写结果后补检定/u);
     assert.match(continuity.calls.continuityUser, /钟楼巡检制度/u);
     assert.match(continuity.calls.continuityUser, /巡检员与玩家互不认识/u);
     assert.ok(continuity.calls.prompts.some(([, content]) => /禁止替玩家角色决定/u.test(content)));
@@ -408,6 +471,11 @@ try {
         await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger-empty')?.textContent || ''),
         /当前没有未结支线/u,
     );
+    assert.equal(
+        await page.evaluate(() => document.querySelectorAll('#mvuad-forum-panel .mvuad-forum-post').length),
+        0,
+        '切换到空聊天后不得显示上一个聊天的论坛帖子',
+    );
 
     const lifecyclePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await lifecyclePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -433,7 +501,7 @@ try {
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.4.0');
+    assert.equal(lifecycle.version, '1.4.1');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.state.turn, 4);
     assert.equal(lifecycle.state.threads.find((thread) => thread.id === 'PE-货单-追查-01').stage, 'advancing');
@@ -448,6 +516,61 @@ try {
     assert.match(lifecycle.ledgerText, /烧毁货单后的泄密追查/u);
     assert.match(lifecycle.ledgerText, /已收束支线（1）/u);
     await lifecyclePage.close();
+
+    const forumRerollPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await forumRerollPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await forumRerollPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await forumRerollPage.evaluate(async () => {
+        const t = window.__TEST__;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await forumRerollPage.waitForFunction(() => (
+        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.forum?.turn === 1
+    ), null, { timeout: 30000 });
+    await forumRerollPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.chat[2].swipe_id = 1;
+        t.context.chat[2].mes = '重抽后的港口回复';
+        await t.context.eventSource.emit('generation_started', 'regenerate', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await forumRerollPage.waitForFunction(() => (
+        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.forum?.lastSource?.swipeId === '1'
+    ), null, { timeout: 30000 });
+    const forumReroll = await forumRerollPage.evaluate(() => ({
+        state: window.MvuAutoDoctorAPI.getForumState(),
+        calls: structuredClone(window.__TEST__.calls),
+    }));
+    assert.equal(forumReroll.state.turn, 1, '重抽必须从本楼刷新前存档点重算');
+    assert.equal(forumReroll.state.posts.length, 2);
+    assert.ok(forumReroll.state.posts.every((post) => post.id.startsWith('FP-2')));
+    assert.ok(!forumReroll.state.posts.some((post) => post.id.startsWith('FP-1')));
+    await forumRerollPage.close();
+
+    const externalForumPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await externalForumPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await externalForumPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await externalForumPage.evaluate(async () => {
+        const external = document.createElement('button');
+        external.id = 'zsd-forum-orb';
+        document.body.appendChild(external);
+        const t = window.__TEST__;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await externalForumPage.waitForFunction(() => (
+        /暂停内置自动刷帖/u.test(document.querySelector('.mvuad-settings-forum-status')?.textContent || '')
+    ), null, { timeout: 30000 });
+    const externalForum = await externalForumPage.evaluate(() => ({
+        forum: window.MvuAutoDoctorAPI.getForumState(),
+        calls: structuredClone(window.__TEST__.calls),
+        externalButtonHidden: document.querySelector('.mvuad-forum-external')?.hidden,
+    }));
+    assert.equal(externalForum.forum.turn, 0, '检测到Zsd时不得自动生成第二套论坛');
+    assert.equal(externalForum.calls.forumRuns, 0);
+    assert.equal(externalForum.externalButtonHidden, false);
+    await externalForumPage.close();
 
     const heldPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await heldPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
