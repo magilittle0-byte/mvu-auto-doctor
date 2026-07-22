@@ -18,6 +18,7 @@ import {
     attachChangedSourceRefs,
     buildContinuityInjection,
     continuityContentDigest,
+    continuityLifecycleStats,
     continuityLedgerView,
     emptyContinuityState,
     enforceContinuityPolicy,
@@ -30,9 +31,9 @@ import {
 } from './continuity-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 3;
+const CHAT_NAMESPACE_VERSION = 4;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
@@ -49,11 +50,11 @@ const DEFAULTS = Object.freeze({
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
-    continuitySettingsVersion: 2,
+    continuitySettingsVersion: 3,
     continuityMaxThreads: 8,
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
-    continuityMaxTokens: 2200,
+    continuityMaxTokens: 3200,
 });
 
 let mvuPromise = null;
@@ -107,6 +108,11 @@ function getSettings() {
         // v1.2.x had no UI for this value, so 4 can only be the old default.
         if (Number(settings.continuityMaxThreads) === 4) settings.continuityMaxThreads = 8;
         settings.continuitySettingsVersion = 2;
+        changed = true;
+    }
+    if (previousContinuitySettingsVersion < 3) {
+        if (Number(settings.continuityMaxTokens) === 2200) settings.continuityMaxTokens = 3200;
+        settings.continuitySettingsVersion = 3;
         changed = true;
     }
     if (changed) context.saveSettingsDebounced?.();
@@ -1922,13 +1928,12 @@ function continuityBase(namespace, captured) {
     });
 }
 
-function preserveMissingThreads(previous, next, maximum) {
+function preserveMissingThreads(previous, next) {
     const present = new Set((next.threads || []).map((thread) => thread.id));
     for (const thread of previous.threads || []) {
         if (present.has(thread.id)) continue;
         next.threads.push(deepClone(thread));
         present.add(thread.id);
-        if (next.threads.length >= maximum) break;
     }
     return next;
 }
@@ -1941,6 +1946,7 @@ function buildContinuityMessages({
     markers,
     worldContext,
     stateAnchors,
+    retryReason = '',
 }) {
     const settings = getSettings();
     const bridgeOnly = director !== 'standalone';
@@ -1957,9 +1963,13 @@ function buildContinuityMessages({
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 每个账本轮次最多推进一条未结事件；推进可以完全发生在幕后，不要求正文出现镜头或伏笔。已有事件优先，禁止为同一因果另造同义ID。',
+        '- 每个完成的AI回复都代表一个世界节拍。只要存在未结事件，就必须让其中恰好一条发生实质变化：推进、显现、转入休眠或结束；不得只改turn/lastAdvancedTurn后原样返回。',
+        '- 本轮正文若明确造成新的持续因果，必须登记一条main_derivative新事件；它不占用“推进一条旧事件”的名额。A造成B、B留下C时，用seedBasis写明正文证据。',
         '- 区分hidden、rumor、observed。隐藏事实不能令不知情角色全知，必须经过观察、传播、调查或后果显现。',
         '- 计划、建议、选项、传闻和未来可能性不是已发生事实。',
-        '- 已完成的事件标记resolved，不要删除；暂时没有自然推进条件的事件可标记dormant。',
+        '- 已完成的事件标记resolved，不要删除；同时填写resolution与至少一项effects或rumors。若D后果还会继续自行变化，另建新事件并在causedBy填写父事件ID。',
+        '- rumors是有来源、有传播范围的世界信息，不等于事实本身；只有传播路径接触主线人物时，knowledge才可变成rumor或observed。',
+        '- 暂时没有自然推进条件的单条事件可标记dormant；不能因为一条休眠就让整个世界停止，仍应调度其他事件或按自主度产生世界脉动。',
         '- 独立事件可以永远不与主线相交，也可以在幕后自行解决。禁止把所有世界变化都改造成围着玩家转的任务。',
         '- 只有真实的传播链、因果后果、人物接触、地点重合或时间窗口满足intersection时，relation才可从independent/latent变为converging，再由主回复决定是否形成可观察痕迹。禁止巧合传送和强行汇流。',
         '',
@@ -1986,6 +1996,7 @@ function buildContinuityMessages({
     const user = [
         `当前导演模式：${director}`,
         `当前自主度：${settings.continuityAutonomy}`,
+        retryReason ? `上一次账本候选无实质推进，必须纠正：${retryReason}` : '',
         `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
         '',
         '=== 更新前支线账本 ===',
@@ -2022,6 +2033,8 @@ function buildContinuityMessages({
         '    "nextBeat": "下次自然推进的一拍", "trigger": "事件自身的可验证推进条件",',
         '    "intersection": "与主线自然汇流的条件；可写无，不强求相交",',
         '    "seedBasis": "引用的角色卡/世界书设定依据",',
+        '    "causedBy": ["因果父事件ID"], "effects": ["已经成立且会持续的后果"],',
+        '    "rumors": ["有来源与传播范围的流言"], "resolution": "结束方式；未结束留空",',
         '    "actors": [], "locations": [], "knowledge": "hidden",',
         '    "urgency": 1, "createdTurn": 1, "lastAdvancedTurn": 1',
         '  }]',
@@ -2073,39 +2086,62 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const director = detectContinuityDirector(context, messageText, markers);
     setContinuityStatus('支线连续性：正在整理因果…', 'busy');
 
-    const messages = buildContinuityMessages({
-        context,
-        captured,
-        base,
-        director,
-        markers,
-        worldContext,
-        stateAnchors,
-    });
-    let output = '';
-    try {
-        output = await callModel(messages, { maxTokens: settings.continuityMaxTokens });
-    } catch (error) {
-        console.warn('[MVU Auto Doctor] 支线连续性模型调用失败：', error);
-    }
-    guard = targetIsCurrent(captured, token);
-    if (!guard.ok) return { status: 'stale', reason: guard.reason };
-
     let next = base;
-    if (output) {
-        const parsed = parseContinuityOutput(output, {
-            chatId: captured.chatId,
+    let retryReason = '';
+    let progressed = false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const messages = buildContinuityMessages({
+            context,
+            captured,
+            base,
+            director,
+            markers,
+            worldContext,
+            stateAnchors,
+            retryReason,
+        });
+        let output = '';
+        try {
+            output = await callModel(messages, { maxTokens: settings.continuityMaxTokens });
+        } catch (error) {
+            console.warn('[MVU Auto Doctor] 支线连续性模型调用失败：', error);
+        }
+        guard = targetIsCurrent(captured, token);
+        if (!guard.ok) return { status: 'stale', reason: guard.reason };
+
+        let candidate = base;
+        if (output) {
+            const parsed = parseContinuityOutput(output, {
+                chatId: captured.chatId,
+                maxThreads: settings.continuityMaxThreads,
+            });
+            if (parsed.state) candidate = parsed.state;
+            else retryReason = parsed.error;
+        } else {
+            retryReason = '模型没有返回账本JSON';
+        }
+        candidate = preserveMissingThreads(base, candidate);
+        candidate = enforceContinuityPolicy(base, candidate, {
+            autonomy: settings.continuityAutonomy,
+            allowAutonomous: worldContext.hasSetting,
             maxThreads: settings.continuityMaxThreads,
         });
-        if (parsed.state) next = parsed.state;
-        else console.warn('[MVU Auto Doctor] 支线账本输出未通过解析：', parsed.error);
+        const lifecycle = continuityLifecycleStats(base, candidate);
+        progressed = lifecycle.activeBefore > 0
+            ? lifecycle.changedExisting > 0
+            : lifecycle.added > 0;
+        if (progressed) {
+            next = candidate;
+            break;
+        }
+        retryReason ||= lifecycle.activeBefore > 0
+            ? '已有未结事件，但没有任何一条发生实质推进、休眠、显现或结束'
+            : '没有新建任何有世界设定依据的事件';
     }
-    next = preserveMissingThreads(base, next, settings.continuityMaxThreads);
-    next = enforceContinuityPolicy(base, next, {
-        autonomy: settings.continuityAutonomy,
-        allowAutonomous: worldContext.hasSetting,
-        maxThreads: settings.continuityMaxThreads,
-    });
+    if (!progressed) {
+        setContinuityStatus('支线连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
+        return { status: 'stalled', reason: retryReason || '账本无实质变化' };
+    }
     next.turn = Math.max(base.turn + 1, Number(next.turn) || 0);
     next.updatedAt = Date.now();
     next = attachChangedSourceRefs(base, next, sourceRefOf(captured));
@@ -2220,7 +2256,7 @@ async function clearContinuityState() {
 }
 
 const CONTINUITY_DIRECTOR_LABELS = Object.freeze({
-    standalone: '独立低频整理',
+    standalone: '独立活世界调度',
     preset: '预设平行事件桥接',
     stitches: '缝合怪桥接',
     mixed: '预设＋缝合怪联合桥接',
@@ -2301,8 +2337,14 @@ function buildLedgerThreadCard(thread, {
     appendLedgerField(body, '事件来源', thread.originLabel);
     appendLedgerField(body, '与主线关系', thread.relationLabel);
     appendLedgerField(body, '设定依据', thread.seedBasis, '未登记；建议重新整理核对');
+    appendLedgerField(body, '因果父事件', thread.causedBy?.join('、'), '无；独立起源');
     appendLedgerField(body, '当前进展', thread.summary, '暂无新增事实');
     appendLedgerField(body, '最近幕后变化', thread.offscreenBeat, '本轮没有推进');
+    if (thread.stage === 'resolved') {
+        appendLedgerField(body, '结束方式', thread.resolution, '已结束但未登记结算说明');
+    }
+    appendLedgerField(body, '持续影响', thread.effects?.join('；'), '尚未形成长期影响');
+    appendLedgerField(body, '传播中的流言', thread.rumors?.join('；'), '当前没有传播中的流言');
     appendLedgerField(body, '下一自然接口', thread.nextBeat, '保持现状，不强推');
     appendLedgerField(body, '事件推进条件', thread.trigger, '等待自身条件成熟');
     appendLedgerField(body, '与主线汇流条件', thread.intersection, '无；允许独立发展或在幕后结束');
@@ -2430,8 +2472,8 @@ function buildSettingsPanel() {
                     <div class="mvuad-status" role="status"></div>
                     <div class="mvuad-section-title">平行支线连续性</div>
                     <div class="mvuad-description">
-                        同时维护主线衍生、暗中相关、当前独立和世界脉动事件；
-                        允许幕后事件自行发展或结束，不强求与主线汇流，不替玩家行动，也不写MVU或数据库。
+                        每个完成的 AI 回合都调度一次世界节拍，同时维护主线衍生、暗中相关、当前独立和世界脉动事件；
+                        事件可自行发展、结束、留下影响与流言并派生后继事件，不强求与主线汇流，不替玩家行动，也不写MVU或数据库。
                     </div>
                     <label class="mvuad-select">
                         <span>运行模式</span>
