@@ -224,7 +224,7 @@ window.StoryOracleAPI = {
       calls.continuityRuns += 1;
       calls.continuitySystem = messages[0].content;
       calls.continuityUser = messages[1].content;
-      if (calls.continuityRuns === 1) return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"seeded","summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}]}</ContinuityState>';
+      if (calls.continuityRuns === 1) return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","eventType":"progress","level":2,"origin":"ambient","relation":"independent","stage":"seeded","stageProgress":2,"summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}],"world":{"digest":"港区日常运行稳定，公开的旧桥积水消息开始影响短途运输安排。","factions":[{"id":null,"name":"港区运输联合体","relation":"neutral","condition":"stable","goal":"维持旧桥附近的短途运输","summary":"开始临时调整车次","pillars":["车辆","调度"],"scope":"港区","knowledge":"observed","basis":"世界书中的港区运输网络与公开积水消息","lastChange":"部分车辆改走南侧道路"}],"winds":[{"id":null,"topic":"旧桥积水","type":"notice","strength":1,"content":"昨夜降雨使旧桥通行变慢","source":"过桥司机→港区运输人员","scope":"港区运输圈","knowledge":"rumor","basis":"公开路况被多人转述"}],"reputation":{"public":{"level":1,"summary":"公众对玩家协助巡逻的评价略有提升","basis":"公开感谢已经在港区小范围传播"}},"environment":{"economy":"strained","summary":"短途运输因旧桥积水略微趋紧","basis":"司机已经开始改道","incidents":[]},"shadows":{"enemies":[],"secrets":[{"id":null,"title":"密谈代号黑雨","status":"hidden","summary":"密室中的代号尚未外泄","exposure":0,"holders":["密谈参与者"],"knowledge":"hidden","basis":"本轮正文明确为私下密谈","lastChange":"维持未公开"}]},"influences":[{"id":null,"trigger":"旧桥积水风声","impact":"运输联合体调整部分车次","fallout":"旧桥附近送货时间可能延长","knowledge":"observed","basis":"路况信息已覆盖运输圈"}]}}</ContinuityState>';
       if (calls.continuityRuns === 2) return '<ContinuityState>{"turn":2,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"advancing","summary":"巡检员找到上一班抄录员并确认缺页被人为撕走。","offscreenBeat":"两人比对墨迹，锁定缺页发生在昨夜换班。","nextBeat":"他们会查问昨夜进入钟楼的人。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2}]}</ContinuityState>';
       if (calls.continuityRuns === 3) return '<ContinuityState>{"turn":3,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
       return '<ContinuityState>{"turn":4,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden"},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"advancing","summary":"仓主从值班表锁定了两名可能接触货单的人。","offscreenBeat":"仓主派人分别试探两名值班人。","nextBeat":"其中一人会试图向外求助。","trigger":"追查持续进行。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
@@ -354,6 +354,32 @@ try {
         })));
         throw error;
     });
+    await page.waitForTimeout(500);
+    const defaultForumMode = await page.evaluate(() => ({
+        turn: window.MvuAutoDoctorAPI.getForumState().turn,
+        runs: window.__TEST__.calls.forumRuns,
+        mode: document.querySelector('.mvuad-forum-refresh-mode-settings')?.value,
+        intervalDisabled: !!document.querySelector('.mvuad-forum-interval')?.disabled,
+    }));
+    assert.deepEqual(defaultForumMode, {
+        turn: 0,
+        runs: 0,
+        mode: 'manual',
+        intervalDisabled: true,
+    }, '默认手动模式不得在AI回复后暗中调用论坛模型');
+    await page.selectOption('.mvuad-forum-refresh-mode-settings', 'auto');
+    assert.equal(
+        await page.locator('.mvuad-forum-interval').isDisabled(),
+        false,
+        '切换自动模式后才允许设置自动刷新间隔',
+    );
+    await page.selectOption('.mvuad-forum-refresh-mode-settings', 'manual');
+    assert.equal(
+        await page.locator('.mvuad-forum-interval').isDisabled(),
+        true,
+        '切回手动模式必须立即停用自动刷新间隔',
+    );
+    await page.evaluate(() => window.MvuAutoDoctorAPI.runForum());
     await page.waitForFunction(() => (
         window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.forum?.turn === 1
     ), null, { timeout: 20000 });
@@ -369,13 +395,17 @@ try {
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.5.0');
+    assert.equal(continuity.version, '1.6.0');
     assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
     assert.match(continuity.hardStatus, /硬合同/u);
     assert.match(continuity.hardDetails, /未发现可由程序确定/u);
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
+    assert.equal(continuity.state.threads[0].eventType, 'progress');
+    assert.equal(continuity.state.world.factions[0].id, 'FAC-01');
+    assert.equal(continuity.state.world.winds[0].id, 'WIND-01');
+    assert.equal(continuity.state.world.shadows.secrets[0].knowledge, 'hidden');
     assert.equal(continuity.forumState.posts.length, 4);
     assert.equal(
         continuity.forumState.posts.reduce((sum, post) => sum + post.comments.length, 0),
@@ -462,27 +492,54 @@ try {
     assert.equal(floatingPanel.hidden, false);
     assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
     assert.equal(floatingPanel.cards, 1);
-    assert.match(floatingPanel.text, /世界风声/u);
+    assert.equal(
+        await page.locator('#mvuad-floating-orb').isHidden(),
+        true,
+        '面板打开后悬浮球必须隐藏，不能压住世界摘要和分类',
+    );
+    assert.match(floatingPanel.text, /分类世界态势/u);
+    assert.match(floatingPanel.text, /长期趋势/u);
+    assert.match(floatingPanel.text, /因果联动/u);
     assert.match(floatingPanel.text, /打开完整论坛/u);
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="world"]')?.hidden),
+        false,
+    );
+    assert.equal(
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
+        true,
+        '世界摘要不得与事件详情纵向堆叠',
+    );
+    const worldCategories = await page.evaluate(() => ({
+        total: document.querySelectorAll('#mvuad-floating-panel .mvuad-world-category').length,
+        open: document.querySelectorAll('#mvuad-floating-panel .mvuad-world-category[open]').length,
+        visibleLists: [...document.querySelectorAll('#mvuad-floating-panel .mvuad-world-category-list')]
+            .filter((element) => element.getClientRects().length > 0).length,
+        digest: document.querySelector('#mvuad-floating-panel .mvuad-world-digest')?.textContent || '',
+    }));
+    assert.equal(worldCategories.total, 7);
+    assert.equal(worldCategories.open, 0, '世界分类默认全部收起，避免再次挤成一整页');
+    assert.equal(worldCategories.visibleLists, 0);
+    assert.match(worldCategories.digest, /旧桥积水/u);
+    if (process.env.MVUAD_FLOATING_WORLD_SCREENSHOT) {
+        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_WORLD_SCREENSHOT });
+    }
+    await page.click('#mvuad-floating-panel .mvuad-world-category[data-world-category="factions"] > summary');
+    assert.match(
+        await page.locator('#mvuad-floating-panel .mvuad-world-category[data-world-category="factions"]').textContent(),
+        /港区运输联合体/u,
+    );
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="threads"]');
     assert.equal(
         await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
         false,
     );
-    assert.equal(
-        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="echoes"]')?.hidden),
-        true,
-        '支线页不得与世界风声纵向堆叠',
+    assert.match(
+        await page.locator('#mvuad-floating-panel .mvuad-thread-progress').textContent(),
+        /\/9/u,
     );
     if (process.env.MVUAD_FLOATING_THREADS_SCREENSHOT) {
         await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_THREADS_SCREENSHOT });
-    }
-    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="echoes"]');
-    assert.equal(
-        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
-        true,
-    );
-    if (process.env.MVUAD_FLOATING_ECHOES_SCREENSHOT) {
-        await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_ECHOES_SCREENSHOT });
     }
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="forum"]');
     assert.equal(
@@ -522,6 +579,8 @@ try {
             clearInsideToolbar: panel?.querySelectorAll('.mvuad-forum-toolbar .mvuad-forum-clear').length || 0,
             controlsOpen: !!panel?.querySelector('.mvuad-forum-controls')?.open,
             toolbarVisible: (panel?.querySelector('.mvuad-forum-toolbar')?.getClientRects().length || 0) > 0,
+            primaryRefreshVisible: (panel?.querySelector('.mvuad-forum-refresh-main')?.getClientRects().length || 0) > 0,
+            refreshMode: panel?.querySelector('.mvuad-forum-refresh-mode')?.value || '',
             statusHidden: !!panel?.querySelector('.mvuad-forum-status')?.hidden,
             statusKind: panel?.querySelector('.mvuad-forum-status')?.dataset.kind || '',
             text: panel?.textContent || '',
@@ -542,12 +601,14 @@ try {
     assert.equal(forumPanel.clearInsideToolbar, 0, '清空操作不得继续与刷新按钮同级拥挤');
     assert.equal(forumPanel.controlsOpen, false, '完整论坛打开时低频来源与管理选项必须默认收起');
     assert.equal(forumPanel.toolbarVisible, false, '收起状态不得继续占据手机首屏');
+    assert.equal(forumPanel.primaryRefreshVisible, true, '手动刷新按钮必须始终留在论坛标题栏');
+    assert.equal(forumPanel.refreshMode, 'manual');
     assert.equal(forumPanel.statusHidden, false);
     assert.equal(forumPanel.statusKind, 'ok', '刚完成刷新时只保留明确的成功状态行');
     assert.match(forumPanel.text, /北门面摊/u);
     assert.match(forumPanel.text, /评论 2/u);
     assert.match(forumPanel.text, /来源：医生内置论坛/u);
-    assert.match(forumPanel.text, /内置自动：每 1 个 AI 回合/u);
+    assert.match(forumPanel.text, /刷新：手动/u);
     assert.equal(forumPanel.externalHidden, true, '未安装Zsd时仍必须显示内置论坛，而不是空跳转');
     await page.click('.mvuad-forum-controls > summary');
     assert.deepEqual(
@@ -591,6 +652,14 @@ try {
         '重新打开论坛时来源与管理选项必须恢复收起',
     );
     await page.click('#mvuad-forum-panel .mvuad-forum-close');
+    assert.deepEqual(
+        await page.evaluate(() => ({
+            panelHidden: !!document.querySelector('#mvuad-floating-panel')?.hidden,
+            orbHidden: !!document.querySelector('#mvuad-floating-orb')?.hidden,
+        })),
+        { panelHidden: true, orbHidden: false },
+        '从世界面板打开论坛时应关闭世界面板，并在退出论坛后保留悬浮入口',
+    );
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.match(continuity.calls.continuitySystem, /setting_independent/u);
     assert.match(continuity.calls.continuitySystem, /不可信引用数据/u);
@@ -695,7 +764,7 @@ try {
         await t.context.eventSource.emit('generation_started', 'regenerate', {}, false);
         return t.calls.prompts.at(-1)?.[1] || '';
     });
-    assert.match(rerollPrompt, /当前没有登记中的未结支线/u);
+    assert.match(rerollPrompt, /当前没有登记中的未结事件/u);
     assert.doesNotMatch(rerollPrompt, /PE-港口-哨兵-01/u);
 
     await page.evaluate(async () => {
@@ -727,7 +796,7 @@ try {
     );
     assert.match(
         await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger-empty')?.textContent || ''),
-        /当前没有未结支线/u,
+        /当前没有未结事件/u,
     );
     assert.equal(
         await page.evaluate(() => document.querySelectorAll('#mvuad-forum-panel .mvuad-forum-post').length),
@@ -738,6 +807,14 @@ try {
     const lifecyclePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await lifecyclePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await lifecyclePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await lifecyclePage.evaluate(() => {
+        Object.assign(window.__TEST__.context.extensionSettings.mvu_auto_doctor, {
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'auto',
+            forumAutoRefresh: true,
+            forumRefreshEvery: 1,
+        });
+    });
     for (const turn of [1, 2, 3, 4]) {
         await lifecyclePage.evaluate(async (step) => {
             const t = window.__TEST__;
@@ -776,7 +853,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.5.0');
+    assert.equal(lifecycle.version, '1.6.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -804,7 +881,7 @@ try {
         '隐藏且未汇流的已收束事件必须保留在后台账本，不得泄露进正文提示',
     );
     assert.match(lifecycle.ledgerText, /烧毁货单后的泄密追查/u);
-    assert.match(lifecycle.ledgerText, /已收束支线（1）/u);
+    assert.match(lifecycle.ledgerText, /已收束事件（1）/u);
     await lifecyclePage.close();
 
     const doubleWriterPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -825,7 +902,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await doubleWriterPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getForumState().turn === 1
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
     ), null, { timeout: 30000 });
     const doubleWriter = await doubleWriterPage.evaluate(() => ({
         replacements: window.__TEST__.calls.replace.length,
@@ -836,7 +913,7 @@ try {
     assert.equal(doubleWriter.replacements, 0, '无法关闭故事神谕 AUTO 时不得写 MVU');
     assert.match(doubleWriter.status, /避免双写/u);
     assert.equal(doubleWriter.continuityTurn, 1, '只读支线调度仍应继续');
-    assert.equal(doubleWriter.forumTurn, 1, '独立论坛仍应继续');
+    assert.equal(doubleWriter.forumTurn, 0, '手动论坛不得被其他医生任务暗中触发');
     await doubleWriterPage.close();
 
     const copiedSettingsPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -850,7 +927,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await copiedSettingsPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getForumState().turn === 1
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
     ), null, { timeout: 30000 });
     assert.equal(
         await copiedSettingsPage.evaluate(() => window.__TEST__.calls.replace.length),
@@ -1092,7 +1169,12 @@ try {
     await continueCheckpointPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     await continueCheckpointPage.evaluate(async () => {
         const t = window.__TEST__;
-        t.context.extensionSettings.mvu_auto_doctor.delayMs = 300;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            delayMs: 300,
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'auto',
+            forumAutoRefresh: true,
+        });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
     });
@@ -1137,6 +1219,11 @@ try {
     await forumRerollPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     await forumRerollPage.evaluate(async () => {
         const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'auto',
+            forumAutoRefresh: true,
+        });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
     });
@@ -1174,6 +1261,7 @@ try {
         const t = window.__TEST__;
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
+        await window.MvuAutoDoctorAPI.runForum();
     });
     await externalForumPage.waitForFunction(() => (
         window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.forum?.turn === 1
@@ -1185,7 +1273,7 @@ try {
         summary: document.querySelector('.mvuad-forum-summary')?.textContent || '',
         note: document.querySelector('.mvuad-forum-source-note')?.textContent || '',
     }));
-    assert.equal(externalForumBuiltin.forum.turn, 1, '安装Zsd不得让默认内置论坛静默停更');
+    assert.equal(externalForumBuiltin.forum.turn, 1, '安装Zsd后手动刷新仍应使用默认内置来源');
     assert.equal(externalForumBuiltin.calls.forumRuns, 1);
     assert.equal(externalForumBuiltin.externalButtonHidden, false);
     assert.match(externalForumBuiltin.summary, /来源：医生内置论坛/u);
@@ -1200,7 +1288,7 @@ try {
         await t.context.eventSource.emit('message_received', 4);
     });
     await externalForumPage.waitForFunction(() => (
-        /当前来源为 Zsd/u.test(document.querySelector('.mvuad-settings-forum-status')?.textContent || '')
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 2
     ), null, { timeout: 30000 });
     const externalForumSelected = await externalForumPage.evaluate(() => ({
         forum: window.MvuAutoDoctorAPI.getForumState(),
@@ -1219,6 +1307,11 @@ try {
     await swipeOnlyPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     await swipeOnlyPage.evaluate(async () => {
         const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'auto',
+            forumAutoRefresh: true,
+        });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
     });
@@ -1258,6 +1351,11 @@ try {
     await swipeFallbackPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     await swipeFallbackPage.evaluate(async () => {
         const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'auto',
+            forumAutoRefresh: true,
+        });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
     });

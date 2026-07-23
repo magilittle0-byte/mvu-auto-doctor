@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import {
     appendRepairJournal,
+    advanceContinuityClocks,
+    applyWorldUpdate,
     attachChangedSourceRefs,
     buildContinuityInjection,
     continuityLifecycleStats,
     continuityLedgerView,
+    continuityWorldDigest,
     enforceContinuityPolicy,
     extractContinuityMarkers,
     latestUndoRecord,
@@ -133,7 +136,7 @@ const ledger = continuityLedgerView({
 }, { chatId: 'chat-a' });
 assert.equal(ledger.activeCount, 1);
 assert.equal(ledger.resolvedCount, 1);
-assert.equal(ledger.active[0].stageLabel, '已显现');
+assert.equal(ledger.active[0].stageLabel, '逼近');
 assert.equal(ledger.active[0].kindLabel, '平行事件');
 assert.equal(ledger.active[0].knowledgeLabel, '传闻阶段（部分可知）');
 assert.equal(ledger.active[0].latestSource.index, 9);
@@ -147,7 +150,7 @@ const injection = buildContinuityInjection(state, {
     maxVisible: 1,
 });
 assert.match(injection, /预设、缝合怪或世界引擎负责剧情与世界提案/u);
-assert.match(injection, /最多让1条支线/u);
+assert.match(injection, /最多让1条事件/u);
 assert.match(injection, /禁止替玩家角色决定/u);
 assert.match(injection, /PE-港口-哨兵-01/u);
 assert.match(injection, /禁止为了展示伏笔而强行写入正文/u);
@@ -466,6 +469,141 @@ assert.equal(
     '容量恢复后调度器应能唤醒保留的 dormant 事件',
 );
 assert.equal(awakened.threads.find((thread) => thread.id === 'PE-4').stage, 'advancing');
+
+const clockBase = normalizeContinuityState({
+    chatId: 'clock-chat',
+    turn: 3,
+    threads: [
+        {
+            id: 'CLOCK-CONFLICT',
+            title: '高烈度冲突',
+            eventType: 'conflict',
+            level: 4,
+            stage: 'seeded',
+            stageProgress: 1,
+        },
+        {
+            id: 'CLOCK-PROGRESS',
+            title: '大型建设',
+            eventType: 'progress',
+            level: 4,
+            stage: 'advancing',
+            stageProgress: 4,
+        },
+    ],
+}, { maxThreads: 8 });
+const clockRolls = [0.99, 0];
+const clockAdvanced = advanceContinuityClocks(clockBase, {
+    random: () => clockRolls.shift() ?? 0.5,
+    maxThreads: 8,
+});
+assert.equal(clockAdvanced.state.threads[0].stageProgress, 2);
+assert.equal(clockAdvanced.state.threads[0].evolveResult, 'success');
+assert.equal(clockAdvanced.state.threads[1].stageProgress, 3);
+assert.equal(clockAdvanced.state.threads[1].evolveResult, 'setback');
+assert.deepEqual(clockAdvanced.changedThreadIds, ['CLOCK-CONFLICT', 'CLOCK-PROGRESS']);
+
+const worldBase = normalizeContinuityState({
+    chatId: 'world-chat',
+    turn: 4,
+    world: {
+        winds: [{
+            id: 'WIND-01',
+            topic: '旧港口封路',
+            type: 'report',
+            strength: 2,
+            content: '旧港口临时封闭',
+            source: '现场公告',
+            scope: '旧港口',
+            basis: '已公开公告',
+            knowledge: 'observed',
+            quietTurns: 3,
+        }],
+    },
+}, { maxThreads: 8 });
+const worldUpdated = applyWorldUpdate(worldBase.world, {
+    digest: '旧港口封路开始影响运输组织的判断。',
+    factions: [{
+        id: null,
+        name: '港区运输联合体',
+        relation: 'neutral',
+        condition: 'strained',
+        goal: '寻找替代路线',
+        summary: '封路增加了调度压力',
+        scope: '港区',
+        knowledge: 'observed',
+        basis: '世界书中的运输组织与已公开封路',
+        lastChange: '开始分流车辆',
+    }],
+    winds: [{
+        id: 'WIND-01',
+        content: '旧港口封闭至少持续一天',
+        source: '现场公告→运输司机群体',
+        scope: '港区运输圈',
+        strength: 2,
+        basis: '公告被运输人员转述',
+    }],
+    reputation: {
+        authority: {
+            level: 2,
+            summary: '管理机构开始正面评价玩家的救援协助',
+            basis: '公开表彰已经进入机构圈层',
+        },
+    },
+    environment: {
+        economy: 'crisis',
+        summary: '港区运输短期趋紧',
+        basis: '封路已导致可观察的路线分流',
+        incidents: [{
+            id: null,
+            title: '旧港口封路',
+            status: 'active',
+            summary: '港口入口暂停通行',
+            scope: '旧港口',
+            remainingTurns: 2,
+            knowledge: 'observed',
+            basis: '现场公告',
+        }],
+    },
+    influences: [{
+        id: null,
+        trigger: 'WIND-01',
+        impact: '运输联合体开始寻找替代路线',
+        fallout: '临时运价可能上升',
+        knowledge: 'observed',
+        basis: '风声已覆盖港区运输圈',
+    }],
+}, { turn: 5 });
+assert.equal(worldUpdated.factions[0].id, 'FAC-01');
+assert.equal(worldUpdated.winds.length, 1, '同一稳定ID的风声必须增量合并');
+assert.equal(worldUpdated.winds[0].quietTurns, 0, '有实质更新的风声重置沉寂计数');
+assert.match(worldUpdated.winds[0].content, /至少持续一天/u);
+assert.equal(worldUpdated.reputation.authority.level, 1, '声誉单轮最多移动一级');
+assert.equal(worldUpdated.environment.economy, 'strained', '经济气候单轮最多移动一级');
+assert.equal(worldUpdated.environment.incidents[0].id, 'INC-01');
+assert.equal(worldUpdated.influences[0].id, 'CAUSE-01');
+assert.notEqual(
+    continuityWorldDigest(worldBase),
+    continuityWorldDigest({ ...worldBase, world: worldUpdated }),
+);
+
+const partialWorld = applyWorldUpdate(worldUpdated, {
+    winds: [{ id: 'UNKNOWN-WIND', content: '模型编造的未知ID' }],
+}, { turn: 6 });
+assert.equal(partialWorld.factions.length, 1, '增量输出不得删除未返回的旧类别');
+assert.equal(partialWorld.winds.length, 1, '未知稳定ID不得污染状态');
+
+const parsedWorldDelta = parseContinuityOutput(`
+<ContinuityState>
+{
+  "turn": 6,
+  "threads": [],
+  "world": {
+    "winds": [{"id":"WIND-01","content":"封路消息继续传播"}]
+  }
+}
+</ContinuityState>`, { chatId: 'world-chat' });
+assert.equal(parsedWorldDelta.raw.world.winds[0].id, 'WIND-01');
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',
