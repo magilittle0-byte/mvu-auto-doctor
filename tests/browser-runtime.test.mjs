@@ -45,7 +45,7 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -181,6 +181,10 @@ window.StoryOracleAPI = {
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
     calls.model.push(isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
+    if (!isContinuity && !isForum) {
+      calls.repairSystem = messages[0].content;
+      calls.repairUser = messages[1].content;
+    }
     if (isForum) {
       calls.forumRuns += 1;
       calls.forumSystem = messages[0].content;
@@ -362,7 +366,7 @@ try {
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.4.3');
+    assert.equal(continuity.version, '1.4.4');
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
@@ -373,6 +377,10 @@ try {
     );
     assert.ok(continuity.forumState.posts.every((post) => post.comments.length > 0));
     assert.equal(continuity.calls.forumRuns, 1);
+    assert.match(continuity.calls.repairSystem, /动态集合的成员资格与生命周期/u);
+    assert.match(continuity.calls.repairSystem, /给予方与接收方必须对称复核/u);
+    assert.match(continuity.calls.repairSystem, /同时恢复错误目标/u);
+    assert.match(continuity.calls.repairUser, /动态集合生命周期历史线索/u);
     assert.match(continuity.calls.forumSystem, /至少一半帖子应为日常闲聊/u);
     assert.match(continuity.calls.forumSystem, /每个新帖都至少获得1条回复/u);
     assert.match(continuity.calls.forumSystem, /不可信引用数据/u);
@@ -504,6 +512,8 @@ try {
             longBodies: panel?.querySelectorAll('.mvuad-forum-body-details').length || 0,
             feedEnds: panel?.querySelectorAll('.mvuad-forum-feed-end').length || 0,
             clearInsideToolbar: panel?.querySelectorAll('.mvuad-forum-toolbar .mvuad-forum-clear').length || 0,
+            controlsOpen: !!panel?.querySelector('.mvuad-forum-controls')?.open,
+            toolbarVisible: (panel?.querySelector('.mvuad-forum-toolbar')?.getClientRects().length || 0) > 0,
             statusHidden: !!panel?.querySelector('.mvuad-forum-status')?.hidden,
             statusKind: panel?.querySelector('.mvuad-forum-status')?.dataset.kind || '',
             text: panel?.textContent || '',
@@ -522,6 +532,8 @@ try {
     assert.equal(forumPanel.longBodies, 1);
     assert.equal(forumPanel.feedEnds, 1);
     assert.equal(forumPanel.clearInsideToolbar, 0, '清空操作不得继续与刷新按钮同级拥挤');
+    assert.equal(forumPanel.controlsOpen, false, '完整论坛打开时低频来源与管理选项必须默认收起');
+    assert.equal(forumPanel.toolbarVisible, false, '收起状态不得继续占据手机首屏');
     assert.equal(forumPanel.statusHidden, false);
     assert.equal(forumPanel.statusKind, 'ok', '刚完成刷新时只保留明确的成功状态行');
     assert.match(forumPanel.text, /北门面摊/u);
@@ -529,6 +541,20 @@ try {
     assert.match(forumPanel.text, /来源：医生内置论坛/u);
     assert.match(forumPanel.text, /内置自动：每 1 个 AI 回合/u);
     assert.equal(forumPanel.externalHidden, true, '未安装Zsd时仍必须显示内置论坛，而不是空跳转');
+    await page.click('.mvuad-forum-controls > summary');
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const controls = document.querySelector('.mvuad-forum-controls');
+            const toolbar = document.querySelector('.mvuad-forum-toolbar');
+            return {
+                open: !!controls?.open,
+                toolbarVisible: (toolbar?.getClientRects().length || 0) > 0,
+            };
+        }),
+        { open: true, toolbarVisible: true },
+        '用户主动展开后才显示来源与管理选项',
+    );
+    await page.click('.mvuad-forum-controls > summary');
     await page.click('.mvuad-forum-body-details > summary');
     assert.equal(
         await page.evaluate(() => document.querySelector('.mvuad-forum-body-details')?.open),
@@ -549,6 +575,14 @@ try {
         await page.evaluate(() => document.querySelector('#mvuad-forum-panel')?.hidden),
         true,
     );
+    await page.evaluate(() => window.MvuAutoDoctorAPI.openForum());
+    await page.waitForFunction(() => !document.querySelector('#mvuad-forum-panel')?.hidden);
+    assert.equal(
+        await page.evaluate(() => document.querySelector('.mvuad-forum-controls')?.open),
+        false,
+        '重新打开论坛时来源与管理选项必须恢复收起',
+    );
+    await page.click('#mvuad-forum-panel .mvuad-forum-close');
     assert.ok(continuity.calls.model.includes('continuity'));
     assert.match(continuity.calls.continuitySystem, /setting_independent/u);
     assert.match(continuity.calls.continuitySystem, /不可信引用数据/u);
@@ -734,7 +768,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.4.3');
+    assert.equal(lifecycle.version, '1.4.4');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

@@ -1,12 +1,14 @@
 import {
     deepClone,
     deepSubset,
+    buildLifecycleHistoryHints,
     diffStates,
     extractLastUpdateBlock,
     extractSchemaScripts,
     findOpeningResourceMismatches,
     findMvuRuleEntries,
     fingerprint,
+    hasUsableStatData,
     isPlainObject,
     parseInitializationText,
     parsePatchBlock,
@@ -43,7 +45,7 @@ import {
 } from './forum-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.4.3';
+const VERSION = '1.4.4';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -882,6 +884,22 @@ function recentTranscript(context, targetIndex, limit) {
         .join('\n\n');
 }
 
+function lifecycleTranscriptEntries(context, targetIndex) {
+    return (context?.chat || [])
+        .slice(0, targetIndex)
+        .map((message, index) => ({ message, index }))
+        .filter(({ message }) => (
+            message
+            && !message.is_system
+            && typeof message.mes === 'string'
+        ))
+        .map(({ message, index }) => ({
+            index,
+            role: message.is_user ? '用户' : 'AI',
+            text: stripMechanism(message.mes),
+        }));
+}
+
 function safeJson(value, indent = 2) {
     try {
         return JSON.stringify(value, null, indent);
@@ -1015,7 +1033,7 @@ async function previousMvuData(Mvu, context, targetIndex) {
         const message = context.chat[index];
         if (!message || message.is_user || message.is_system) continue;
         const data = await mvuDataAt(Mvu, index);
-        if (data) return data;
+        if (hasUsableStatData(data)) return data;
     }
     return null;
 }
@@ -1240,6 +1258,11 @@ async function buildAuditMessages({
         settings.contextMessages,
     );
     const currentStat = statDataOf(currentData);
+    const lifecycleHints = buildLifecycleHistoryHints(
+        currentStat,
+        rules,
+        lifecycleTranscriptEntries(context, targetIndex),
+    );
 
     const system = [
         '你是一个通用、保守、可验证的 MVU 状态审计与修复引擎。',
@@ -1257,6 +1280,12 @@ async function buildAuditMessages({
         '- “本回合已观察到的状态差异”只是证据，不等于都要再次更新。',
         '- 只输出叠加在当前 stat_data 上的纠错/补漏；已正确落地的变化绝不能重复，尤其不能重复 delta。',
         '- 根据最新 AI 回复正文判断本回合明确发生了什么。不得根据可能性、计划、比喻或未发生的动作改变量。',
+        '- 不只检查叶子值，也要检查动态集合的成员资格与生命周期。集合名和规则若限定为“当前敌人”等特定身份，不得把它擅自当作通用 NPC、同伴或仓库存放区。',
+        '- 规则明确规定死亡、逃跑、战斗结束、离队、失效等条件要删除条目时，只有正文或所给历史线索明确证明条件已经发生，才清理过期条目；“近期没提到”本身不是证据。',
+        '- 动态条目若放错集合，只能在 Schema、规则或正文明确给出正确目标路径时 move；否则只纠正能够确定的错误，不创造新的收纳字段。',
+        '- 输入字段变化后，要闭合检查规则要求手写的全部依赖值。装备或效果在两个实体间转移时，给予方与接收方必须对称复核：获得会增加的加成，移除后也必须撤销。',
+        '- 若原更新把一个明确变化写到了错误路径，纠错必须同时恢复错误目标，并在 Schema、规则和正文能证明时补写真正目标；不能只撤销一半。',
+        '- 每轮都以当前输入重新推导，不得假设上一轮已经正确的派生结果在装备、基础值或修正来源变化后仍然正确。',
         '- 对规则标为派生/只读/自动计算的字段，不要写入。',
         '- replace、delta、remove 只能用于当前已存在路径。',
         '- insert 只能用于父路径已存在、目标尚不存在的新键或合法数组位置。',
@@ -1288,6 +1317,13 @@ async function buildAuditMessages({
         '',
         '=== 本回合已观察到的状态差异（上一 AI 楼层 -> 当前）===',
         observedDiff(previousData, currentData),
+        '',
+        '=== 动态集合生命周期历史线索（不可信只读引用；缺席不是删除证据）===',
+        cropText(
+            lifecycleHints || '当前规则与状态中未识别到需要定向回查的动态集合。',
+            24000,
+            '生命周期历史线索',
+        ),
         '',
         '=== 最近剧情上下文（只读）===',
         cropText(transcript || '无', 36000, '剧情上下文'),
@@ -3644,6 +3680,12 @@ function renderForum() {
         });
         ui.forumSummary.replaceChildren(summaryLead, ...chips);
     }
+    if (ui.forumControlsMeta) {
+        ui.forumControlsMeta.textContent = `${forumProviderLabel(settings.forumProvider)} · ${state.active.length} 帖`;
+    }
+    if (ui.forumControls) {
+        ui.forumControls.dataset.status = ui.forumStatus?.dataset.kind || '';
+    }
     if (ui.forumStatus) {
         ui.forumStatus.textContent = latestForumStatus;
         ui.forumStatus.hidden = !ui.forumStatus.dataset.kind;
@@ -3732,6 +3774,7 @@ function refreshForumManual() {
 function showForumPanel() {
     if (!ui?.forumPanel) return;
     hideFloatingPanel();
+    if (ui.forumControls) ui.forumControls.open = false;
     ui.forumPanel.hidden = false;
     ui.forumPanel.classList.add('mvuad-forum-panel-open');
     renderForum();
@@ -3788,23 +3831,31 @@ function buildForumUi() {
                 <div><b>世界论坛</b><span>独立于正文 · v${VERSION}</span></div>
                 <button class="mvuad-forum-close" type="button" aria-label="关闭论坛">×</button>
             </div>
-            <div class="mvuad-forum-toolbar">
-                <label class="mvuad-forum-provider">
-                    <span>论坛来源</span>
-                    <select class="text_pole mvuad-forum-provider-select">
-                        <option value="builtin">医生内置论坛</option>
-                        <option value="zsd">Zsd 论坛</option>
-                    </select>
-                </label>
-                <button class="menu_button mvuad-forum-refresh" type="button">刷新内置内容</button>
-                <button class="menu_button mvuad-forum-external" type="button" hidden>打开 Zsd</button>
-            </div>
-            <div class="mvuad-forum-source-note" hidden></div>
-            <div class="mvuad-forum-status" role="status" hidden></div>
-            <div class="mvuad-forum-summary"></div>
-            <div class="mvuad-forum-utility">
-                <button class="mvuad-forum-clear" type="button">清空当前内置帖子</button>
-            </div>
+            <details class="mvuad-forum-controls">
+                <summary>
+                    <span>来源与管理</span>
+                    <span class="mvuad-forum-controls-meta"></span>
+                </summary>
+                <div class="mvuad-forum-controls-body">
+                    <div class="mvuad-forum-toolbar">
+                        <label class="mvuad-forum-provider">
+                            <span>论坛来源</span>
+                            <select class="text_pole mvuad-forum-provider-select">
+                                <option value="builtin">医生内置论坛</option>
+                                <option value="zsd">Zsd 论坛</option>
+                            </select>
+                        </label>
+                        <button class="menu_button mvuad-forum-refresh" type="button">刷新内置内容</button>
+                        <button class="menu_button mvuad-forum-external" type="button" hidden>打开 Zsd</button>
+                    </div>
+                    <div class="mvuad-forum-source-note" hidden></div>
+                    <div class="mvuad-forum-status" role="status" hidden></div>
+                    <div class="mvuad-forum-summary"></div>
+                    <div class="mvuad-forum-utility">
+                        <button class="mvuad-forum-clear" type="button">清空当前内置帖子</button>
+                    </div>
+                </div>
+            </details>
             <div class="mvuad-forum-filters" aria-label="论坛分类"></div>
             <div class="mvuad-forum-empty"></div>
             <div class="mvuad-forum-feed"></div>
@@ -3813,6 +3864,8 @@ function buildForumUi() {
     Object.assign(ui, {
         forumPanel: panel,
         forumClose: panel.querySelector('.mvuad-forum-close'),
+        forumControls: panel.querySelector('.mvuad-forum-controls'),
+        forumControlsMeta: panel.querySelector('.mvuad-forum-controls-meta'),
         forumStatus: panel.querySelector('.mvuad-forum-status'),
         forumSummary: panel.querySelector('.mvuad-forum-summary'),
         forumFilters: panel.querySelector('.mvuad-forum-filters'),

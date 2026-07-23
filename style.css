@@ -887,6 +887,60 @@
     cursor: pointer;
 }
 
+.mvuad-forum-controls {
+    flex: 0 0 auto;
+    margin: 7px 12px 0;
+    overflow: clip;
+    border: 1px solid color-mix(in srgb, var(--mvuad-accent) 24%, var(--mvuad-forum-border));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--mvuad-forum-text) 3%, transparent);
+}
+
+.mvuad-forum-controls > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 5px 9px;
+    list-style: none;
+    cursor: pointer;
+    font-size: 0.78em;
+    line-height: 1.35;
+    user-select: none;
+}
+
+.mvuad-forum-controls > summary::-webkit-details-marker { display: none; }
+
+.mvuad-forum-controls > summary::before {
+    content: '›';
+    flex: 0 0 auto;
+    opacity: 0.62;
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+}
+
+.mvuad-forum-controls[open] > summary {
+    border-bottom: 1px solid var(--mvuad-forum-border);
+}
+
+.mvuad-forum-controls[open] > summary::before { transform: rotate(90deg); }
+
+.mvuad-forum-controls-meta {
+    min-width: 0;
+    margin-left: auto;
+    opacity: 0.62;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mvuad-forum-controls[data-status="busy"] > summary::before { color: #f1c75b; opacity: 1; }
+.mvuad-forum-controls[data-status="ok"] > summary::before { color: #78d69c; opacity: 1; }
+.mvuad-forum-controls[data-status="error"] > summary::before { color: #ff8e8e; opacity: 1; }
+
+.mvuad-forum-controls-body { padding-bottom: 6px; }
+.mvuad-forum-controls:not([open]) > .mvuad-forum-controls-body { display: none; }
+
 .mvuad-forum-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -895,6 +949,12 @@
     padding: 6px 12px 2px;
     font-size: 0.72em;
 }
+
+.mvuad-forum-controls .mvuad-forum-toolbar { padding: 8px 8px 2px; }
+.mvuad-forum-controls .mvuad-forum-source-note { margin-inline: 8px; }
+.mvuad-forum-controls .mvuad-forum-status { margin-inline: 8px; }
+.mvuad-forum-controls .mvuad-forum-summary { padding-inline: 9px; }
+.mvuad-forum-controls .mvuad-forum-utility { padding-inline: 8px; }
 
 .mvuad-forum-provider {
     display: grid;
@@ -1275,6 +1335,8 @@
     .mvuad-forum-toolbar { display: grid; grid-template-columns: 1fr 1fr; }
     .mvuad-forum-provider { grid-column: 1 / -1; }
     .mvuad-forum-provider > span { display: none; }
+    .mvuad-forum-controls { margin-top: 6px; }
+    .mvuad-forum-controls > summary { min-height: 38px; }
     .mvuad-forum-summary { gap: 5px; }
     .mvuad-forum-chip { font-size: 0.76em; }
     .mvuad-forum-filters { scrollbar-width: none; }

@@ -12,6 +12,15 @@ export function statDataOf(data) {
     return isPlainObject(data.stat_data) ? data.stat_data : data;
 }
 
+export function hasUsableStatData(data) {
+    if (!isPlainObject(data)) return false;
+    if (Object.prototype.hasOwnProperty.call(data, 'stat_data')) {
+        return isPlainObject(data.stat_data) && Object.keys(data.stat_data).length > 0;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'display_data')) return false;
+    return Object.keys(data).length > 0;
+}
+
 export function pointerSegments(path) {
     if (typeof path !== 'string' || !path.startsWith('/')) return null;
     const raw = path.slice(1).split('/');
@@ -568,6 +577,230 @@ export function diffStates(before, after, limit = 240) {
 
     walk(before, after, []);
     return { changes, omitted };
+}
+
+const LIFECYCLE_EVENT_PATTERN = [
+    '死亡',
+    '阵亡',
+    '逃跑',
+    '逃离',
+    '战斗结束',
+    '战斗终止',
+    '离队',
+    '退出',
+    '失效',
+    '过期',
+    '解散',
+    '销毁',
+    'dead',
+    'death',
+    'escape',
+    'leave',
+    'expired?',
+    'destroyed?',
+].join('|');
+const LIFECYCLE_MUTATION_PATTERN = [
+    '删除',
+    '移除',
+    '清理',
+    '清除',
+    'remove',
+    'delete',
+    'clear',
+].join('|');
+const LIFECYCLE_RELATION_RE = new RegExp(
+    `(?:${LIFECYCLE_EVENT_PATTERN})[\\s\\S]{0,160}(?:${LIFECYCLE_MUTATION_PATTERN})`
+    + `|(?:${LIFECYCLE_MUTATION_PATTERN})[\\s\\S]{0,160}(?:${LIFECYCLE_EVENT_PATTERN})`,
+    'iu',
+);
+
+function similarlyShapedRecords(entries) {
+    if (entries.length <= 1) return true;
+    const signatures = entries
+        .slice(0, 12)
+        .map(([, value]) => new Set(
+            Object.keys(value).filter((key) => !String(key).startsWith('_')),
+        ));
+    for (let left = 0; left < signatures.length; left += 1) {
+        for (let right = left + 1; right < signatures.length; right += 1) {
+            const a = signatures[left];
+            const b = signatures[right];
+            const union = new Set([...a, ...b]);
+            if (!union.size) continue;
+            const intersection = [...a].filter((key) => b.has(key)).length;
+            if (intersection / union.size >= 0.35) return true;
+        }
+    }
+    return false;
+}
+
+function recordEntriesOf(value, maxEntries) {
+    if (!isPlainObject(value)) return [];
+    const entries = Object.entries(value);
+    if (!entries.length || entries.length > maxEntries) return [];
+    if (entries.some(([key, item]) => (
+        !isPlainObject(item)
+        || !String(key).trim()
+        || String(key).length > 96
+        || String(key).startsWith('_')
+    ))) return [];
+    return similarlyShapedRecords(entries) ? entries : [];
+}
+
+function ruleSectionAt(source, found) {
+    const lineStart = Math.max(0, source.lastIndexOf('\n', found - 1) + 1);
+    const lineEndHit = source.indexOf('\n', found);
+    const lineEnd = lineEndHit < 0 ? source.length : lineEndHit;
+    const headingLine = source.slice(lineStart, lineEnd);
+    const baseIndent = headingLine.match(/^[ \t]*/u)?.[0].length || 0;
+    const looksLikeHeading = /[:：]\s*(?:[|>-]\s*)?$/u.test(headingLine.trim());
+    if (!looksLikeHeading) return headingLine.trim();
+
+    let cursor = lineEnd < source.length ? lineEnd + 1 : source.length;
+    let sectionEnd = source.length;
+    while (cursor < source.length) {
+        const nextEndHit = source.indexOf('\n', cursor);
+        const nextEnd = nextEndHit < 0 ? source.length : nextEndHit;
+        const line = source.slice(cursor, nextEnd);
+        const trimmed = line.trim();
+        if (trimmed) {
+            const indent = line.match(/^[ \t]*/u)?.[0].length || 0;
+            const nextSection = indent <= baseIndent && (
+                /^#\s*=+/u.test(trimmed)
+                || /^[^-\s][^:：]{0,160}[:：]\s*(?:[|>-]\s*)?$/u.test(trimmed)
+            );
+            if (nextSection) {
+                sectionEnd = cursor;
+                break;
+            }
+        }
+        cursor = nextEnd < source.length ? nextEnd + 1 : source.length;
+    }
+    return source.slice(lineStart, sectionEnd).trim();
+}
+
+function lifecycleRuleWindows(rules, parts) {
+    const source = String(rules || '');
+    const cleanParts = (Array.isArray(parts) ? parts : [])
+        .map((part) => String(part || '').trim())
+        .filter(Boolean);
+    if (!source || !cleanParts.length) return [];
+    const fullPath = cleanParts.join('.');
+    const candidates = [fullPath];
+    if (cleanParts.length <= 2) candidates.push(cleanParts.at(-1));
+    const haystack = source.toLocaleLowerCase();
+    const windows = [];
+    for (const candidate of [...new Set(candidates)]) {
+        if (candidate.length < 2) continue;
+        const loweredNeedle = candidate.toLocaleLowerCase();
+        let cursor = 0;
+        while (windows.length < 3) {
+            const found = haystack.indexOf(loweredNeedle, cursor);
+            if (found < 0) break;
+            const section = ruleSectionAt(source, found);
+            if (LIFECYCLE_RELATION_RE.test(section)) windows.push(section);
+            cursor = found + loweredNeedle.length;
+        }
+        if (windows.length) break;
+    }
+    return windows;
+}
+
+export function findLifecycleCollections(stat, rules, {
+    maxDepth = 5,
+    maxCollections = 12,
+    maxEntriesPerCollection = 80,
+} = {}) {
+    const collections = [];
+
+    function walk(value, parts, depth) {
+        if (
+            collections.length >= maxCollections
+            || depth > maxDepth
+            || !isPlainObject(value)
+        ) return;
+
+        if (parts.length) {
+            const entries = recordEntriesOf(value, maxEntriesPerCollection);
+            const ruleWindows = entries.length
+                ? lifecycleRuleWindows(rules, parts)
+                : [];
+            if (entries.length && ruleWindows.length) {
+                collections.push({
+                    path: pointerPath(parts),
+                    label: parts.at(-1),
+                    entryNames: entries.map(([key]) => key),
+                    ruleExcerpt: ruleWindows[0],
+                });
+            }
+        }
+
+        for (const [key, item] of Object.entries(value)) {
+            if (isPlainObject(item)) walk(item, [...parts, key], depth + 1);
+            if (collections.length >= maxCollections) break;
+        }
+    }
+
+    walk(stat, [], 0);
+    return collections;
+}
+
+function compactMentionExcerpt(text, name, radius = 150) {
+    const source = String(text || '').replace(/\s+/gu, ' ').trim();
+    const found = source.toLocaleLowerCase().indexOf(String(name).toLocaleLowerCase());
+    if (found < 0) return '';
+    const start = Math.max(0, found - radius);
+    const end = Math.min(source.length, found + String(name).length + radius);
+    return `${start ? '…' : ''}${source.slice(start, end)}${end < source.length ? '…' : ''}`;
+}
+
+export function buildLifecycleHistoryHints(stat, rules, transcriptEntries, {
+    maxEntries = 36,
+    maxMentionsPerEntry = 2,
+    maxCharacters = 22000,
+} = {}) {
+    const collections = findLifecycleCollections(stat, rules);
+    if (!collections.length) return '';
+    const transcript = (Array.isArray(transcriptEntries) ? transcriptEntries : [])
+        .map((entry, index) => ({
+            index: Number.isInteger(entry?.index) ? entry.index : index,
+            role: String(entry?.role || ''),
+            text: String(entry?.text ?? entry?.mes ?? entry?.content ?? entry ?? ''),
+        }))
+        .filter((entry) => entry.text.trim());
+    const sections = [];
+    let usedEntries = 0;
+
+    for (const collection of collections) {
+        const evidence = [];
+        for (const name of collection.entryNames) {
+            if (usedEntries >= maxEntries) break;
+            const mentions = [];
+            for (let index = transcript.length - 1; index >= 0; index -= 1) {
+                const entry = transcript[index];
+                const excerpt = compactMentionExcerpt(entry.text, name);
+                if (!excerpt) continue;
+                mentions.push(
+                    `- ${name}｜历史楼层 ${entry.index} ${entry.role || '消息'}：${excerpt}`,
+                );
+                if (mentions.length >= maxMentionsPerEntry) break;
+            }
+            if (!mentions.length) continue;
+            evidence.push(...mentions.reverse());
+            usedEntries += 1;
+        }
+        if (!evidence.length) continue;
+        sections.push([
+            `集合 ${collection.path}`,
+            `与生命周期直接相关的规则片段：${collection.ruleExcerpt}`,
+            ...evidence,
+        ].join('\n'));
+        if (sections.join('\n\n').length >= maxCharacters) break;
+    }
+
+    const result = sections.join('\n\n');
+    if (result.length <= maxCharacters) return result;
+    return `${result.slice(0, maxCharacters)}\n……【生命周期历史线索已按上限截断】`;
 }
 
 export function fingerprint(value) {
