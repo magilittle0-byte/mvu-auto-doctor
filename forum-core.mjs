@@ -131,18 +131,159 @@ export function normalizeForumState(value, {
     };
 }
 
+function firstBalancedJsonObject(source) {
+    const text = String(source || '');
+    const start = text.indexOf('{');
+    if (start < 0) return '';
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+        if (char === '{' || char === '[') depth += 1;
+        else if (char === '}' || char === ']') {
+            depth -= 1;
+            if (depth === 0) return text.slice(start, index + 1);
+            if (depth < 0) return '';
+        }
+    }
+    return '';
+}
+
+function parseErrorPosition(error) {
+    const match = String(error?.message || error).match(
+        /(?:position|at)\s+(\d+)|line\s+\d+\s+column\s+\d+\s+\(char\s+(\d+)\)/iu,
+    );
+    const value = Number(match?.[1] ?? match?.[2]);
+    return Number.isInteger(value) && value >= 0 ? value : -1;
+}
+
+function previousNonWhitespace(textValue, from) {
+    for (let index = from; index >= 0; index -= 1) {
+        if (!/\s/u.test(textValue[index])) return { char: textValue[index], index };
+    }
+    return { char: '', index: -1 };
+}
+
+function nextNonWhitespace(textValue, from) {
+    for (let index = from; index < textValue.length; index += 1) {
+        if (!/\s/u.test(textValue[index])) return { char: textValue[index], index };
+    }
+    return { char: '', index: -1 };
+}
+
+function removeTrailingCommasOutsideStrings(source) {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    const repairs = [];
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (inString) {
+            output += char;
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            output += char;
+            continue;
+        }
+        if (char === ',') {
+            const next = nextNonWhitespace(source, index + 1);
+            if (/[\]}]/u.test(next.char)) {
+                repairs.push({ type: 'remove-trailing-comma', position: index });
+                continue;
+            }
+        }
+        output += char;
+    }
+    return { source: output, repairs };
+}
+
+function parseForumJson(candidate) {
+    const stripped = String(candidate || '')
+        .trim()
+        .replace(/^```(?:json)?\s*/iu, '')
+        .replace(/\s*```$/u, '');
+    const normalized = removeTrailingCommasOutsideStrings(stripped);
+    let source = normalized.source;
+    const repairs = [...normalized.repairs];
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+        try {
+            return { parsed: JSON.parse(source), repairs, error: null };
+        } catch (error) {
+            const position = parseErrorPosition(error);
+            if (position < 0 || position > source.length) {
+                return { parsed: null, repairs, error };
+            }
+            const message = String(error.message || error);
+            const previous = previousNonWhitespace(source, position - 1);
+            const next = nextNonWhitespace(source, position);
+            const expectsComma = /Expected\s*['"]?,['"]?\s*or\s*['"]?[\]}]['"]?\s*after|expected\s+comma/iu.test(message);
+            const startsValueOrKey = /[{"\[\d\-tfn]/u.test(next.char);
+            const endsValue = /[\]}"\d]/u.test(previous.char)
+                || source.slice(Math.max(0, previous.index - 4), previous.index + 1).match(
+                    /(?:true|false|null)$/u,
+                );
+            if (expectsComma && startsValueOrKey && endsValue) {
+                source = `${source.slice(0, next.index)},${source.slice(next.index)}`;
+                repairs.push({ type: 'insert-comma', position: next.index });
+                continue;
+            }
+            if (
+                /Unexpected token\s*['"]?[\]}]['"]?|Expected double-quoted property name/iu.test(message)
+                && previous.char === ','
+                && /[\]}]/u.test(next.char)
+            ) {
+                source = `${source.slice(0, previous.index)}${source.slice(previous.index + 1)}`;
+                repairs.push({ type: 'remove-trailing-comma', position: previous.index });
+                continue;
+            }
+            return { parsed: null, repairs, error };
+        }
+    }
+    return {
+        parsed: null,
+        repairs,
+        error: new Error('安全标点修复次数超过上限'),
+    };
+}
+
 export function extractForumUpdate(output) {
     const source = String(output || '');
     const tagged = [...source.matchAll(/<ForumUpdate>\s*([\s\S]*?)\s*<\/ForumUpdate>/giu)].at(-1)?.[1];
-    const candidate = tagged || source.match(/\{[\s\S]*\}/u)?.[0] || '';
+    const candidate = tagged || firstBalancedJsonObject(source);
     if (!candidate) return { update: null, error: '模型没有返回 <ForumUpdate> JSON' };
-    try {
-        const parsed = JSON.parse(candidate);
-        if (!plainObject(parsed)) throw new Error('论坛更新不是对象');
-        return { update: parsed, error: '' };
-    } catch (error) {
-        return { update: null, error: `论坛 JSON 无法解析：${error.message || error}` };
+    const result = parseForumJson(candidate);
+    if (!result.parsed) {
+        return {
+            update: null,
+            error: `论坛 JSON 无法解析：${result.error?.message || result.error}`,
+            repaired: false,
+        };
     }
+    if (!plainObject(result.parsed)) {
+        return { update: null, error: '论坛更新不是对象', repaired: false };
+    }
+    return {
+        update: result.parsed,
+        error: '',
+        repaired: result.repairs.length > 0,
+        repairs: result.repairs,
+    };
 }
 
 export function applyForumUpdate(previous, rawUpdate, {

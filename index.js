@@ -43,9 +43,12 @@ import {
     forumView,
     normalizeForumState,
 } from './forum-core.mjs';
+import {
+    auditHardContracts,
+} from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.4.4';
+const VERSION = '1.5.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -63,6 +66,7 @@ const DEFAULTS = Object.freeze({
     modelTimeoutMs: 120000,
     mvuIdleTimeoutMs: 120000,
     mvuStableTimeoutMs: 8000,
+    hardContractAuditEnabled: true,
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
@@ -86,6 +90,7 @@ const DEFAULTS = Object.freeze({
 let mvuPromise = null;
 let runChain = Promise.resolve();
 let mvuWriteChain = Promise.resolve();
+let hardContractChain = Promise.resolve();
 let continuityChain = Promise.resolve();
 let forumChain = Promise.resolve();
 const automaticPendingKeys = new Set();
@@ -96,8 +101,12 @@ const continuityPendingKeys = new Set();
 const continuityCompletedKeys = new Set();
 const forumPendingKeys = new Set();
 const forumCompletedKeys = new Set();
+const hardContractPendingKeys = new Set();
+const hardContractCompletedKeys = new Set();
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
+let latestHardContractStatus = '硬合同：等待检查';
+let latestHardContractAudit = null;
 let latestContinuityStatus = '支线连续性：等待事件';
 let latestForumStatus = '论坛：等待世界消息';
 let oracleAutoDisabledNoticeShown = false;
@@ -189,6 +198,20 @@ function setStatus(text, kind = '') {
         ui.floatingRepairStatus.textContent = `变量：${latestStatus}`;
         ui.floatingRepairStatus.dataset.kind = kind;
     }
+    updateFloatingOrb();
+}
+
+function setHardContractStatus(text, kind = '') {
+    latestHardContractStatus = String(text || '');
+    if (ui?.hardContractStatus) {
+        ui.hardContractStatus.textContent = latestHardContractStatus;
+        ui.hardContractStatus.dataset.kind = kind;
+    }
+    if (ui?.floatingHardContractStatus) {
+        ui.floatingHardContractStatus.textContent = latestHardContractStatus;
+        ui.floatingHardContractStatus.dataset.kind = kind;
+    }
+    renderHardContractAudit();
     updateFloatingOrb();
 }
 
@@ -475,6 +498,87 @@ async function collectMvuRules(context, character) {
         contents.push(`【${entry.comment || 'MVU 更新规则'}】\n${content}`);
     }
     return contents;
+}
+
+function hardContractRelevant(text) {
+    return /正文\s*\d{2,5}\s*(?:~|～|—|–|-|至)\s*\d{2,5}\s*(?:个?汉字|字)|<content\b|<options\b|结尾四项候选|(?:四|4)(?:个|项)?[^\n]{0,12}选项|骰前锁|骰后锁|唯一骰源|<UpdateVariable\b|<JSONPatch\b|可装备槽位|装备位置|完整装备字段/iu.test(
+        String(text || ''),
+    );
+}
+
+function pushHardContractSource(target, seen, label, content) {
+    const text = String(content || '').trim();
+    if (!text || !hardContractRelevant(text)) return;
+    const key = fingerprint(text);
+    if (seen.has(key)) return;
+    seen.add(key);
+    target.push(`【${label}】\n${text}`);
+}
+
+async function collectHardContractTexts(context, character) {
+    const texts = [];
+    const seen = new Set();
+    const characterRoots = [
+        character?.data,
+        character,
+        character?.json_data?.data,
+        character?.json_data,
+    ].filter((value) => value && typeof value === 'object');
+    for (const root of characterRoots) {
+        for (const [label, key] of [
+            ['角色卡系统提示', 'system_prompt'],
+            ['角色卡场景规则', 'scenario'],
+        ]) {
+            pushHardContractSource(texts, seen, label, root?.[key]);
+        }
+    }
+
+    let activeWorldEntries = [];
+    try {
+        const module = await import('/scripts/world-info.js');
+        const sorted = typeof module.getSortedEntries === 'function'
+            ? await module.getSortedEntries()
+            : [];
+        activeWorldEntries = Array.isArray(sorted) ? sorted : [];
+    } catch {
+        // Embedded world-book entries remain a safe fallback.
+    }
+    const worldEntries = activeWorldEntries.length
+        ? activeWorldEntries
+        : embeddedBooks(character).flatMap(entriesOfWorldBook);
+    for (const entry of worldEntries) {
+        if (!entry || entry.disable === true || entry.enabled === false) continue;
+        pushHardContractSource(
+            texts,
+            seen,
+            `世界书：${entry.comment || entry.name || '未命名条目'}`,
+            entry.content,
+        );
+    }
+
+    try {
+        const module = await import('/scripts/openai.js');
+        const preset = module.oai_settings || {};
+        const prompts = Array.isArray(preset.prompts) ? preset.prompts : [];
+        const enabled = new Set();
+        for (const group of Array.isArray(preset.prompt_order) ? preset.prompt_order : []) {
+            for (const item of Array.isArray(group?.order) ? group.order : []) {
+                if (item?.enabled && item.identifier) enabled.add(item.identifier);
+            }
+        }
+        for (const prompt of prompts) {
+            if (enabled.size && !enabled.has(prompt?.identifier)) continue;
+            pushHardContractSource(
+                texts,
+                seen,
+                `预设：${prompt?.name || prompt?.identifier || '未命名提示'}`,
+                prompt?.content,
+            );
+        }
+    } catch {
+        // Some backends do not expose OpenAI-compatible preset modules.
+    }
+    return texts;
 }
 
 function initializationEntriesOf(book) {
@@ -884,6 +988,173 @@ function recentTranscript(context, targetIndex, limit) {
         .join('\n\n');
 }
 
+function previousUserMessageText(context, targetIndex) {
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+        const message = context?.chat?.[index];
+        if (message?.is_user && typeof message.mes === 'string' && message.mes.trim()) {
+            return message.mes;
+        }
+    }
+    return '';
+}
+
+function renderHardContractAudit() {
+    const details = ui?.hardContractDetails;
+    const summary = ui?.hardContractSummary;
+    const list = ui?.hardContractList;
+    if (!details || !summary || !list) return;
+    const issues = latestHardContractAudit?.issues || [];
+    const errorCount = issues.filter((issue) => issue.severity === 'error').length;
+    const warningCount = issues.filter((issue) => issue.severity === 'warning').length;
+    summary.textContent = latestHardContractAudit
+        ? `查看硬合同明细（错误 ${errorCount} · 提醒 ${warningCount}）`
+        : '查看硬合同明细';
+    list.replaceChildren();
+    if (!issues.length) {
+        const empty = document.createElement('li');
+        empty.className = 'mvuad-protocol-empty';
+        empty.textContent = latestHardContractAudit
+            ? '未发现可由程序确定的正文或装备合同问题。'
+            : '尚未检查。';
+        list.appendChild(empty);
+        return;
+    }
+    for (const issue of issues) {
+        const item = document.createElement('li');
+        item.className = 'mvuad-protocol-issue';
+        item.dataset.severity = issue.severity || 'info';
+        const badge = document.createElement('b');
+        badge.textContent = issue.severity === 'error'
+            ? '错误'
+            : issue.severity === 'warning'
+                ? '提醒'
+                : '信息';
+        const message = document.createElement('span');
+        message.textContent = issue.path
+            ? `${issue.message}（${issue.path}）`
+            : issue.message;
+        item.append(badge, message);
+        list.appendChild(item);
+    }
+}
+
+async function runHardContractAudit(targetId, {
+    manual = false,
+    queuedTarget = null,
+} = {}) {
+    const settings = getSettings();
+    if (!manual && !settings.hardContractAuditEnabled) {
+        return { status: 'disabled' };
+    }
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const captured = queuedTarget || captureTarget(context, resolved);
+    if (!captured) return { status: 'stale', reason: '目标回复不可用' };
+    const token = operationToken(captured);
+    let targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+    if (!manual) {
+        await sleep(Math.max(300, Number(settings.delayMs) || 1600));
+        targetCheck = targetIsCurrent(captured, token);
+        if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+    }
+    setHardContractStatus('硬合同：正在本地检查正文、骰子与装备结构…', 'busy');
+
+    const character = currentCharacter(context);
+    const schemaScripts = extractSchemaScripts(character);
+    const [contractTexts, ruleTexts] = await Promise.all([
+        collectHardContractTexts(context, character),
+        collectMvuRules(context, character),
+    ]);
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+
+    let currentData = null;
+    try {
+        const Mvu = await getMvu();
+        if (Mvu && typeof Mvu.getMvuData === 'function') {
+            currentData = await mvuDataAt(Mvu, resolved);
+        }
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 硬合同检查读取 MVU 失败，将只检查正文：', error);
+    }
+    targetCheck = targetIsCurrent(captured, token);
+    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+
+    const result = auditHardContracts({
+        replyText: context.chat[resolved]?.mes || '',
+        previousUserText: previousUserMessageText(context, resolved),
+        contractTexts,
+        statData: statDataOf(currentData) || {},
+        schemaTexts: schemaScripts.map((script) => script.content),
+        ruleTexts,
+    });
+    const severityOrder = { error: 0, warning: 1, info: 2 };
+    result.issues.sort((left, right) => (
+        (severityOrder[left.severity] ?? 3) - (severityOrder[right.severity] ?? 3)
+    ));
+    latestHardContractAudit = {
+        ...result,
+        checkedAt: new Date().toISOString(),
+        targetIndex: resolved,
+        messageId: captured.messageId,
+        swipeId: captured.swipeId,
+    };
+    const errorCount = result.issues.filter((issue) => issue.severity === 'error').length;
+    const warningCount = result.issues.filter((issue) => issue.severity === 'warning').length;
+    if (!result.issues.length) {
+        setHardContractStatus('硬合同：正文与装备结构未发现确定性问题', 'ok');
+    } else {
+        setHardContractStatus(
+            `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒（只报告，不改写剧情）`,
+            errorCount ? 'error' : '',
+        );
+        if (manual || errorCount) {
+            toast(
+                errorCount ? 'warning' : 'info',
+                `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。不会评价或改写 GM 的合理发挥。`,
+            );
+        }
+    }
+    return { status: 'audited', ...latestHardContractAudit };
+}
+
+function enqueueHardContractAudit(targetId, options = {}) {
+    const automatic = !options.manual;
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
+    const queuedTarget = options.queuedTarget || captureTarget(context, resolved);
+    const key = automatic ? capturedTargetKey(queuedTarget) : '';
+    if (
+        key
+        && (hardContractPendingKeys.has(key) || hardContractCompletedKeys.has(key))
+    ) return Promise.resolve({ status: 'duplicate' });
+    if (key) hardContractPendingKeys.add(key);
+    hardContractChain = hardContractChain
+        .catch(() => {})
+        .then(() => runHardContractAudit(resolved, {
+            ...options,
+            queuedTarget,
+        }))
+        .then((result) => {
+            if (key && ['audited', 'disabled'].includes(result?.status)) {
+                hardContractCompletedKeys.add(key);
+            }
+            return result;
+        })
+        .catch((error) => {
+            console.error('[MVU Auto Doctor] 硬合同检查异常：', error);
+            setHardContractStatus(`硬合同：检查失败：${error.message || error}`, 'error');
+            return { status: 'failed', reason: String(error.message || error) };
+        })
+        .finally(() => {
+            if (key) hardContractPendingKeys.delete(key);
+        });
+    return hardContractChain;
+}
+
 function lifecycleTranscriptEntries(context, targetIndex) {
     return (context?.chat || [])
         .slice(0, targetIndex)
@@ -1280,6 +1551,8 @@ async function buildAuditMessages({
         '- “本回合已观察到的状态差异”只是证据，不等于都要再次更新。',
         '- 只输出叠加在当前 stat_data 上的纠错/补漏；已正确落地的变化绝不能重复，尤其不能重复 delta。',
         '- 根据最新 AI 回复正文判断本回合明确发生了什么。不得根据可能性、计划、比喻或未发生的动作改变量。',
+        '- 保留 GM 的合理创作自主权：符合当前设定的额外战利品、NPC反应、场景细节、惊喜与自然延伸，不会仅因玩家没有逐项指定就构成错误。只有 Schema、明确数值公式、枚举、骰子、资源或更新规则能够证明冲突时才修变量。',
+        '- 不评价文风、措辞、剧情选择或“是否应该这样写”，也不得为了迎合主观叙事偏好改变量。',
         '- 不只检查叶子值，也要检查动态集合的成员资格与生命周期。集合名和规则若限定为“当前敌人”等特定身份，不得把它擅自当作通用 NPC、同伴或仓库存放区。',
         '- 规则明确规定死亡、逃跑、战斗结束、离队、失效等条件要删除条目时，只有正文或所给历史线索明确证明条件已经发生，才清理过期条目；“近期没提到”本身不是证据。',
         '- 动态条目若放错集合，只能在 Schema、规则或正文明确给出正确目标路径时 move；否则只纠正能够确定的错误，不创造新的收纳字段。',
@@ -1291,6 +1564,7 @@ async function buildAuditMessages({
         '- insert 只能用于父路径已存在、目标尚不存在的新键或合法数组位置。',
         '- move 必须使用 from 和 to。',
         '- 对象必须满足本卡 Schema 的字段名、类型、必填项与枚举；不要创造同义字段。',
+        '- 装备若在背包中缺少完整字段或槽位标签，只能在本卡 Schema、规则或正文明确给出具体值时补齐；不得猜造品质、数值或装备位置。若 Schema 根本没有槽位字段，这是上游合同缺口，不得自行发明“装备位置”等同义字段。',
         '- 若卡的规则要求更新到叶子字段，必须拆成叶子路径，禁止整体覆盖复杂节点。',
         '- 路径使用 JSON Pointer，键名中的 ~ 和 / 必须分别写成 ~0 和 ~1。',
         '- 不要修改任何路径段以“_”开头的只读字段。',
@@ -2857,6 +3131,7 @@ function buildForumMessages({
         '- comments可以引用旧帖ID或同一份newPosts中刚建立的ID；不得引用不存在的ID。旧帖正文不得改写，不得重复相同帖子。',
         '- board随世界观自然命名，例如闲聊、攻略、交易、求助、吐槽、八卦；不强套现代互联网术语到不合适的世界。',
         '- kind枚举：chat（日常交流）/ reaction（公共事件反应）/ rumor（未证实风声）/ guide（攻略求助）/ trade（交易）。',
+        '- JSON 必须严格合法：数组元素和对象字段之间逐项写逗号，最后一项后不写尾逗号；字符串中的换行必须转义，不得截断。',
         '',
         '只输出一个<ForumUpdate>包裹的JSON对象，不要解释。',
         'JSON结构：{"summary":"本页一句话概况","newPosts":[{"id":"稳定且唯一","board":"版块","title":"标题","author":"网名","body":"正文","kind":"chat","tags":["标签"],"source":"公开依据或日常设定","sourceThreadIds":[],"causalSignal":false,"impact":"仅在已造成外部影响时填写","heat":12}],"comments":[{"postId":"旧帖ID","author":"网名","body":"评论","tone":"语气","likes":0}],"heat":[{"postId":"旧帖ID","delta":2}],"archive":["旧帖ID"]}',
@@ -2965,6 +3240,7 @@ async function runForumTarget(captured, {
     let next = base;
     let retryReason = '';
     let progressed = false;
+    let safelyRepairedJson = false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const messages = buildForumMessages({
             context,
@@ -2988,6 +3264,7 @@ async function runForumTarget(captured, {
             retryReason = parsed.error;
             continue;
         }
+        safelyRepairedJson ||= parsed.repaired === true;
         const candidate = applyForumUpdate(base, parsed.update, {
             chatId: captured.chatId,
             maxPosts: settings.forumMaxPosts,
@@ -3038,8 +3315,18 @@ async function runForumTarget(captured, {
     });
     if (!saved) return { status: 'stale', reason: '聊天已切换，论坛更新未写入' };
     renderForum();
-    setForumStatus(`论坛：已刷新至第 ${next.turn} 页`, 'ok');
-    return { status: 'applied', turn: next.turn, posts: next.posts.length };
+    setForumStatus(
+        safelyRepairedJson
+            ? `论坛：已安全修复模型标点并刷新至第 ${next.turn} 页`
+            : `论坛：已刷新至第 ${next.turn} 页`,
+        'ok',
+    );
+    return {
+        status: 'applied',
+        turn: next.turn,
+        posts: next.posts.length,
+        safelyRepairedJson,
+    };
 }
 
 function enqueueForum(targetId, {
@@ -3961,7 +4248,7 @@ function updateFloatingOrb(view = null) {
     }
     const count = Number(ledgerView?.activeCount) || 0;
     if (ui.floatingCount) ui.floatingCount.textContent = String(count);
-    const statusText = `${latestStatus} ${latestContinuityStatus} ${latestForumStatus}`;
+    const statusText = `${latestStatus} ${latestHardContractStatus} ${latestContinuityStatus} ${latestForumStatus}`;
     const kind = /失败|异常|未产生有效/u.test(statusText)
         ? 'error'
         : /正在/u.test(statusText)
@@ -4038,11 +4325,13 @@ function buildFloatingUi() {
                     <div class="mvuad-floating-page-heading"><b>医生工具</b><span>手动操作集中在这里</span></div>
                     <div class="mvuad-floating-statuses">
                         <div class="mvuad-floating-repair-status" role="status"></div>
+                        <div class="mvuad-floating-hard-contract-status" role="status"></div>
                         <div class="mvuad-floating-continuity-status" role="status"></div>
                         <div class="mvuad-floating-forum-status" role="status"></div>
                     </div>
                     <div class="mvuad-floating-actions">
                         <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
+                        <button class="menu_button mvuad-floating-protocol" type="button">检查硬规则</button>
                         <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
                     </div>
                 </section>
@@ -4054,6 +4343,7 @@ function buildFloatingUi() {
         floatingPanel: panel,
         floatingClose: panel.querySelector('.mvuad-floating-close'),
         floatingRepairStatus: panel.querySelector('.mvuad-floating-repair-status'),
+        floatingHardContractStatus: panel.querySelector('.mvuad-floating-hard-contract-status'),
         floatingContinuityStatus: panel.querySelector('.mvuad-floating-continuity-status'),
         floatingForumStatus: panel.querySelector('.mvuad-floating-forum-status'),
         floatingCount: orb.querySelector('.mvuad-orb-count'),
@@ -4075,6 +4365,9 @@ function buildFloatingUi() {
         const repair = enqueue(null, { manual: true });
         repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
     });
+    panel.querySelector('.mvuad-floating-protocol').addEventListener('click', () => {
+        enqueueHardContractAudit(null, { manual: true });
+    });
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
@@ -4086,6 +4379,7 @@ function buildFloatingUi() {
         if (event.key === 'Escape' && !panel.hidden) hideFloatingPanel();
     });
     setStatus(latestStatus);
+    setHardContractStatus(latestHardContractStatus);
     setContinuityStatus(latestContinuityStatus);
     setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
@@ -4107,6 +4401,10 @@ function makeCheckbox(label, key) {
         }
         if (key === 'hideContinuitySpoilers') renderContinuityLedger();
         if (key === 'floatingOrbEnabled') syncFloatingUiVisibility();
+        if (key === 'hardContractAuditEnabled') {
+            if (input.checked) enqueueHardContractAudit(null, { manual: true });
+            else setHardContractStatus('硬合同：自动检查已关闭');
+        }
         if (key === 'builtInForumEnabled' || key === 'forumAutoRefresh') {
             const settings = getSettings();
             setForumStatus(
@@ -4157,6 +4455,20 @@ function buildSettingsPanel() {
                         <button class="menu_button mvuad-undo" type="button">撤销上次修复</button>
                     </div>
                     <div class="mvuad-status" role="status"></div>
+                    <div class="mvuad-section-title">正文与装备硬合同</div>
+                    <div class="mvuad-description">
+                        本地检查字数、结构标签、四选项、骰后改判、场景时间和装备字段合同；
+                        只报告可程序验证的问题，不评价剧情、额外战利品、NPC反应或文风，也不自动重写正文。
+                    </div>
+                    <div class="mvuad-protocol-options"></div>
+                    <div class="mvuad-actions">
+                        <button class="menu_button mvuad-protocol-run" type="button">检查正文硬规则</button>
+                    </div>
+                    <div class="mvuad-status mvuad-protocol-status" role="status"></div>
+                    <details class="mvuad-protocol-details">
+                        <summary class="mvuad-protocol-summary">查看硬合同明细</summary>
+                        <ul class="mvuad-protocol-list"></ul>
+                    </details>
                     <div class="mvuad-section-title">平行支线连续性</div>
                     <div class="mvuad-description">
                         每个完成的 AI 回合都调度一次世界节拍，同时维护主线衍生、暗中相关、当前独立和世界脉动事件；
@@ -4248,6 +4560,9 @@ function buildSettingsPanel() {
         makeCheckbox('自动关闭故事神谕 AUTO，避免双写', 'preventDoubleWrite'),
         makeCheckbox('无需修正时也弹提示', 'notifyNoChange'),
     );
+    wrapper.querySelector('.mvuad-protocol-options').append(
+        makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
+    );
     const delay = wrapper.querySelector('.mvuad-number input');
     delay.value = String(getSettings().delayMs);
     delay.addEventListener('change', () => {
@@ -4261,8 +4576,12 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-run').addEventListener('click', () => {
         const repair = enqueue(null, { manual: true });
         repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
+        enqueueHardContractAudit(null, { manual: true });
     });
     wrapper.querySelector('.mvuad-undo').addEventListener('click', undoLast);
+    wrapper.querySelector('.mvuad-protocol-run').addEventListener('click', () => {
+        enqueueHardContractAudit(null, { manual: true });
+    });
     const continuityMode = wrapper.querySelector('.mvuad-continuity-mode');
     continuityMode.value = getSettings().continuityMode;
     continuityMode.addEventListener('change', () => {
@@ -4288,6 +4607,10 @@ function buildSettingsPanel() {
     Object.assign(ui, {
         wrapper,
         status: wrapper.querySelector('.mvuad-status:not(.mvuad-continuity-status)'),
+        hardContractStatus: wrapper.querySelector('.mvuad-protocol-status'),
+        hardContractDetails: wrapper.querySelector('.mvuad-protocol-details'),
+        hardContractSummary: wrapper.querySelector('.mvuad-protocol-summary'),
+        hardContractList: wrapper.querySelector('.mvuad-protocol-list'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
     });
     registerLedgerSurface(wrapper.querySelector('.mvuad-ledger'));
@@ -4322,6 +4645,7 @@ function buildSettingsPanel() {
     ui.forumSettingsStatus = wrapper.querySelector('.mvuad-settings-forum-status');
     ui.forumSettingsOpen = wrapper.querySelector('.mvuad-forum-open');
     setStatus(latestStatus);
+    setHardContractStatus(latestHardContractStatus);
     setContinuityStatus(latestContinuityStatus);
     setForumStatus(latestForumStatus);
     syncFloatingUiVisibility();
@@ -4426,6 +4750,7 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
+            enqueueHardContractAudit(resolved, { queuedTarget: captured });
             const repair = enqueue(resolved, { queuedTarget: captured });
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
             const continuity = enqueueContinuity(resolved, {
@@ -4452,6 +4777,8 @@ function bindEvents() {
             automaticCompletedKeys.clear();
             openingSyncPendingKeys.clear();
             openingSyncCompletedKeys.clear();
+            hardContractPendingKeys.clear();
+            hardContractCompletedKeys.clear();
             continuityPendingKeys.clear();
             continuityCompletedKeys.clear();
             forumPendingKeys.clear();
@@ -4459,6 +4786,8 @@ function bindEvents() {
             presetContinuityCache = { checkedAt: 0, active: false };
             lastUndo = latestUndoRecord(readChatNamespace());
             setStatus('等待新的 AI 回复');
+            latestHardContractAudit = null;
+            setHardContractStatus('硬合同：等待检查');
             setForumStatus('论坛：等待世界消息');
             applyContinuityInjection();
             renderForum();
@@ -4490,6 +4819,8 @@ function initialize() {
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
         runLatest: () => enqueue(null, { manual: true }),
+        auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
+        getHardContractAudit: () => deepClone(latestHardContractAudit),
         syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),

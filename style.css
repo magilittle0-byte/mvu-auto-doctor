@@ -22,7 +22,8 @@
     line-height: 1.5;
 }
 
-#mvu-auto-doctor-settings .mvuad-options {
+#mvu-auto-doctor-settings .mvuad-options,
+#mvu-auto-doctor-settings .mvuad-protocol-options {
     display: grid;
     gap: 7px;
 }
@@ -85,6 +86,58 @@
 
 #mvu-auto-doctor-settings .mvuad-status[data-kind="error"] {
     color: #ff8e8e;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-details {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: var(--mvuad-control-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-summary {
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 0.84em;
+    font-weight: 650;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-list {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+    padding: 0 10px 10px;
+    list-style: none;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-issue {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    gap: 7px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    font-size: 0.82em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-issue b {
+    color: #a9dfff;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-issue[data-severity="error"] b {
+    color: #ff8e8e;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-issue[data-severity="warning"] b {
+    color: #f1c75b;
+}
+
+#mvu-auto-doctor-settings .mvuad-protocol-empty {
+    padding: 4px 1px;
+    opacity: 0.72;
+    font-size: 0.82em;
 }
 
 #mvu-auto-doctor-settings .mvuad-ledger {

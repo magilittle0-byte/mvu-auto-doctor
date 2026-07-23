@@ -13,6 +13,35 @@ const parsed = extractForumUpdate(`说明应被忽略
 <ForumUpdate>{"summary":"港城午后","newPosts":[{"id":"FP-1","board":"闲聊广场","title":"北门那家面摊换老板了？","author":"盐汽水","body":"今天味道淡了点，有人知道吗","kind":"chat","tags":["吃喝"],"source":"港城日常","heat":3}],"comments":[],"heat":[],"archive":[]}</ForumUpdate>`);
 assert.equal(parsed.error, '');
 assert.equal(parsed.update.newPosts[0].id, 'FP-1');
+assert.equal(parsed.repaired, false);
+
+const repairedMissingComma = extractForumUpdate(`<ForumUpdate>{
+  "summary": "缺逗号",
+  "newPosts": [
+    {"id":"FP-A","title":"甲","body":"甲正文"}
+    {"id":"FP-B","title":"乙","body":"乙正文"}
+  ],
+  "comments": [],
+  "heat": [],
+  "archive": []
+}</ForumUpdate>`);
+assert.equal(repairedMissingComma.error, '');
+assert.equal(repairedMissingComma.repaired, true);
+assert.equal(repairedMissingComma.update.newPosts.length, 2);
+
+const repairedTrailingComma = extractForumUpdate(`<ForumUpdate>{
+  "summary": "尾逗号",
+  "newPosts": [{"id":"FP-C","title":"丙","body":"丙正文"},],
+  "comments": [],
+  "heat": [],
+  "archive": []
+}</ForumUpdate>`);
+assert.equal(repairedTrailingComma.error, '');
+assert.equal(repairedTrailingComma.repaired, true);
+assert.equal(repairedTrailingComma.update.newPosts.length, 1);
+
+const truncated = extractForumUpdate('<ForumUpdate>{"summary":"半截","newPosts":[{"id":"X"}</ForumUpdate>');
+assert.match(truncated.error, /没有返回|无法解析/u);
 
 const first = applyForumUpdate(emptyForumState('chat-a'), parsed.update, { chatId: 'chat-a' });
 assert.equal(first.turn, 1);

@@ -362,11 +362,17 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         calls: structuredClone(window.__TEST__.calls),
         version: window.MvuAutoDoctorAPI.version,
+        hardAudit: window.MvuAutoDoctorAPI.getHardContractAudit(),
+        hardStatus: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-status')?.textContent || '',
+        hardDetails: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-details')?.textContent || '',
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.4.4');
+    assert.equal(continuity.version, '1.5.0');
+    assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
+    assert.match(continuity.hardStatus, /硬合同/u);
+    assert.match(continuity.hardDetails, /未发现可由程序确定/u);
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
@@ -380,6 +386,8 @@ try {
     assert.match(continuity.calls.repairSystem, /动态集合的成员资格与生命周期/u);
     assert.match(continuity.calls.repairSystem, /给予方与接收方必须对称复核/u);
     assert.match(continuity.calls.repairSystem, /同时恢复错误目标/u);
+    assert.match(continuity.calls.repairSystem, /保留 GM 的合理创作自主权/u);
+    assert.match(continuity.calls.repairSystem, /不评价文风/u);
     assert.match(continuity.calls.repairUser, /动态集合生命周期历史线索/u);
     assert.match(continuity.calls.forumSystem, /至少一半帖子应为日常闲聊/u);
     assert.match(continuity.calls.forumSystem, /每个新帖都至少获得1条回复/u);
@@ -768,7 +776,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.4.4');
+    assert.equal(lifecycle.version, '1.5.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
