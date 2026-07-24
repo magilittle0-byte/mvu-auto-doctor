@@ -292,6 +292,37 @@ window.StoryOracleAPI = {
       if (mode === 'invalid-continuity') {
         return '<ContinuityState>{"turn":';
       }
+      if (mode === 'replacement-reroll') {
+        const branch = calls.continuityRuns === 1 ? 'OLD' : 'NEW';
+        const summary = branch === 'OLD'
+          ? '旧回复留下的港口巡查事件。'
+          : '重抽后的正文建立了全新的码头事件。';
+        return '<ContinuityState>' + JSON.stringify({
+          turn: 1,
+          threads: [{
+            id: branch + '-BRANCH-01',
+            title: branch === 'OLD' ? '旧回复分支' : '重抽新分支',
+            kind: 'parallel',
+            eventType: 'progress',
+            level: 2,
+            origin: 'ambient',
+            relation: 'independent',
+            stage: 'seeded',
+            stageProgress: 2,
+            summary,
+            offscreenBeat: summary,
+            nextBeat: '按新回复提供的事实继续发展。',
+            trigger: '当前世界日程自行推进。',
+            intersection: '只有主线主动接触码头事务时才可能汇流。',
+            seedBasis: branch === 'OLD' ? '旧回复正文' : '重抽后的新正文',
+            actors: ['码头巡查员'],
+            locations: ['港口'],
+            knowledge: 'hidden',
+            urgency: 1,
+            lastAdvancedTurn: 1,
+          }],
+        }) + '</ContinuityState>';
+      }
       if (calls.continuityRuns === 1) return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","eventType":"progress","level":2,"origin":"ambient","relation":"independent","stage":"seeded","stageProgress":2,"summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}],"world":{"digest":"港区日常运行稳定，公开的旧桥积水消息开始影响短途运输安排。","factions":[{"id":null,"name":"港区运输联合体","relation":"neutral","condition":"stable","goal":"维持旧桥附近的短途运输","summary":"开始临时调整车次","pillars":["车辆","调度"],"scope":"港区","knowledge":"observed","basis":"世界书中的港区运输网络与公开积水消息","lastChange":"部分车辆改走南侧道路"}],"winds":[{"id":null,"topic":"旧桥积水","type":"notice","strength":1,"content":"昨夜降雨使旧桥通行变慢","source":"过桥司机→港区运输人员","scope":"港区运输圈","knowledge":"rumor","basis":"公开路况被多人转述"}],"reputation":{"public":{"level":1,"summary":"公众对玩家协助巡逻的评价略有提升","basis":"公开感谢已经在港区小范围传播"}},"environment":{"economy":"strained","summary":"短途运输因旧桥积水略微趋紧","basis":"司机已经开始改道","incidents":[]},"shadows":{"enemies":[],"secrets":[{"id":null,"title":"密谈代号黑雨","status":"hidden","summary":"密室中的代号尚未外泄","exposure":0,"holders":["密谈参与者"],"knowledge":"hidden","basis":"本轮正文明确为私下密谈","lastChange":"维持未公开"}]},"influences":[{"id":null,"trigger":"旧桥积水风声","impact":"运输联合体调整部分车次","fallout":"旧桥附近送货时间可能延长","knowledge":"observed","basis":"路况信息已覆盖运输圈"}]}}</ContinuityState>';
       if (calls.continuityRuns === 2) return '<ContinuityState>{"turn":2,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"advancing","summary":"巡检员找到上一班抄录员并确认缺页被人为撕走。","offscreenBeat":"两人比对墨迹，锁定缺页发生在昨夜换班。","nextBeat":"他们会查问昨夜进入钟楼的人。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2}]}</ContinuityState>';
       if (calls.continuityRuns === 3) return '<ContinuityState>{"turn":3,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
@@ -532,7 +563,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.4');
+    assert.equal(continuity.version, '1.8.5');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -605,6 +636,13 @@ try {
         other: 0,
     });
     assert.equal(diagnosticsUi.savedModelCalls.total, 3, '模型调用统计必须按聊天持久化');
+    assert.equal(diagnosticsUi.modelCalls.currentRun.total, 3, '本次生成统计应与聊天累计分开保存');
+    assert.deepEqual(diagnosticsUi.modelCalls.currentRun.byTask, {
+        variable: 1,
+        continuity: 1,
+        forum: 1,
+        other: 0,
+    });
     assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
     assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
     assert.equal(continuity.hasSettingsLedger, false, '设置页不应再复制完整事件账本');
@@ -1025,7 +1063,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.4');
+    assert.equal(lifecycle.version, '1.8.5');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1983,6 +2021,101 @@ try {
     assert.ok(forumReroll.state.posts.every((post) => post.id.startsWith('FP-2')));
     assert.ok(!forumReroll.state.posts.some((post) => post.id.startsWith('FP-1')));
     await forumRerollPage.close();
+
+    const replacementRerollPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await replacementRerollPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await replacementRerollPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await replacementRerollPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('replacement-reroll');
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            delayMs: 300,
+            forumSettingsVersion: 3,
+            forumRefreshMode: 'manual',
+            forumAutoRefresh: false,
+        });
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await replacementRerollPage.waitForFunction(() => (
+        window.MvuAutoDoctorAPI.getContinuityState().threads?.[0]?.id === 'OLD-BRANCH-01'
+    ), null, { timeout: 30000 });
+    await replacementRerollPage.waitForFunction(() => {
+        const current = window.MvuAutoDoctorAPI.getModelCallStats().currentRun;
+        return current.total === 2 && current.succeeded === 2;
+    }, null, { timeout: 30000 });
+    const replacementBefore = await replacementRerollPage.evaluate(() => {
+        const namespace = window.__TEST__.context.chatMetadata.mvu_auto_doctor;
+        return {
+            checkpointMessageId: namespace.continuityCheckpoint?.messageId,
+            checkpointTurn: namespace.continuityCheckpoint?.state?.turn,
+            sourceMessageId: namespace.continuity?.lastSource?.messageId,
+            cumulativeCalls: window.MvuAutoDoctorAPI.getModelCallStats().total,
+        };
+    });
+    assert.equal(replacementBefore.checkpointTurn, 0);
+    assert.equal(replacementBefore.cumulativeCalls, 2);
+    await replacementRerollPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.chat[2] = {
+            is_user: false,
+            is_system: false,
+            send_date: '2026-07-25T00:00:00.000Z',
+            swipe_id: 0,
+            extra: {},
+            mes: '这是酒馆替换整个消息对象后得到的重抽正文。\n'
+              + '<UpdateVariable><Analysis>正确</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        };
+        await t.context.eventSource.emit('generation_started', 'regenerate', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await replacementRerollPage.waitForFunction(() => (
+        window.MvuAutoDoctorAPI.getContinuityState().threads?.[0]?.id === 'NEW-BRANCH-01'
+    ), null, { timeout: 30000 });
+    await replacementRerollPage.waitForFunction(() => {
+        const current = window.MvuAutoDoctorAPI.getModelCallStats().currentRun;
+        return current.total === 2 && current.succeeded === 2;
+    }, null, { timeout: 30000 });
+    await replacementRerollPage.waitForTimeout(900);
+    const replacementAfter = await replacementRerollPage.evaluate(() => {
+        const namespace = window.__TEST__.context.chatMetadata.mvu_auto_doctor;
+        return {
+            continuity: window.MvuAutoDoctorAPI.getContinuityState(),
+            checkpointMessageId: namespace.continuityCheckpoint?.messageId,
+            checkpointTurn: namespace.continuityCheckpoint?.state?.turn,
+            sourceMessageId: namespace.continuity?.lastSource?.messageId,
+            stats: window.MvuAutoDoctorAPI.getModelCallStats(),
+            statsText: document.querySelector('.mvuad-settings-model-call-stats')?.textContent || '',
+        };
+    });
+    assert.equal(replacementAfter.continuity.turn, 1, '替换消息对象的重抽必须从整楼生成前重新结算');
+    assert.deepEqual(
+        replacementAfter.continuity.threads.map((thread) => thread.id),
+        ['NEW-BRANCH-01'],
+        '新消息 ID 不得让旧回复事件残留到重抽账本',
+    );
+    assert.equal(replacementAfter.checkpointTurn, 0, '重抽不得推进或覆盖整楼生成前存档点');
+    assert.equal(
+        replacementAfter.checkpointMessageId,
+        replacementBefore.checkpointMessageId,
+        '宿主替换消息对象后仍必须保留最初的整楼存档点身份',
+    );
+    assert.notEqual(
+        replacementAfter.sourceMessageId,
+        replacementAfter.checkpointMessageId,
+        '新账本来源必须绑定重抽后的新消息对象',
+    );
+    assert.equal(replacementAfter.stats.total, 4, '两次生成累计应各使用变量与活世界一次');
+    assert.equal(replacementAfter.stats.currentRun.total, 2, '重抽界面只应显示本次两次调用');
+    assert.deepEqual(replacementAfter.stats.currentRun.byTask, {
+        variable: 1,
+        continuity: 1,
+        forum: 0,
+        other: 0,
+    });
+    assert.match(replacementAfter.statsText, /本次生成 2 次/u);
+    assert.match(replacementAfter.statsText, /聊天累计 4 次/u);
+    await replacementRerollPage.close();
 
     const externalForumPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await externalForumPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

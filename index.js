@@ -63,7 +63,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.4';
+const VERSION = '1.8.5';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -158,7 +158,7 @@ let latestForumKind = '';
 const operationLog = [];
 let pendingOperationLogSaveTimer = null;
 let modelCallStats = {
-    version: 1,
+    version: 2,
     total: 0,
     succeeded: 0,
     failed: 0,
@@ -170,6 +170,21 @@ let modelCallStats = {
         other: 0,
     },
     lastCallAt: 0,
+    currentRun: {
+        runtimeSerial: 0,
+        type: 'normal',
+        startedAt: 0,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        rateLimited: 0,
+        byTask: {
+            variable: 0,
+            continuity: 0,
+            forum: 0,
+            other: 0,
+        },
+    },
 };
 const activeModelControllers = new Set();
 let activeTaskProgress = null;
@@ -386,9 +401,11 @@ function normalizedOperationLog(value) {
 function normalizedModelCallStats(value) {
     const source = isPlainObject(value) ? value : {};
     const byTask = isPlainObject(source.byTask) ? source.byTask : {};
+    const currentSource = isPlainObject(source.currentRun) ? source.currentRun : {};
+    const currentByTask = isPlainObject(currentSource.byTask) ? currentSource.byTask : {};
     const nonNegative = (item) => Math.max(0, Math.floor(Number(item) || 0));
     return {
-        version: 1,
+        version: 2,
         total: nonNegative(source.total),
         succeeded: nonNegative(source.succeeded),
         failed: nonNegative(source.failed),
@@ -400,6 +417,21 @@ function normalizedModelCallStats(value) {
             other: nonNegative(byTask.other),
         },
         lastCallAt: Math.max(0, Number(source.lastCallAt) || 0),
+        currentRun: {
+            runtimeSerial: nonNegative(currentSource.runtimeSerial),
+            type: String(currentSource.type || 'normal').slice(0, 32),
+            startedAt: Math.max(0, Number(currentSource.startedAt) || 0),
+            total: nonNegative(currentSource.total),
+            succeeded: nonNegative(currentSource.succeeded),
+            failed: nonNegative(currentSource.failed),
+            rateLimited: nonNegative(currentSource.rateLimited),
+            byTask: {
+                variable: nonNegative(currentByTask.variable),
+                continuity: nonNegative(currentByTask.continuity),
+                forum: nonNegative(currentByTask.forum),
+                other: nonNegative(currentByTask.other),
+            },
+        },
     };
 }
 
@@ -413,32 +445,69 @@ function modelCallTaskKey(task) {
 
 function renderModelCallStats() {
     const stats = normalizedModelCallStats(modelCallStats);
+    const current = stats.currentRun;
     const text = [
-        `本聊天模型调用 ${stats.total} 次`,
-        `变量 ${stats.byTask.variable}`,
-        `活世界 ${stats.byTask.continuity}`,
-        `论坛 ${stats.byTask.forum}`,
-        `失败 ${stats.failed}`,
-        stats.rateLimited ? `其中 429 ${stats.rateLimited}` : '',
+        `本次生成 ${current.total} 次`,
+        `变量 ${current.byTask.variable}`,
+        `活世界 ${current.byTask.continuity}`,
+        `论坛 ${current.byTask.forum}`,
+        `失败 ${current.failed}`,
+        current.rateLimited ? `其中 429 ${current.rateLimited}` : '',
+        `聊天累计 ${stats.total} 次`,
     ].filter(Boolean).join(' · ');
     for (const root of [ui?.modelCallStats, ui?.floatingModelCallStats]) {
         if (!root) continue;
         root.textContent = text;
-        root.dataset.kind = stats.rateLimited || stats.failed ? 'warn' : '';
+        root.dataset.kind = current.rateLimited || current.failed ? 'warn' : '';
     }
 }
 
-function recordModelCall(task, outcome = 'started', error = null) {
+function resetCurrentModelCallStats(type = 'normal') {
     const stats = normalizedModelCallStats(modelCallStats);
+    stats.currentRun = {
+        runtimeSerial: generationSerial,
+        type: String(type || 'normal').slice(0, 32),
+        startedAt: Date.now(),
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        rateLimited: 0,
+        byTask: {
+            variable: 0,
+            continuity: 0,
+            forum: 0,
+            other: 0,
+        },
+    };
+    modelCallStats = stats;
+    renderModelCallStats();
+    scheduleOperationLogSave();
+}
+
+function recordModelCall(task, outcome = 'started', error = null, runtimeSerial = generationSerial) {
+    const stats = normalizedModelCallStats(modelCallStats);
+    const current = stats.currentRun.runtimeSerial === runtimeSerial
+        ? stats.currentRun
+        : null;
+    const taskKey = modelCallTaskKey(task);
     if (outcome === 'started') {
         stats.total += 1;
-        stats.byTask[modelCallTaskKey(task)] += 1;
+        stats.byTask[taskKey] += 1;
         stats.lastCallAt = Date.now();
+        if (current) {
+            current.total += 1;
+            current.byTask[taskKey] += 1;
+        }
     } else if (outcome === 'succeeded') {
         stats.succeeded += 1;
+        if (current) current.succeeded += 1;
     } else if (outcome === 'failed') {
         stats.failed += 1;
-        if (isRateLimitError(error)) stats.rateLimited += 1;
+        if (current) current.failed += 1;
+        if (isRateLimitError(error)) {
+            stats.rateLimited += 1;
+            if (current) current.rateLimited += 1;
+        }
     }
     modelCallStats = stats;
     renderModelCallStats();
@@ -3083,6 +3152,7 @@ async function callModel(messages, options = {}) {
     activeModelControllers.add(controller);
     syncTaskCancelButtons();
     const task = String(options.task || '模型任务');
+    const callGenerationSerial = generationSerial;
     const messageCopies = (Array.isArray(messages) ? messages : []).map((message) => ({
         role: String(message?.role || ''),
         content: String(message?.content || ''),
@@ -3095,7 +3165,7 @@ async function callModel(messages, options = {}) {
         messages: messageCopies,
     };
     renderPromptSnapshot();
-    recordModelCall(task, 'started');
+    recordModelCall(task, 'started', null, callGenerationSerial);
 
     try {
         const channel = options.channel === 'fast' ? 'fast' : 'strict';
@@ -3115,7 +3185,7 @@ async function callModel(messages, options = {}) {
                     onTimeout: () => controller.abort('模型请求超时'),
                 },
             );
-            recordModelCall(task, 'succeeded');
+            recordModelCall(task, 'succeeded', null, callGenerationSerial);
             return output;
         }
         if (profile.provider === 'story-oracle') {
@@ -3138,7 +3208,7 @@ async function callModel(messages, options = {}) {
                             onTimeout: () => controller.abort('模型请求超时'),
                         },
                     );
-                    recordModelCall(task, 'succeeded');
+                    recordModelCall(task, 'succeeded', null, callGenerationSerial);
                     return String(output || '');
                 } catch (error) {
                     // Do not silently spend a second call through the Tavern
@@ -3174,10 +3244,10 @@ async function callModel(messages, options = {}) {
                 onTimeout: () => controller.abort('模型请求超时'),
             },
         );
-        recordModelCall(task, 'succeeded');
+        recordModelCall(task, 'succeeded', null, callGenerationSerial);
         return output;
     } catch (error) {
-        recordModelCall(task, 'failed', error);
+        recordModelCall(task, 'failed', error, callGenerationSerial);
         throw error;
     } finally {
         activeModelControllers.delete(controller);
@@ -4568,14 +4638,10 @@ function registerContinuityInjection(content) {
 function continuityStateForInjection(namespace, { isReroll = false } = {}) {
     const context = getContext();
     const latest = latestAiMessage(context);
-    const latestId = latest.message
-        ? ensureMessageStableId(context, latest.message, latest.index)
-        : '';
     if (
         isReroll
         && namespace?.continuityCheckpoint?.state
         && namespace.continuityCheckpoint.targetIndex === latest.index
-        && namespace.continuityCheckpoint.messageId === latestId
     ) {
         return namespace.continuityCheckpoint.state;
     }
@@ -4634,7 +4700,6 @@ function continuityBase(namespace, captured) {
         isReroll
         && checkpoint?.state
         && checkpoint.targetIndex === captured.index
-        && checkpoint.messageId === captured.messageId
     ) {
         return normalizeContinuityState(checkpoint.state, {
             chatId: captured.chatId,
@@ -5374,7 +5439,6 @@ function forumBase(namespace, captured) {
         isReroll
         && checkpoint?.state
         && checkpoint.targetIndex === captured.index
-        && checkpoint.messageId === captured.messageId
     ) {
         return normalizeForumState(checkpoint.state, {
             chatId: captured.chatId,
@@ -8154,24 +8218,28 @@ async function restoreBranchCheckpointsForSwipe(value, { force = false } = {}) {
     const continuityMatches = !!(
         continuityCheckpoint?.state
         && continuityCheckpoint.targetIndex === resolved
-        && continuityCheckpoint.messageId === messageId
         && (
             force
             || (
-                continuitySource?.messageId === messageId
-                && Number(continuitySource.swipeId || 0) !== currentSwipeId
+                Number(continuitySource?.index) === resolved
+                && (
+                    continuitySource?.messageId !== messageId
+                    || Number(continuitySource?.swipeId || 0) !== currentSwipeId
+                )
             )
         )
     );
     const forumMatches = !!(
         forumCheckpoint?.state
         && forumCheckpoint.targetIndex === resolved
-        && forumCheckpoint.messageId === messageId
         && (
             force
             || (
-                forumSource?.messageId === messageId
-                && Number(forumSource.swipeId || 0) !== currentSwipeId
+                Number(forumSource?.index) === resolved
+                && (
+                    forumSource?.messageId !== messageId
+                    || Number(forumSource?.swipeId || 0) !== currentSwipeId
+                )
             )
         )
     );
@@ -8242,6 +8310,7 @@ function bindEvents() {
                 type: generationType,
                 dryRun: false,
             };
+            resetCurrentModelCallStats(generationType);
             invalidateOperations(`开始新的${lastGeneration.type}生成`);
             await restoreBranchCheckpointsForSwipe(undefined);
             applyContinuityInjection({
