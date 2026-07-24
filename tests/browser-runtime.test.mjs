@@ -30,10 +30,14 @@ const bundledPlaywright = fs.existsSync(bundledNodeModules)
     : '';
 const playwrightCandidates = [
     process.env.PLAYWRIGHT_PATH,
+    path.join(pluginRoot, 'node_modules', 'playwright', 'index.mjs'),
     bundledPlaywright,
 ].filter(Boolean);
 const playwrightPath = playwrightCandidates.find((candidate) => fs.existsSync(candidate));
 if (!playwrightPath) {
+    if (process.env.CI) {
+        throw new Error('Playwright is unavailable in CI; browser regression must not be silently skipped');
+    }
     console.log('browser runtime tests skipped: Playwright is unavailable');
     process.exit(0);
 }
@@ -435,13 +439,21 @@ try {
         mode: 'manual',
         intervalDisabled: true,
     }, '默认手动模式不得在AI回复后暗中调用论坛模型');
-    await page.selectOption('.mvuad-forum-refresh-mode-settings', 'auto');
+    await page.evaluate(() => {
+        const select = document.querySelector('.mvuad-forum-refresh-mode-settings');
+        select.value = 'auto';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
     assert.equal(
         await page.locator('.mvuad-forum-interval').isDisabled(),
         false,
         '切换自动模式后才允许设置自动刷新间隔',
     );
-    await page.selectOption('.mvuad-forum-refresh-mode-settings', 'manual');
+    await page.evaluate(() => {
+        const select = document.querySelector('.mvuad-forum-refresh-mode-settings');
+        select.value = 'manual';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
     assert.equal(
         await page.locator('.mvuad-forum-interval').isDisabled(),
         true,
@@ -459,11 +471,12 @@ try {
         hardAudit: window.MvuAutoDoctorAPI.getHardContractAudit(),
         hardStatus: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-status')?.textContent || '',
         hardDetails: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-details')?.textContent || '',
-        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
-        cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
-        openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
+        hasSettingsLedger: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger'),
+        hasWorldPanelButton: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-continuity-open'),
+        featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
+            .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.7.1');
+    assert.equal(continuity.version, '1.8.0');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         32768,
@@ -501,43 +514,49 @@ try {
     assert.match(continuity.calls.forumSystem, /至少一半帖子应为日常闲聊/u);
     assert.match(continuity.calls.forumSystem, /每个新帖都至少获得1条回复/u);
     assert.match(continuity.calls.forumSystem, /不可信引用数据/u);
-    assert.equal(continuity.cardCount, 1);
-    assert.equal(continuity.openCardCount, 0, '未显现的幕后事件默认折叠');
-    assert.match(continuity.ledgerText, /幕后独立事件（点击查看剧透）/u);
-    assert.match(continuity.ledgerText, /世界脉动/u);
-    assert.match(continuity.ledgerText, /保持独立/u);
-    assert.equal(
-        await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-settings-fold')?.open),
-        false,
-        '设置页低频账本明细必须默认收起',
-    );
+    const diagnosticsUi = await page.evaluate(async () => {
+        const t = window.__TEST__;
+        const injection = t.calls.prompts.at(-1)?.[1] || '';
+        await t.context.eventSource.emit('chat_completion_prompt_ready', {
+            dryRun: false,
+            chat: [{ role: 'system', content: injection }],
+        });
+        await new Promise((resolve) => setTimeout(resolve, 850));
+        return {
+            apiCompatible: window.MvuAutoDoctorAPI.isCompatible(1),
+            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(2),
+            healthItems: document.querySelectorAll('.mvuad-health-item').length,
+            promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
+            modelCalls: window.MvuAutoDoctorAPI.getModelCallStats(),
+            savedModelCalls: structuredClone(
+                t.context.chatMetadata.mvu_auto_doctor?.modelCallStats || {},
+            ),
+            injection: window.MvuAutoDoctorAPI.getInjectionInspection(),
+            operationLog: structuredClone(
+                t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
+            ),
+        };
+    });
+    assert.equal(diagnosticsUi.apiCompatible, true);
+    assert.equal(diagnosticsUi.apiRejectsFuture, false);
+    assert.ok(diagnosticsUi.healthItems >= 6, '设置页必须给出可读环境自检清单');
+    assert.ok(diagnosticsUi.promptInfo.totalChars > 0, '必须保存上次真实提示词的分段规模');
+    assert.equal(diagnosticsUi.modelCalls.total, 3, '变量、活世界、手动论坛应分别计为一次模型调用');
+    assert.deepEqual(diagnosticsUi.modelCalls.byTask, {
+        variable: 1,
+        continuity: 1,
+        forum: 1,
+        other: 0,
+    });
+    assert.equal(diagnosticsUi.savedModelCalls.total, 3, '模型调用统计必须按聊天持久化');
+    assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
+    assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
+    assert.equal(continuity.hasSettingsLedger, false, '设置页不应再复制完整事件账本');
+    assert.equal(continuity.hasWorldPanelButton, true);
+    assert.equal(continuity.featureFoldsClosed, true, '设置页功能分区应默认收起');
     if (process.env.MVUAD_SETTINGS_SCREENSHOT) {
         await page.locator('#mvu-auto-doctor-settings').screenshot({ path: process.env.MVUAD_SETTINGS_SCREENSHOT });
     }
-    await page.click('#mvu-auto-doctor-settings .mvuad-settings-fold-summary');
-    assert.equal(
-        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card summary .mvuad-thread-title').textContent(),
-        '幕后独立事件（点击查看剧透）',
-    );
-    await page.click('#mvu-auto-doctor-settings .mvuad-thread-card summary');
-    assert.match(
-        await page.locator('#mvu-auto-doctor-settings .mvuad-thread-card .mvuad-thread-body').textContent(),
-        /钟楼巡检的缺页交接册/u,
-    );
-    const mobileLedgerLayout = await page.evaluate(() => {
-        const ledger = document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger');
-        const field = document.querySelector('#mvu-auto-doctor-settings .mvuad-thread-field');
-        const rect = ledger?.getBoundingClientRect();
-        return {
-            viewportWidth: window.innerWidth,
-            left: rect?.left ?? -1,
-            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
-            fieldColumns: field ? getComputedStyle(field).gridTemplateColumns : '',
-        };
-    });
-    assert.ok(mobileLedgerLayout.left >= 0);
-    assert.ok(mobileLedgerLayout.right <= mobileLedgerLayout.viewportWidth + 1);
-    assert.doesNotMatch(mobileLedgerLayout.fieldColumns, /\s/u, '手机字段应为单列');
     const orbBeforeOpen = await page.evaluate(() => {
         const orb = document.querySelector('#mvuad-floating-orb');
         const rect = orb?.getBoundingClientRect();
@@ -560,17 +579,30 @@ try {
     const floatingPanel = await page.evaluate(() => {
         const panel = document.querySelector('#mvuad-floating-panel');
         const rect = panel?.getBoundingClientRect();
+        const firstCard = panel?.querySelector('.mvuad-thread-card');
+        const groups = [...(firstCard?.querySelectorAll('.mvuad-thread-group') || [])];
+        const progress = firstCard?.querySelector('[role="progressbar"]');
         return {
             hidden: !!panel?.hidden,
             left: rect?.left ?? -1,
             right: rect?.right ?? Number.MAX_SAFE_INTEGER,
             cards: panel?.querySelectorAll('.mvuad-thread-card').length || 0,
+            badgeCount: firstCard?.querySelectorAll(':scope > summary .mvuad-thread-badge').length || 0,
+            groupCount: groups.length,
+            firstGroupOpen: !!groups[0]?.open,
+            laterGroupsClosed: groups.slice(1).every((group) => !group.open),
+            progressNow: progress?.getAttribute('aria-valuenow') || '',
             text: panel?.textContent || '',
         };
     });
     assert.equal(floatingPanel.hidden, false);
     assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
     assert.equal(floatingPanel.cards, 1);
+    assert.equal(floatingPanel.badgeCount, 2, '事件摘要只保留阶段与紧迫度两枚徽章');
+    assert.equal(floatingPanel.groupCount, 3, '事件字段必须分成当前、因果、传播与收束');
+    assert.equal(floatingPanel.firstGroupOpen, true, '事件卡默认只展开当前进展');
+    assert.equal(floatingPanel.laterGroupsClosed, true);
+    assert.equal(floatingPanel.progressNow, '2', '事件进度必须暴露给辅助技术');
     assert.equal(
         await page.locator('#mvuad-floating-orb').isHidden(),
         true,
@@ -831,7 +863,9 @@ try {
     assert.ok(openingUndo.openingState.suppressed['/契约者/衍生属性/MP_当前']);
 
     const beforeRefreshCalls = continuity.calls.model.length;
-    await page.click('#mvu-auto-doctor-settings .mvuad-ledger-refresh');
+    await page.evaluate(() => {
+        document.querySelector('#mvuad-floating-panel .mvuad-ledger-refresh')?.click();
+    });
     assert.equal(
         await page.evaluate(() => window.__TEST__.calls.model.length),
         beforeRefreshCalls,
@@ -874,7 +908,7 @@ try {
         '切换到空聊天后不得显示上一个聊天的支线',
     );
     assert.match(
-        await page.evaluate(() => document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger-empty')?.textContent || ''),
+        await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-ledger-empty')?.textContent || ''),
         /当前没有未结事件/u,
     );
     assert.equal(
@@ -930,9 +964,9 @@ try {
         calls: structuredClone(window.__TEST__.calls),
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         forumState: window.MvuAutoDoctorAPI.getForumState(),
-        ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
+        ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.7.1');
+    assert.equal(lifecycle.version, '1.8.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1357,7 +1391,12 @@ try {
     assert.equal(externalForumBuiltin.externalButtonHidden, false);
     assert.match(externalForumBuiltin.summary, /来源：医生内置论坛/u);
     assert.match(externalForumBuiltin.note, /额外产生模型请求/u);
-    await externalForumPage.selectOption('.mvuad-forum-provider-settings', 'zsd');
+    await externalForumPage.evaluate(() => {
+        const select = document.querySelector('.mvuad-forum-provider-settings');
+        select.closest('.mvuad-settings-section').open = true;
+        select.value = 'zsd';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
     await externalForumPage.click('.mvuad-forum-open');
     await externalForumPage.evaluate(async () => {
         const t = window.__TEST__;
