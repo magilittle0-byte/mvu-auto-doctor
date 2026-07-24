@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import {
     extractUpdateBlockCandidate,
     findOpeningResourceMismatches,
+    inferAutomaticallyComputedPaths,
     parseInitializationText,
     preparePatch,
     restoreTouchedPaths,
     simulateOps,
+    stripAutomaticallyComputedOps,
     validatePatchResult,
 } from '../core.mjs';
 
@@ -165,6 +167,142 @@ const strippedReadonly = validatePatchResult(
 );
 assert.equal(strippedReadonly.ok, false, 'normalization must not remove a read-only derived field');
 assert.deepEqual(strippedReadonly.rejected, ['/_derived']);
+
+const derivedState = {
+    stat_data: {
+        角色: {
+            属性: {
+                基础: { STR: 5 },
+                实际: { STR: 5 },
+            },
+            历史记录: {
+                实际: { STR: 4 },
+            },
+            头部: {
+                等级: 1,
+            },
+            属性点: {
+                未分配: 5,
+            },
+            资源: {
+                MP_当前: 50,
+                MP_最大: 50,
+                闪避值: 10,
+            },
+        },
+    },
+};
+const automaticallyComputedPaths = inferAutomaticallyComputedPaths(derivedState, {
+    schemaTexts: [
+        '属性: z.object({基础, 实际}).transform(data => ({...data, 实际: {STR: data.基础.STR}}))',
+    ],
+    ruleTexts: [
+        '角色.资源:',
+        '- MP_最大 / 闪避值 均由前端根据实际属性自动计算，AI无需手动写入',
+        '- 闪避值的联动由前端自动完成，AI无需手动写入',
+        '- 闪避值均由前端自动计算，AI禁止直接修改',
+        '- 角色.属性.结果 由前端自动计算，AI无需手动写入',
+        '- 升级时未分配属性点+1由前端自动处理，AI只需写入经验；属性点也可由玩家自行分配',
+        '- AI只负责实时写入：MP_当前',
+    ],
+});
+assert.deepEqual(automaticallyComputedPaths, [
+    '/角色/属性/实际/STR',
+    '/角色/资源/MP_最大',
+    '/角色/资源/闪避值',
+]);
+assert.ok(
+    !automaticallyComputedPaths.includes('/角色/历史记录/实际/STR'),
+    'Schema transform must be scoped to its parent object, not every same-named segment',
+);
+assert.ok(
+    !automaticallyComputedPaths.includes('/角色/头部/等级'),
+    'short field names must not match as substrings inside a different compound field',
+);
+assert.ok(
+    !automaticallyComputedPaths.includes('/角色/属性点/未分配'),
+    'conditionally automatic fields must remain writable unless rules declare them read-only',
+);
+const strippedAutomaticPatch = stripAutomaticallyComputedOps(
+    '<UpdateVariable><Analysis>修复基础输入，派生值交给前端</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/角色/属性/基础/STR","value":10},'
+    + '{"op":"replace","path":"/角色/属性/实际/STR","value":99},'
+    + '{"op":"replace","path":"/角色/资源/MP_最大","value":999}]'
+    + '</JSONPatch></UpdateVariable>',
+    automaticallyComputedPaths,
+);
+assert.deepEqual(strippedAutomaticPatch.ignoredPaths, [
+    '/角色/属性/实际/STR',
+    '/角色/资源/MP_最大',
+]);
+const derivedPrepared = preparePatch(strippedAutomaticPatch.block, derivedState);
+derivedPrepared.automaticallyComputedPaths = automaticallyComputedPaths;
+assert.equal(
+    validatePatchResult(
+        derivedState,
+        {
+            stat_data: {
+                角色: {
+                    属性: {
+                        基础: { STR: 10 },
+                        实际: { STR: 10 },
+                    },
+                    历史记录: {
+                        实际: { STR: 4 },
+                    },
+                    头部: {
+                        等级: 1,
+                    },
+                    属性点: {
+                        未分配: 5,
+                    },
+                    资源: {
+                        MP_当前: 50,
+                        MP_最大: 100,
+                        闪避值: 15,
+                    },
+                },
+            },
+        },
+        derivedPrepared,
+    ).ok,
+    true,
+    'rule-declared automatic fields may change after their writable inputs are repaired',
+);
+const removedAutomaticField = validatePatchResult(
+    derivedState,
+    {
+        stat_data: {
+            角色: {
+                属性: {
+                    基础: { STR: 10 },
+                    实际: { STR: 10 },
+                },
+                历史记录: {
+                    实际: { STR: 4 },
+                },
+                头部: {
+                    等级: 1,
+                },
+                属性点: {
+                    未分配: 5,
+                },
+                资源: {
+                    MP_当前: 50,
+                    闪避值: 15,
+                },
+            },
+        },
+    },
+    derivedPrepared,
+);
+assert.equal(removedAutomaticField.ok, false, 'automatic normalization must not delete fields');
+assert.ok(removedAutomaticField.rejected.includes('/角色/资源/MP_最大'));
+assert.ok(
+    !automaticallyComputedPaths.includes('/角色/属性/基础/STR')
+    && !automaticallyComputedPaths.includes('/角色/资源/MP_当前'),
+    'writable base/current fields must not be inferred as automatic',
+);
 
 const restoredTouched = restoreTouchedPaths(
     {

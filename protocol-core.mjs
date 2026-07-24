@@ -427,9 +427,33 @@ function planningStartClock(replyText) {
     return anchored?.[1] || '';
 }
 
+function stateClockValues(statData) {
+    const result = new Set();
+    const visit = (value, path = [], depth = 0) => {
+        if (!value || typeof value !== 'object' || depth > 5) return;
+        for (const [key, item] of Object.entries(value)) {
+            const nextPath = [...path, key];
+            if (
+                typeof item === 'string'
+                && /时间|时刻|clock|time/iu.test(nextPath.join('.'))
+            ) {
+                for (const match of item.matchAll(/\b([01]?\d|2[0-3]):[0-5]\d\b/gu)) {
+                    result.add(match[0]);
+                }
+            } else if (item && typeof item === 'object') {
+                visit(item, nextPath, depth + 1);
+            }
+        }
+    };
+    visit(statData);
+    return result;
+}
+
 export function auditReplyProtocol(replyText, {
     contractTexts = [],
     previousUserText = '',
+    statData = null,
+    previousStatData = null,
 } = {}) {
     const text = asText(replyText);
     const sources = [...contractTexts.map(asText), text];
@@ -540,7 +564,16 @@ export function auditReplyProtocol(replyText, {
 
     const sceneTime = sceneClock(previousUserText);
     const s0Time = planningStartClock(text);
-    if (sceneTime && s0Time && sceneTime !== s0Time) {
+    const currentClocks = stateClockValues(statData);
+    const previousClocks = stateClockValues(previousStatData);
+    const adoptedSceneCandidate = !!(
+        sceneTime
+        && s0Time
+        && sceneTime !== s0Time
+        && currentClocks.has(sceneTime)
+        && previousClocks.has(s0Time)
+    );
+    if (sceneTime && s0Time && sceneTime !== s0Time && !adoptedSceneCandidate) {
         pushUniqueIssue(issues, {
             code: 'scene-time-mismatch',
             severity: 'error',
@@ -563,6 +596,7 @@ export function auditReplyProtocol(replyText, {
             updateBlocks: extractBlocks(text, 'UpdateVariable').length,
             sceneTime,
             s0Time,
+            adoptedSceneCandidate,
         },
     };
 }
@@ -933,6 +967,8 @@ export function auditHardContracts({
     const reply = auditReplyProtocol(replyText, {
         contractTexts,
         previousUserText,
+        statData,
+        previousStatData,
     });
     const equipment = auditEquipmentContracts(statData, {
         schemaTexts,

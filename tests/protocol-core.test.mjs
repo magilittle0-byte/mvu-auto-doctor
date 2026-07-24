@@ -103,6 +103,30 @@ test('detects scene-time drift from the compact V5 A-boundary line', () => {
     assert.ok(result.issues.some((issue) => issue.code === 'scene-time-mismatch'));
 });
 
+test('accepts a scene clock adopted once as candidate S1', () => {
+    const result = auditReplyProtocol(
+        `【A·边界】本轮玩家明确要做/说的A=进入副本；没有授权的下一步=无；S0时间/地点/资源/任务/敌人/关系=第1天 00:01/引导区/满/无/无/中立；本轮权威规则、奖励与路径=世界书。
+<content>场景推进到候诊室。</content>`,
+        {
+            previousUserText: '<scene>Day：1,00:05 | 地点：候诊室</scene>',
+            previousStatData: {
+                当前时间: {
+                    现实时间: '凌晨00:01',
+                    客观时间: '不在副本中',
+                },
+            },
+            statData: {
+                当前时间: {
+                    现实时间: '凌晨00:01',
+                    客观时间: '第1天 00:05',
+                },
+            },
+        },
+    );
+    assert.equal(result.metrics.adoptedSceneCandidate, true);
+    assert.ok(!result.issues.some((issue) => issue.code === 'scene-time-mismatch'));
+});
+
 test('reports the current schema-level equipment slot gap and ambiguous backpack weapons', () => {
     const stat = {
         契约者: {

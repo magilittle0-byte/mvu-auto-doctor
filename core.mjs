@@ -521,6 +521,154 @@ function pathCoveredByTouched(path, touched) {
     ));
 }
 
+const AUTOMATIC_FIELD_RULE_RE = [
+    '(?:AI|GM|模型)?\\s*(?:\\*{0,2})?无需(?:手动)?(?:写入|更新|修改)',
+    '不需要(?:AI|GM|模型)?手动(?:写入|更新|修改)',
+    '(?:AI|GM|模型)?\\s*禁止(?:直接|手动)?(?:写入|更新|修改)',
+    '[“"「]?结果端[”"」]?.{0,80}(?:前端|系统|Schema|schema|程序|解析器).{0,40}(?:计算|合成|推导|派生)',
+    '实际值.{0,24}(?:前端|系统|Schema|schema|程序|解析器).{0,24}(?:自动)?(?:计算|合成|推导|派生)',
+    'read[\\s_-]*only',
+    '\\bcomputed\\b',
+    '\\bderived\\b',
+].join('|');
+const AUTOMATIC_FIELD_RULE_REGEX = new RegExp(AUTOMATIC_FIELD_RULE_RE, 'iu');
+
+function sourceTextList(value) {
+    return (Array.isArray(value) ? value : [value])
+        .map((item) => String(item || ''))
+        .filter(Boolean);
+}
+
+function lineMentionsToken(line, token) {
+    const value = String(token || '');
+    if (!value) return false;
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    return new RegExp(
+        `(^|[^\\p{L}\\p{N}_$-])${escaped}(?=$|[^\\p{L}\\p{N}_$-]|[的均等])`,
+        'u',
+    ).test(line);
+}
+
+function lineMentionsDottedPath(line, parts) {
+    const value = parts.join('.');
+    if (!value) return false;
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    return new RegExp(
+        `(^|[^\\p{L}\\p{N}_$.-])${escaped}(?![\\p{L}\\p{N}_$.-])`,
+        'u',
+    ).test(line);
+}
+
+function transformedOutputPairs(schemaTexts) {
+    const result = [];
+    for (const source of sourceTextList(schemaTexts)) {
+        const pattern = /\.transform\s*\([^=]{0,240}=>\s*\(\s*\{\s*\.\.\.[A-Za-z_$][\w$]*\s*,\s*([\p{L}_$][\p{L}\p{N}_$]*)\s*:/giu;
+        for (const match of source.matchAll(pattern)) {
+            const transformIndex = match.index;
+            let close = transformIndex - 1;
+            while (close >= 0 && /\s/u.test(source[close])) close -= 1;
+            if (source[close] !== ')') continue;
+            let depth = 0;
+            let open = -1;
+            for (let index = close; index >= 0; index -= 1) {
+                if (source[index] === ')') depth += 1;
+                else if (source[index] === '(') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        open = index;
+                        break;
+                    }
+                }
+            }
+            if (open < 0) continue;
+            const owner = source.slice(Math.max(0, open - 160), open).match(
+                /([\p{L}_$][\p{L}\p{N}_$]*)\s*:\s*z\.object\s*$/iu,
+            )?.[1];
+            if (owner) result.push({ parent: owner, output: match[1] });
+        }
+    }
+    return result;
+}
+
+export function inferAutomaticallyComputedPaths(statData, {
+    schemaTexts = [],
+    ruleTexts = [],
+} = {}) {
+    const stat = statDataOf(statData);
+    if (!stat) return [];
+    const automaticLines = sourceTextList(ruleTexts)
+        .flatMap((source) => source.split(/\r?\n/gu))
+        .map((line) => line.trim())
+        .filter((line) => line && AUTOMATIC_FIELD_RULE_REGEX.test(line));
+    const transformedPairs = transformedOutputPairs(schemaTexts);
+    const paths = leafPaths(stat);
+    const leafCounts = new Map();
+    for (const path of paths) {
+        const leaf = (pointerSegments(path) || []).at(-1) || '';
+        leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1);
+    }
+
+    return paths.filter((path) => {
+        const parts = pointerSegments(path) || [];
+        const leaf = parts.at(-1) || '';
+        if (transformedPairs.some(({ parent, output }) => (
+            parts.some((part, index) => (
+                part === parent && parts[index + 1] === output
+            ))
+        ))) return true;
+
+        return automaticLines.some((line) => {
+            if (
+                lineMentionsToken(line, leaf)
+                && (
+                    leafCounts.get(leaf) === 1
+                    || lineMentionsToken(line, parts.at(-2) || '')
+                )
+            ) return true;
+            if (lineMentionsDottedPath(line, parts.slice(0, -1))) return true;
+            const parent = parts.at(-2) || '';
+            return (
+                parent.length >= 2
+                && new RegExp(
+                    `${parent.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?:值|字段|数据|结果)`,
+                    'u',
+                ).test(line)
+            );
+        });
+    });
+}
+
+function automaticPathOverlaps(path, automaticPaths) {
+    return (automaticPaths || []).some((candidate) => (
+        candidate === ''
+        || path === candidate
+        || path.startsWith(`${candidate}/`)
+        || candidate.startsWith(`${path}/`)
+    ));
+}
+
+export function stripAutomaticallyComputedOps(patchBlock, automaticPaths = []) {
+    const parsed = parsePatchBlock(patchBlock);
+    if (parsed.error) return parsed;
+    const ignoredPaths = [];
+    const ops = parsed.ops.filter((op) => {
+        const paths = op.op === 'move'
+            ? [op.from, op.to]
+            : [op.path];
+        const blocked = paths.filter((path) => (
+            typeof path === 'string' && automaticPathOverlaps(path, automaticPaths)
+        ));
+        if (!blocked.length) return true;
+        ignoredPaths.push(...blocked);
+        return false;
+    });
+    return {
+        block: renderPatchBlock(parsed.block, ops),
+        ops,
+        ignoredPaths: [...new Set(ignoredPaths)],
+    };
+}
+
 export function validatePatchResult(oldData, newData, prepared) {
     const oldStat = statDataOf(oldData);
     if (
@@ -581,11 +729,19 @@ export function validatePatchResult(oldData, newData, prepared) {
         if (pathCoveredByTouched(path, prepared.touched)) continue;
         const oldHit = pointerGet(oldStat, path);
         const actualHit = pointerGet(actual, path);
+        const automatic = automaticPathOverlaps(
+            path,
+            prepared.automaticallyComputedPaths,
+        );
         if (
             !actualHit.found
             // MVU may legitimately recompute present derived/read-only fields
             // while applying an unrelated patch. Their removal is still unsafe.
-            || (!pathHasReadonlySegment(path) && !deepSubset(oldHit.value, actualHit.value))
+            || (
+                !pathHasReadonlySegment(path)
+                && !automatic
+                && !deepSubset(oldHit.value, actualHit.value)
+            )
         ) {
             rejected.push(path || '/');
             details.push({
