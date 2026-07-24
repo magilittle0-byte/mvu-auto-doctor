@@ -399,10 +399,11 @@ const server = http.createServer((request, response) => {
 
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
-const browser = await chromium.launch({
-    headless: true,
-    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-});
+const launchOptions = { headless: true };
+if (process.env.MVUAD_BROWSER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.MVUAD_BROWSER_EXECUTABLE_PATH;
+}
+const browser = await chromium.launch(launchOptions);
 
 try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
