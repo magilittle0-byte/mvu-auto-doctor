@@ -218,6 +218,9 @@ window.StoryOracleAPI = {
       error.status = 429;
       throw error;
     }
+    if (mode === 'transport-error') {
+      throw new Error('connection refused');
+    }
     if (!isContinuity && !isForum) {
       calls.repairSystem = messages[0].content;
       calls.repairUser = messages[1].content;
@@ -263,6 +266,9 @@ window.StoryOracleAPI = {
       calls.continuityRuns += 1;
       calls.continuitySystem = messages[0].content;
       calls.continuityUser = messages[1].content;
+      if (mode === 'invalid-continuity') {
+        return '<ContinuityState>{"turn":';
+      }
       if (calls.continuityRuns === 1) return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","eventType":"progress","level":2,"origin":"ambient","relation":"independent","stage":"seeded","stageProgress":2,"summary":"新巡检员在交接册里发现缺失的一页。","offscreenBeat":"他先私下核对了三个月的报时记录。","nextBeat":"巡检员会询问上一班的抄录员。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","actors":["新巡检员","上一班抄录员"],"locations":["港城钟楼"],"knowledge":"hidden","urgency":1,"lastAdvancedTurn":1}],"world":{"digest":"港区日常运行稳定，公开的旧桥积水消息开始影响短途运输安排。","factions":[{"id":null,"name":"港区运输联合体","relation":"neutral","condition":"stable","goal":"维持旧桥附近的短途运输","summary":"开始临时调整车次","pillars":["车辆","调度"],"scope":"港区","knowledge":"observed","basis":"世界书中的港区运输网络与公开积水消息","lastChange":"部分车辆改走南侧道路"}],"winds":[{"id":null,"topic":"旧桥积水","type":"notice","strength":1,"content":"昨夜降雨使旧桥通行变慢","source":"过桥司机→港区运输人员","scope":"港区运输圈","knowledge":"rumor","basis":"公开路况被多人转述"}],"reputation":{"public":{"level":1,"summary":"公众对玩家协助巡逻的评价略有提升","basis":"公开感谢已经在港区小范围传播"}},"environment":{"economy":"strained","summary":"短途运输因旧桥积水略微趋紧","basis":"司机已经开始改道","incidents":[]},"shadows":{"enemies":[],"secrets":[{"id":null,"title":"密谈代号黑雨","status":"hidden","summary":"密室中的代号尚未外泄","exposure":0,"holders":["密谈参与者"],"knowledge":"hidden","basis":"本轮正文明确为私下密谈","lastChange":"维持未公开"}]},"influences":[{"id":null,"trigger":"旧桥积水风声","impact":"运输联合体调整部分车次","fallout":"旧桥附近送货时间可能延长","knowledge":"observed","basis":"路况信息已覆盖运输圈"}]}}</ContinuityState>';
       if (calls.continuityRuns === 2) return '<ContinuityState>{"turn":2,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"advancing","summary":"巡检员找到上一班抄录员并确认缺页被人为撕走。","offscreenBeat":"两人比对墨迹，锁定缺页发生在昨夜换班。","nextBeat":"他们会查问昨夜进入钟楼的人。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2}]}</ContinuityState>';
       if (calls.continuityRuns === 3) return '<ContinuityState>{"turn":3,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
@@ -273,6 +279,20 @@ window.StoryOracleAPI = {
         + '甲'.repeat(120)
         + '</CorrectedContent></HardContractCorrection>'
         + '<UpdateVariable><Analysis>变量无需修改</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'partial-hard-correction') {
+      return '<UpdateVariable><Analysis>变量无需修改</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>'
+        + '<HardContractCorrection>'
+        + '<Reason>补足四个候选，但正文仍未达到最低字数。</Reason>'
+        + '<Evidence>正文100~200汉字；结尾四项候选。</Evidence>'
+        + '<CorrectedContent>' + '甲'.repeat(50) + '</CorrectedContent>'
+        + '<CorrectedOptions>'
+        + '>选项一：[继续观察]\n'
+        + '>选项二：[等待变化]\n'
+        + '>选项三：[保持警戒]\n'
+        + '>选项四：[结束回合]'
+        + '</CorrectedOptions>'
+        + '</HardContractCorrection>';
     }
     if (mode === 'rule-backed-correction') {
       return '<HardContractCorrection><Reason>奖励数量与世界书硬规则不符。</Reason>'
@@ -477,7 +497,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.0');
+    assert.equal(continuity.version, '1.8.1');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         32768,
@@ -967,7 +987,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.0');
+    assert.equal(lifecycle.version, '1.8.1');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1173,12 +1193,143 @@ try {
         t.resolveRepair('<UpdateVariable><Analysis>旧请求不得落地</Analysis><JSONPatch>[{"op":"delta","path":"/账户/代币","value":9}]</JSONPatch></UpdateVariable>');
     });
     await continueInterruptPage.waitForTimeout(1200);
+    const continueInterrupted = await continueInterruptPage.evaluate(() => ({
+        replacements: window.__TEST__.calls.replace.length,
+        continuityRuns: window.__TEST__.calls.continuityRuns,
+        continuityCalls: window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length,
+    }));
+    assert.equal(continueInterrupted.replacements, 0, 'continue 开始后，挂起的旧 repair 结果不得写入同一楼层');
     assert.equal(
-        await continueInterruptPage.evaluate(() => window.__TEST__.calls.replace.length),
+        continueInterrupted.continuityCalls,
         0,
-        'continue 开始后，挂起的旧 repair 结果不得写入同一楼层',
+        '变量审计被 continue 作废后，不得绕过上游继续产生活世界费用',
     );
     await continueInterruptPage.close();
+
+    const identityPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await identityPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await identityPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const continuedIdentity = await identityPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const message = t.context.chat[2];
+        message.swipe_info = [{ extra: {} }];
+        await window.MvuAutoDoctorAPI.auditHardContracts();
+        const originalId = message.extra.mvu_auto_doctor_source_id;
+        const mirroredId = message.swipe_info[0].extra.mvu_auto_doctor_source_id;
+        await t.context.eventSource.emit('generation_started', 'continue', {}, false);
+        t.context.chat[2] = {
+            ...message,
+            send_date: 'replacement-date',
+            mes: `${message.mes}\n继续生成的新片段。`,
+            extra: {},
+            swipe_info: [{ extra: {} }],
+        };
+        await window.MvuAutoDoctorAPI.auditHardContracts();
+        return {
+            originalId,
+            mirroredId,
+            continuedId: t.context.chat[2].extra.mvu_auto_doctor_source_id,
+            continuedSwipeId: t.context.chat[2].swipe_info[0].extra.mvu_auto_doctor_source_id,
+        };
+    });
+    assert.equal(continuedIdentity.mirroredId, continuedIdentity.originalId);
+    assert.equal(
+        continuedIdentity.continuedId,
+        continuedIdentity.originalId,
+        'continue 替换消息对象后必须沿用原楼层稳定身份',
+    );
+    assert.equal(continuedIdentity.continuedSwipeId, continuedIdentity.originalId);
+    await identityPage.close();
+
+    const hardContractGatePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await hardContractGatePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await hardContractGatePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await hardContractGatePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.chat[2].mes = [
+            '【预算】正文3000~4000汉字',
+            '<content>第一回合正文过短。</content>',
+            '<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        ].join('\n');
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await hardContractGatePage.waitForFunction(() => (
+        /已跳过本回合/u.test(
+            document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        )
+    ), null, { timeout: 30000 });
+    const hardContractGate = await hardContractGatePage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+    }));
+    assert.equal(
+        hardContractGate.calls.model.filter((kind) => kind === 'continuity').length,
+        0,
+        '正文硬合同仍有错误时不得调用活世界模型或把坏回复写入账本',
+    );
+    assert.match(hardContractGate.status, /正文硬合同仍有 1 个错误/u);
+    assert.match(
+        hardContractGate.calls.repairSystem,
+        /content-under-budget[\s\S]*CorrectedContent>不是可选项/u,
+        '正文低于硬下限时必须明确要求模型在每次尝试中输出足量修正版',
+    );
+    await hardContractGatePage.close();
+
+    const partialCorrectionGatePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await partialCorrectionGatePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await partialCorrectionGatePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await partialCorrectionGatePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.characters[0].data.system_prompt = '正文100~200汉字；结尾四项候选。';
+        t.context.chat[2].mes = [
+            `<content>${'甲'.repeat(20)}</content>`,
+            '<options>',
+            '>选项一：[继续观察]',
+            '>选项二：[等待变化]',
+            '</options>',
+            '<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        ].join('\n');
+        t.setMode('partial-hard-correction');
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await partialCorrectionGatePage.waitForFunction(() => (
+        /已跳过本回合/u.test(
+            document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        )
+    ), null, { timeout: 30000 });
+    const partialCorrectionGate = await partialCorrectionGatePage.evaluate(() => ({
+        continuityCalls: window.__TEST__.calls.model.filter(
+            (kind) => kind === 'continuity',
+        ).length,
+        continuityTurn: Number(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn,
+        ) || 0,
+        swipeId: window.__TEST__.context.chat[2].swipe_id,
+        hardAudit: window.MvuAutoDoctorAPI.getHardContractAudit(),
+        continuityStatus:
+            document.querySelector('.mvuad-continuity-status')?.textContent || '',
+    }));
+    assert.equal(
+        partialCorrectionGate.swipeId,
+        1,
+        '测试前提：只修好选项的部分修正版应先落成一个可回退 swipe',
+    );
+    assert.ok(
+        partialCorrectionGate.hardAudit.issues.some(
+            (issue) => issue.code === 'content-under-budget',
+        ),
+        '修正版写入后必须重新检查当前 swipe，而不是沿用“已生成修正版”结论',
+    );
+    assert.equal(
+        partialCorrectionGate.continuityCalls,
+        0,
+        '部分修正版仍有正文硬错误时不得调用活世界模型',
+    );
+    assert.equal(partialCorrectionGate.continuityTurn, 0);
+    assert.match(partialCorrectionGate.continuityStatus, /正文硬合同仍有 1 个错误/u);
+    await partialCorrectionGatePage.close();
 
     const undoGuardPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await undoGuardPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -1304,18 +1455,44 @@ try {
     assert.equal(checkpointBeforeContinue.forumTurn, 0);
     await continueCheckpointPage.evaluate(async () => {
         const t = window.__TEST__;
+        window.__CONTINUE_CALLS_BEFORE__ = {
+            continuity: t.calls.model.filter((kind) => kind === 'continuity').length,
+            forum: t.calls.model.filter((kind) => kind === 'forum').length,
+        };
         t.context.chat[2].mes += '\n同一楼层的继续生成内容。';
         await t.context.eventSource.emit('generation_started', 'continue', {}, false);
         await t.context.eventSource.emit('message_received', 2);
     });
-    await continueCheckpointPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getContinuityState().turn === 2
-        && window.MvuAutoDoctorAPI.getForumState().turn === 2
-    ), null, { timeout: 30000 });
+    await continueCheckpointPage.waitForTimeout(2500);
     const checkpointAfterContinue = await continueCheckpointPage.evaluate(() => ({
         continuityTurn: window.__TEST__.context.chatMetadata.mvu_auto_doctor.continuityCheckpoint?.state?.turn,
         forumTurn: window.__TEST__.context.chatMetadata.mvu_auto_doctor.forumCheckpoint?.state?.turn,
+        stateContinuityTurn: window.MvuAutoDoctorAPI.getContinuityState().turn,
+        stateForumTurn: window.MvuAutoDoctorAPI.getForumState().turn,
+        continuityCalls: window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length,
+        forumCalls: window.__TEST__.calls.model.filter((kind) => kind === 'forum').length,
+        callsBefore: window.__CONTINUE_CALLS_BEFORE__,
     }));
+    assert.equal(
+        checkpointAfterContinue.stateContinuityTurn,
+        1,
+        '同一楼 continue 仍属一个回合，不得重复推进活世界时钟',
+    );
+    assert.equal(
+        checkpointAfterContinue.stateForumTurn,
+        1,
+        '同一楼 continue 不得重复自动刷新论坛',
+    );
+    assert.equal(
+        checkpointAfterContinue.continuityCalls,
+        checkpointAfterContinue.callsBefore.continuity,
+        '同一楼 continue 不得增加活世界模型费用',
+    );
+    assert.equal(
+        checkpointAfterContinue.forumCalls,
+        checkpointAfterContinue.callsBefore.forum,
+        '同一楼 continue 不得增加论坛模型费用',
+    );
     assert.equal(
         checkpointAfterContinue.continuityTurn,
         0,
@@ -1962,6 +2139,77 @@ try {
     assert.ok(rateLimitResult.state.turn > 5, '模型限流时本地世界时钟仍须落账');
     assert.match(rateLimitResult.status, /本地时钟已推进/u);
     await rateLimitPage.close();
+
+    const transportPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await transportPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await transportPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const transportResult = await transportPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('transport-error');
+        const before = t.calls.model.filter((kind) => kind === 'continuity').length;
+        const result = await window.MvuAutoDoctorAPI.runContinuity();
+        const after = t.calls.model.filter((kind) => kind === 'continuity').length;
+        return { result, calls: after - before };
+    });
+    assert.equal(transportResult.calls, 1, '连接/鉴权/服务错误不得立即重试活世界模型');
+    assert.equal(transportResult.result.status, 'stalled');
+    await transportPage.close();
+
+    const invalidContinuityPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await invalidContinuityPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await invalidContinuityPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const invalidContinuity = await invalidContinuityPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('invalid-continuity');
+        t.context.chatMetadata.mvu_auto_doctor = {
+            version: 5,
+            rev: 1,
+            chatId: 'chat-a',
+            continuity: {
+                version: 3,
+                chatId: 'chat-a',
+                turn: 1,
+                lastSource: {
+                    chatId: 'chat-a',
+                    messageId: 'opening',
+                    index: 0,
+                    swipeId: 0,
+                    hash: 'opening',
+                },
+                threads: [{
+                    id: 'WE-INVALID-01',
+                    title: '本地时钟测试',
+                    kind: 'parallel',
+                    eventType: 'progress',
+                    level: 2,
+                    origin: 'setting_independent',
+                    relation: 'independent',
+                    stage: 'advancing',
+                    stageProgress: 2,
+                    evolveResult: '',
+                    summary: '一项幕后事务正在推进。',
+                    nextBeat: '事务按日程继续。',
+                    trigger: '自身日程。',
+                    seedBasis: '世界书测试设定',
+                    knowledge: 'hidden',
+                    createdTurn: 1,
+                    lastAdvancedTurn: 1,
+                }],
+            },
+        };
+        const result = await window.MvuAutoDoctorAPI.runContinuity();
+        return {
+            result,
+            status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+            stats: window.MvuAutoDoctorAPI.getModelCallStats(),
+        };
+    });
+    assert.equal(invalidContinuity.result.status, 'applied');
+    assert.equal(invalidContinuity.result.degraded, true);
+    assert.match(invalidContinuity.status, /模型返回未通过账本校验/u);
+    assert.doesNotMatch(invalidContinuity.status, /模型暂不可用/u);
+    assert.equal(invalidContinuity.stats.failed, 0, '格式失败不得误报成连接失败');
+    await invalidContinuityPage.close();
 
     const deletionRacePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await deletionRacePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
