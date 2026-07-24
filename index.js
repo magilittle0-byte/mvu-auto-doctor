@@ -61,7 +61,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.7.1';
+const VERSION = '1.7.2';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -73,6 +73,7 @@ const DEFAULTS = Object.freeze({
     preferStoryOracle: true,
     preventDoubleWrite: true,
     notifyNoChange: false,
+    notificationLevel: 'all',
     delayMs: 1600,
     contextMessages: 8,
     maxTokens: 32768,
@@ -123,10 +124,16 @@ const hardContractPendingKeys = new Set();
 const hardContractCompletedKeys = new Set();
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
+let latestStatusKind = '';
 let latestHardContractStatus = '硬合同：等待检查';
+let latestHardContractKind = '';
 let latestHardContractAudit = null;
 let latestContinuityStatus = '世界连续性：等待事件';
+let latestContinuityKind = '';
 let latestForumStatus = '论坛：等待世界消息';
+let latestForumKind = '';
+// 最近操作时间线：只在内存中保留，供设置页与悬浮面板追溯状态历史。
+const operationLog = [];
 let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
@@ -162,6 +169,10 @@ function getSettings() {
     }
     if (!['conservative', 'living', 'expansive'].includes(settings.continuityAutonomy)) {
         settings.continuityAutonomy = 'living';
+        changed = true;
+    }
+    if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
+        settings.notificationLevel = 'all';
         changed = true;
     }
     if (previousContinuitySettingsVersion < 2) {
@@ -228,6 +239,10 @@ function saveSettings() {
 
 function toast(kind, message, title = 'MVU 自动医生') {
     try {
+        // 通知级别：all=全部弹出；warnings=只弹警告/失败；silent=全部只进操作时间线。
+        const level = getSettings().notificationLevel || 'all';
+        if (level === 'silent') return;
+        if (level === 'warnings' && (kind === 'info' || kind === 'success')) return;
         const fn = window.toastr?.[kind];
         if (typeof fn === 'function') fn(message, title, { timeOut: kind === 'warning' ? 9000 : 6000 });
     } catch {
@@ -235,8 +250,57 @@ function toast(kind, message, title = 'MVU 自动医生') {
     }
 }
 
+function recordOperation(category, text, kind = '') {
+    const value = String(text || '').trim();
+    if (!value) return;
+    const last = operationLog[0];
+    if (last && last.category === category && last.text === value) {
+        last.kind = kind;
+        last.at = Date.now();
+    } else {
+        operationLog.unshift({ category, text: value, kind, at: Date.now() });
+        if (operationLog.length > 30) operationLog.length = 30;
+    }
+    renderOperationLog();
+}
+
+function renderOperationLog() {
+    for (const list of [ui?.operationLogList, ui?.floatingOperationLogList]) {
+        if (!list) continue;
+        list.textContent = '';
+        if (!operationLog.length) {
+            const empty = document.createElement('li');
+            empty.className = 'mvuad-oplog-empty';
+            empty.textContent = '还没有操作记录。';
+            list.appendChild(empty);
+            continue;
+        }
+        for (const entry of operationLog) {
+            const item = document.createElement('li');
+            item.className = 'mvuad-oplog-item';
+            item.dataset.kind = entry.kind || '';
+            const time = document.createElement('span');
+            time.className = 'mvuad-oplog-time';
+            time.textContent = new Date(entry.at).toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+            });
+            const label = document.createElement('b');
+            label.className = 'mvuad-oplog-category';
+            label.textContent = entry.category;
+            const text = document.createElement('span');
+            text.className = 'mvuad-oplog-text';
+            text.textContent = entry.text;
+            item.append(time, label, text);
+            list.appendChild(item);
+        }
+    }
+}
+
 function setStatus(text, kind = '') {
     latestStatus = String(text || '');
+    latestStatusKind = kind;
+    recordOperation('变量', latestStatus, kind);
     if (ui?.status) {
         ui.status.textContent = latestStatus;
         ui.status.dataset.kind = kind;
@@ -250,6 +314,8 @@ function setStatus(text, kind = '') {
 
 function setHardContractStatus(text, kind = '') {
     latestHardContractStatus = String(text || '');
+    latestHardContractKind = kind;
+    recordOperation('硬合同', latestHardContractStatus, kind);
     if (ui?.hardContractStatus) {
         ui.hardContractStatus.textContent = latestHardContractStatus;
         ui.hardContractStatus.dataset.kind = kind;
@@ -264,6 +330,8 @@ function setHardContractStatus(text, kind = '') {
 
 function setContinuityStatus(text, kind = '') {
     latestContinuityStatus = String(text || '');
+    latestContinuityKind = kind;
+    recordOperation('世界', latestContinuityStatus, kind);
     if (ui?.continuityStatus) {
         ui.continuityStatus.textContent = latestContinuityStatus;
         ui.continuityStatus.dataset.kind = kind;
@@ -278,6 +346,8 @@ function setContinuityStatus(text, kind = '') {
 
 function setForumStatus(text, kind = '') {
     latestForumStatus = String(text || '');
+    latestForumKind = kind;
+    recordOperation('论坛', latestForumStatus, kind);
     if (ui?.forumStatus) {
         ui.forumStatus.textContent = latestForumStatus;
         ui.forumStatus.dataset.kind = kind;
@@ -1792,6 +1862,7 @@ async function buildAuditMessages({
         '<CorrectedOptions>仅在选项需要改动时输出完整的新options内部文本</CorrectedOptions>',
         '</HardContractCorrection>',
         '不要输出代码围栏、解释、前言或尾注。',
+        '【成稿纪律】内部推理一遍完成：先在内部确定全部结论，然后立即开始输出并一次写完所有区块。禁止反复重想整个审计、重复起草或多次改写JSON补丁；这会耗尽输出预算并导致截断。',
     ].filter((line, index, list) => line !== '' || list[index - 1] !== '').join('\n');
 
     const user = [
@@ -1988,6 +2059,10 @@ function prepareReplyCorrection({
     if (!correction) return { status: 'none' };
     const spliced = applyHardContractCorrection(replyText, correction);
     if (spliced.error) return { status: 'rejected', reason: spliced.error };
+    // 模型偶尔会原样返回正文却声称已修正；零改动的“修正版”没有价值，不应生成新 swipe。
+    if (spliced.text === replyText) {
+        return { status: 'rejected', reason: '模型返回的修正版与原文完全一致，没有实际改动' };
+    }
     const agency = auditCorrectionAgencyGuard(replyText, spliced.text, {
         skillNames: skillNamesFromState(statDataOf(correctedData)),
     });
@@ -5516,12 +5591,19 @@ function updateFloatingOrb(view = null) {
     }
     const count = Number(ledgerView?.activeCount) || 0;
     if (ui.floatingCount) ui.floatingCount.textContent = String(count);
-    const statusText = `${latestStatus} ${latestHardContractStatus} ${latestContinuityStatus} ${latestForumStatus}`;
-    const kind = /失败|异常|未产生有效/u.test(statusText)
+    // 使用各状态显式传入的 kind 聚合，而不是对状态文案做正则匹配；
+    // 文案调整不会再让球体光效失灵。
+    const kinds = [
+        latestStatusKind,
+        latestHardContractKind,
+        latestContinuityKind,
+        latestForumKind,
+    ];
+    const kind = kinds.includes('error')
         ? 'error'
-        : /正在/u.test(statusText)
+        : kinds.includes('busy')
             ? 'busy'
-            : /已记录|已审计|已修正|无需修正/u.test(statusText)
+            : kinds.includes('ok')
                 ? 'ok'
                 : '';
     orb.dataset.kind = kind;
@@ -5620,6 +5702,12 @@ function buildFloatingUi() {
                         <button class="menu_button mvuad-floating-protocol" type="button">检查硬规则</button>
                         <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
                     </div>
+                    <details class="mvuad-settings-fold mvuad-oplog-fold">
+                        <summary>最近操作时间线</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <ul class="mvuad-oplog-list mvuad-floating-oplog-list"></ul>
+                        </div>
+                    </details>
                 </section>
             </div>
         </div>`;
@@ -5651,8 +5739,10 @@ function buildFloatingUi() {
         floatingForumOpen: panel.querySelector('.mvuad-floating-forum'),
         floatingTabs: [...panel.querySelectorAll('.mvuad-floating-tabs [data-page]')],
         floatingPages: [...panel.querySelectorAll('.mvuad-floating-page[data-page]')],
+        floatingOperationLogList: panel.querySelector('.mvuad-floating-oplog-list'),
     });
     registerLedgerSurface(panel.querySelector('.mvuad-ledger'));
+    renderOperationLog();
     ui.floatingClose.addEventListener('click', hideFloatingPanel);
     for (const tab of ui.floatingTabs) {
         tab.addEventListener('click', () => switchFloatingPage(tab.dataset.page));
@@ -5778,6 +5868,14 @@ function buildSettingsPanel() {
                     <label class="mvuad-number">
                         <span>回复后等待（毫秒）</span>
                         <input class="text_pole mvuad-delay" type="number" min="300" max="10000" step="100">
+                    </label>
+                    <label class="mvuad-select">
+                        <span>通知级别</span>
+                        <select class="text_pole mvuad-notification-level">
+                            <option value="all">全部弹出提示</option>
+                            <option value="warnings">只弹警告与失败（推荐）</option>
+                            <option value="silent">静默（只记入时间线）</option>
+                        </select>
                     </label>
                     <div class="mvuad-actions">
                         <button class="menu_button mvuad-run" type="button">检查最新回复</button>
@@ -5924,6 +6022,12 @@ function buildSettingsPanel() {
         getSettings().variablePromptAddon = '';
         saveSettings();
         toast('info', '已清空附加提示，继续使用医生内置完整诊断提示。');
+    });
+    const notificationLevel = wrapper.querySelector('.mvuad-notification-level');
+    notificationLevel.value = getSettings().notificationLevel || 'all';
+    notificationLevel.addEventListener('change', () => {
+        getSettings().notificationLevel = notificationLevel.value;
+        saveSettings();
     });
     const delay = wrapper.querySelector('.mvuad-delay');
     delay.value = String(getSettings().delayMs);
