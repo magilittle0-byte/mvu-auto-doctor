@@ -66,14 +66,17 @@ function pushUniqueIssue(issues, issue) {
 
 function countTag(text, tag, closing = false) {
     const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp(`<${closing ? '\\/' : ''}${escaped}\\b[^>]*>`, 'giu');
+    const pattern = new RegExp(
+        `<${closing ? '\\/' : ''}${escaped}(?=[\\s>/])[^>]*>`,
+        'giu',
+    );
     return [...asText(text).matchAll(pattern)].length;
 }
 
 function extractBlocks(text, tag) {
     const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(
-        `<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}>`,
+        `<${escaped}(?=[\\s>/])[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`,
         'giu',
     );
     return [...asText(text).matchAll(pattern)].map((match) => match[1]);
@@ -82,7 +85,10 @@ function extractBlocks(text, tag) {
 function extractSingleTaggedValue(text, tag) {
     const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matches = [...asText(text).matchAll(
-        new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}>`, 'giu'),
+        new RegExp(
+            `<${escaped}(?=[\\s>/])[^>]*>([\\s\\S]*?)<\\/${escaped}\\s*>`,
+            'giu',
+        ),
     )];
     return matches.length === 1 ? matches[0][1].trim() : null;
 }
@@ -136,7 +142,7 @@ export function verifyHardContractEvidence(evidence, sources = []) {
 function replaceSingleTagInner(text, tag, replacement) {
     const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = new RegExp(
-        `(<${escaped}\\b[^>]*>)[\\s\\S]*?(<\\/${escaped}>)`,
+        `(<${escaped}(?=[\\s>/])[^>]*>)[\\s\\S]*?(<\\/${escaped}\\s*>)`,
         'giu',
     );
     const matches = [...asText(text).matchAll(pattern)];
@@ -147,15 +153,92 @@ function replaceSingleTagInner(text, tag, replacement) {
     );
 }
 
+const CONTENT_TAG_CANDIDATES = Object.freeze([
+    'content',
+    'gametxt',
+    'game_text',
+    'storytext',
+    'story_text',
+    'maintext',
+    'main_text',
+    'narrative',
+    '正文',
+    '故事正文',
+]);
+
+const NON_CONTENT_TAGS = new Set([
+    'updatevariable',
+    'jsonpatch',
+    'statusplaceholderimpl',
+    'hardcontractcorrection',
+    'reason',
+    'evidence',
+    'correctedcontent',
+    'correctedoptions',
+    'options',
+    'scene',
+    'style',
+    'script',
+    'html',
+    'head',
+    'body',
+    'details',
+    'summary',
+    'think',
+    'thinking',
+    'cot',
+]);
+
+export function detectContentTag(replyText) {
+    const text = asText(replyText);
+    for (const tag of CONTENT_TAG_CANDIDATES) {
+        const open = countTag(text, tag);
+        const close = countTag(text, tag, true);
+        const blocks = extractBlocks(text, tag);
+        if (open || close || blocks.length) {
+            return {
+                tag,
+                source: 'known',
+                open,
+                close,
+                blocks,
+            };
+        }
+    }
+
+    const semantic = /(?:game|story|narr|main|prose|text|正文|故事|叙事)/iu;
+    const candidates = [];
+    const pattern = /<([A-Za-z][A-Za-z0-9_:-]{0,40}|[\p{Script=Han}]{1,8})(?=[\s>])[^>]*>([\s\S]*?)<\/\1\s*>/giu;
+    for (const match of text.matchAll(pattern)) {
+        const tag = match[1];
+        if (NON_CONTENT_TAGS.has(tag.toLowerCase()) || !semantic.test(tag)) continue;
+        const hanCharacters = countHanCharacters(match[2]);
+        if (hanCharacters < 20) continue;
+        candidates.push({ tag, hanCharacters });
+    }
+    candidates.sort((left, right) => right.hanCharacters - left.hanCharacters);
+    const winner = candidates[0];
+    if (!winner) return null;
+    return {
+        tag: winner.tag,
+        source: 'semantic',
+        open: countTag(text, winner.tag),
+        close: countTag(text, winner.tag, true),
+        blocks: extractBlocks(text, winner.tag),
+    };
+}
+
 export function applyHardContractCorrection(replyText, correction) {
     if (!correction || correction.error) {
         return { error: correction?.error || '没有可应用的正文校正' };
     }
     let text = asText(replyText);
+    const contentDetection = detectContentTag(text);
+    const contentTag = contentDetection?.tag || 'content';
     if (correction.content != null) {
-        const replaced = replaceSingleTagInner(text, 'content', correction.content);
+        const replaced = replaceSingleTagInner(text, contentTag, correction.content);
         if (replaced == null) {
-            return { error: '原回复没有恰好一组可安全替换的 <content>' };
+            return { error: `原回复没有恰好一组可安全替换的 <${contentTag}>` };
         }
         text = replaced;
     }
@@ -169,7 +252,8 @@ export function applyHardContractCorrection(replyText, correction) {
             }
             text = replaced;
         } else if (optionsOpen === 0 && optionsClose === 0) {
-            const contentClose = /<\/content>/iu;
+            const escapedContentTag = contentTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const contentClose = new RegExp(`<\\/${escapedContentTag}\\s*>`, 'iu');
             if (contentClose.test(text)) {
                 text = text.replace(
                     contentClose,
@@ -350,9 +434,11 @@ export function auditReplyProtocol(replyText, {
     const text = asText(replyText);
     const sources = [...contractTexts.map(asText), text];
     const issues = [];
-    const contentOpen = countTag(text, 'content');
-    const contentClose = countTag(text, 'content', true);
-    const contentBlocks = extractBlocks(text, 'content');
+    const contentDetection = detectContentTag(text);
+    const contentTag = contentDetection?.tag || '';
+    const contentOpen = contentTag ? countTag(text, contentTag) : 0;
+    const contentClose = contentTag ? countTag(text, contentTag, true) : 0;
+    const contentBlocks = contentTag ? extractBlocks(text, contentTag) : [];
 
     if (contentOpen || contentClose) {
         if (contentOpen !== 1 || contentClose !== 1 || contentBlocks.length !== 1) {
@@ -360,7 +446,7 @@ export function auditReplyProtocol(replyText, {
                 code: 'content-tag-count',
                 severity: 'error',
                 scope: 'structure',
-                message: `<content> 必须恰好一组且正确闭合；当前开标签 ${contentOpen} 个、闭标签 ${contentClose} 个、完整区块 ${contentBlocks.length} 个。`,
+                message: `<${contentTag}> 必须恰好一组且正确闭合；当前开标签 ${contentOpen} 个、闭标签 ${contentClose} 个、完整区块 ${contentBlocks.length} 个。`,
             });
         }
     }
@@ -389,6 +475,14 @@ export function auditReplyProtocol(replyText, {
             severity: 'error',
             scope: 'length',
             message: `正文约 ${hanCharacters} 个汉字，低于硬下限 ${budget.min}。`,
+        });
+    }
+    if (budget && !contentTag) {
+        pushUniqueIssue(issues, {
+            code: 'content-tag-unrecognized',
+            severity: 'warning',
+            scope: 'structure',
+            message: '检测到正文长度合同，但没有识别到可靠的正文包裹标签；已明确跳过字数统计，避免把状态栏或变量区块误算为正文。',
         });
     }
     // The right side is the normal writing target, not a hard ceiling. Natural
@@ -458,6 +552,8 @@ export function auditReplyProtocol(replyText, {
     return {
         issues,
         metrics: {
+            contentTag,
+            contentTagSource: contentDetection?.source || '',
             contentBlocks: contentBlocks.length,
             hanCharacters,
             budget,
@@ -482,7 +578,8 @@ function walkObjects(root, visitor, path = '', depth = 0, seen = new Set()) {
 }
 
 function contentProse(replyText) {
-    const blocks = extractBlocks(replyText, 'content');
+    const detection = detectContentTag(replyText);
+    const blocks = detection?.blocks || [];
     return blocks.length === 1 ? stripTags(blocks[0]) : stripTags(replyText);
 }
 

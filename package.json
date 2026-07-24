@@ -1,12 +1,15 @@
 {
   "name": "mvu-auto-doctor",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "SillyTavern / TauriTavern 扩展：通用 MVU 审计修复、正文/装备硬合同检查、活世界事件连续性账本与内置世界论坛。",
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test tests/",
-    "test:browser": "node tests/browser-runtime.test.mjs"
+    "test": "node --test",
+    "test:browser": "node --test tests/browser-runtime.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
   },
   "repository": {
     "type": "git",

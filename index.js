@@ -61,10 +61,11 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.7.2';
+const VERSION = '1.8.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
+const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
 const DEFAULTS = Object.freeze({
@@ -132,8 +133,38 @@ let latestContinuityStatus = '世界连续性：等待事件';
 let latestContinuityKind = '';
 let latestForumStatus = '论坛：等待世界消息';
 let latestForumKind = '';
-// 最近操作时间线：只在内存中保留，供设置页与悬浮面板追溯状态历史。
+// 最近操作时间线：内存即时渲染，并按聊天防抖保存，刷新后仍可追溯。
 const operationLog = [];
+let pendingOperationLogSaveTimer = null;
+let modelCallStats = {
+    version: 1,
+    total: 0,
+    succeeded: 0,
+    failed: 0,
+    rateLimited: 0,
+    byTask: {
+        variable: 0,
+        continuity: 0,
+        forum: 0,
+        other: 0,
+    },
+    lastCallAt: 0,
+};
+const activeModelControllers = new Set();
+let activeTaskProgress = null;
+let taskProgressSerial = 0;
+let lastPromptSnapshot = null;
+let lastEnvironmentReport = null;
+let lastInjectionInspection = {
+    status: 'not-yet',
+    checkedAt: 0,
+    registered: false,
+    landed: false,
+    apiType: '',
+};
+let lastRegisteredContinuityContent = '';
+let lastFocusedBeforeFloatingPanel = null;
+let lastFocusedBeforeForumPanel = null;
 let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
@@ -250,6 +281,117 @@ function toast(kind, message, title = 'MVU 自动医生') {
     }
 }
 
+function normalizedOperationLog(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({
+            category: String(entry.category || '系统').slice(0, 16),
+            text: String(entry.text || '').slice(0, 1000),
+            kind: ['busy', 'ok', 'error'].includes(entry.kind) ? entry.kind : '',
+            at: Math.max(0, Number(entry.at) || 0),
+        }))
+        .filter((entry) => entry.text)
+        .slice(0, 30);
+}
+
+function normalizedModelCallStats(value) {
+    const source = isPlainObject(value) ? value : {};
+    const byTask = isPlainObject(source.byTask) ? source.byTask : {};
+    const nonNegative = (item) => Math.max(0, Math.floor(Number(item) || 0));
+    return {
+        version: 1,
+        total: nonNegative(source.total),
+        succeeded: nonNegative(source.succeeded),
+        failed: nonNegative(source.failed),
+        rateLimited: nonNegative(source.rateLimited),
+        byTask: {
+            variable: nonNegative(byTask.variable),
+            continuity: nonNegative(byTask.continuity),
+            forum: nonNegative(byTask.forum),
+            other: nonNegative(byTask.other),
+        },
+        lastCallAt: Math.max(0, Number(source.lastCallAt) || 0),
+    };
+}
+
+function modelCallTaskKey(task) {
+    const text = String(task || '');
+    if (/变量|MVU/iu.test(text)) return 'variable';
+    if (/世界|连续|事件/iu.test(text)) return 'continuity';
+    if (/论坛|帖子/iu.test(text)) return 'forum';
+    return 'other';
+}
+
+function renderModelCallStats() {
+    const stats = normalizedModelCallStats(modelCallStats);
+    const text = [
+        `本聊天模型调用 ${stats.total} 次`,
+        `变量 ${stats.byTask.variable}`,
+        `活世界 ${stats.byTask.continuity}`,
+        `论坛 ${stats.byTask.forum}`,
+        `失败 ${stats.failed}`,
+        stats.rateLimited ? `其中 429 ${stats.rateLimited}` : '',
+    ].filter(Boolean).join(' · ');
+    for (const root of [ui?.modelCallStats, ui?.floatingModelCallStats]) {
+        if (!root) continue;
+        root.textContent = text;
+        root.dataset.kind = stats.rateLimited || stats.failed ? 'warn' : '';
+    }
+}
+
+function recordModelCall(task, outcome = 'started', error = null) {
+    const stats = normalizedModelCallStats(modelCallStats);
+    if (outcome === 'started') {
+        stats.total += 1;
+        stats.byTask[modelCallTaskKey(task)] += 1;
+        stats.lastCallAt = Date.now();
+    } else if (outcome === 'succeeded') {
+        stats.succeeded += 1;
+    } else if (outcome === 'failed') {
+        stats.failed += 1;
+        if (isRateLimitError(error)) stats.rateLimited += 1;
+    }
+    modelCallStats = stats;
+    renderModelCallStats();
+    scheduleOperationLogSave();
+}
+
+function loadOperationLogFromChat(context = getContext()) {
+    clearTimeout(pendingOperationLogSaveTimer);
+    pendingOperationLogSaveTimer = null;
+    const namespace = readChatNamespace(context);
+    operationLog.splice(
+        0,
+        operationLog.length,
+        ...normalizedOperationLog(namespace.operationLog),
+    );
+    modelCallStats = normalizedModelCallStats(namespace.modelCallStats);
+    renderOperationLog();
+    renderModelCallStats();
+}
+
+function scheduleOperationLogSave() {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId) return;
+    clearTimeout(pendingOperationLogSaveTimer);
+    pendingOperationLogSaveTimer = setTimeout(async () => {
+        pendingOperationLogSaveTimer = null;
+        if (getContext()?.chatId !== chatId) return;
+        if (activeTaskProgress || activeModelControllers.size) {
+            scheduleOperationLogSave();
+            return;
+        }
+        const namespace = readChatNamespace();
+        namespace.operationLog = deepClone(operationLog.slice(0, 30));
+        namespace.modelCallStats = normalizedModelCallStats(modelCallStats);
+        await writeChatNamespace(namespace, chatId, {
+            fields: ['operationLog', 'modelCallStats'],
+        });
+    }, 700);
+}
+
 function recordOperation(category, text, kind = '') {
     const value = String(text || '').trim();
     if (!value) return;
@@ -262,6 +404,7 @@ function recordOperation(category, text, kind = '') {
         if (operationLog.length > 30) operationLog.length = 30;
     }
     renderOperationLog();
+    scheduleOperationLogSave();
 }
 
 function renderOperationLog() {
@@ -297,10 +440,10 @@ function renderOperationLog() {
     }
 }
 
-function setStatus(text, kind = '') {
+function setStatus(text, kind = '', { record = true } = {}) {
     latestStatus = String(text || '');
     latestStatusKind = kind;
-    recordOperation('变量', latestStatus, kind);
+    if (record) recordOperation('变量', latestStatus, kind);
     if (ui?.status) {
         ui.status.textContent = latestStatus;
         ui.status.dataset.kind = kind;
@@ -312,10 +455,10 @@ function setStatus(text, kind = '') {
     updateFloatingOrb();
 }
 
-function setHardContractStatus(text, kind = '') {
+function setHardContractStatus(text, kind = '', { record = true } = {}) {
     latestHardContractStatus = String(text || '');
     latestHardContractKind = kind;
-    recordOperation('硬合同', latestHardContractStatus, kind);
+    if (record) recordOperation('硬合同', latestHardContractStatus, kind);
     if (ui?.hardContractStatus) {
         ui.hardContractStatus.textContent = latestHardContractStatus;
         ui.hardContractStatus.dataset.kind = kind;
@@ -328,10 +471,10 @@ function setHardContractStatus(text, kind = '') {
     updateFloatingOrb();
 }
 
-function setContinuityStatus(text, kind = '') {
+function setContinuityStatus(text, kind = '', { record = true } = {}) {
     latestContinuityStatus = String(text || '');
     latestContinuityKind = kind;
-    recordOperation('世界', latestContinuityStatus, kind);
+    if (record) recordOperation('世界', latestContinuityStatus, kind);
     if (ui?.continuityStatus) {
         ui.continuityStatus.textContent = latestContinuityStatus;
         ui.continuityStatus.dataset.kind = kind;
@@ -344,10 +487,10 @@ function setContinuityStatus(text, kind = '') {
     renderContinuityLedger();
 }
 
-function setForumStatus(text, kind = '') {
+function setForumStatus(text, kind = '', { record = true } = {}) {
     latestForumStatus = String(text || '');
     latestForumKind = kind;
-    recordOperation('论坛', latestForumStatus, kind);
+    if (record) recordOperation('论坛', latestForumStatus, kind);
     if (ui?.forumStatus) {
         ui.forumStatus.textContent = latestForumStatus;
         ui.forumStatus.dataset.kind = kind;
@@ -361,12 +504,77 @@ function setForumStatus(text, kind = '') {
         ui.floatingForumStatus.textContent = latestForumStatus;
         ui.floatingForumStatus.dataset.kind = kind;
     }
+    ui?.forumFeed?.classList.toggle('mvuad-forum-loading', kind === 'busy');
     updateFloatingOrb();
     renderForum();
 }
 
+function syncTaskCancelButtons() {
+    const active = !!activeTaskProgress || activeModelControllers.size > 0;
+    for (const button of [ui?.cancelTask, ui?.floatingCancelTask]) {
+        if (!button) continue;
+        button.hidden = !active;
+        button.disabled = !active;
+        button.textContent = active ? '停止当前后台任务' : '当前没有后台任务';
+    }
+}
+
+function taskProgressText(progress = activeTaskProgress) {
+    if (!progress) return '';
+    const elapsed = Math.max(0, Math.floor((Date.now() - progress.startedAt) / 1000));
+    const attempt = progress.attempt
+        ? ` · 第 ${progress.attempt}/${progress.maxAttempts} 次`
+        : '';
+    return `${progress.label}：${progress.phase}${attempt} · ${elapsed}秒`;
+}
+
+function beginTaskProgress(label, maxAttempts = 1) {
+    const id = ++taskProgressSerial;
+    if (activeTaskProgress?.timer) clearInterval(activeTaskProgress.timer);
+    activeTaskProgress = {
+        id,
+        label: String(label || '后台任务'),
+        phase: '准备',
+        attempt: 0,
+        maxAttempts: Math.max(1, Number(maxAttempts) || 1),
+        startedAt: Date.now(),
+        timer: null,
+    };
+    activeTaskProgress.timer = setInterval(() => {
+        if (activeTaskProgress?.id !== id) return;
+        setStatus(taskProgressText(), 'busy', { record: false });
+    }, 1000);
+    syncTaskCancelButtons();
+    setStatus(taskProgressText(), 'busy');
+    return id;
+}
+
+function updateTaskProgress(id, phase, attempt = 0) {
+    if (!activeTaskProgress || activeTaskProgress.id !== id) return;
+    activeTaskProgress.phase = String(phase || activeTaskProgress.phase);
+    activeTaskProgress.attempt = Math.max(0, Number(attempt) || 0);
+    setStatus(taskProgressText(), 'busy');
+}
+
+function finishTaskProgress(id) {
+    if (!activeTaskProgress || activeTaskProgress.id !== id) return;
+    clearInterval(activeTaskProgress.timer);
+    activeTaskProgress = null;
+    syncTaskCancelButtons();
+    scheduleOperationLogSave();
+}
+
 function invalidateOperations(reason = '') {
     operationEpoch += 1;
+    for (const controller of activeModelControllers) {
+        try {
+            controller.abort(reason || '任务已失效');
+        } catch {
+            // Abort support is optional.
+        }
+    }
+    activeModelControllers.clear();
+    if (activeTaskProgress) finishTaskProgress(activeTaskProgress.id);
     clearTimeout(pendingOpeningSyncTimer);
     pendingOpeningSyncTimer = null;
     automaticPendingKeys.clear();
@@ -377,6 +585,382 @@ function invalidateOperations(reason = '') {
     continuityChain = Promise.resolve();
     forumChain = Promise.resolve();
     if (reason) console.info('[MVU Auto Doctor] 旧任务已失效：', reason);
+}
+
+function cancelCurrentOperations() {
+    if (!activeTaskProgress && !activeModelControllers.size) {
+        toast('info', '当前没有正在执行的模型任务。');
+        return false;
+    }
+    invalidateOperations('用户停止了当前后台任务');
+    setStatus('已停止当前后台任务；迟到结果不会写入聊天或变量', '');
+    toast('info', '已停止当前后台任务；若上游不支持取消，迟到结果也会被安全丢弃。');
+    return true;
+}
+
+function promptSnapshotText(snapshot = lastPromptSnapshot) {
+    if (!snapshot?.messages?.length) return '';
+    return snapshot.messages
+        .map((message, index) => (
+            `===== ${index + 1}. ${String(message.role || 'unknown').toUpperCase()} =====\n${message.content}`
+        ))
+        .join('\n\n');
+}
+
+function renderPromptSnapshot() {
+    if (ui?.promptMeta) {
+        ui.promptMeta.textContent = lastPromptSnapshot
+            ? `${lastPromptSnapshot.task} · ${lastPromptSnapshot.totalChars.toLocaleString('zh-CN')} 字符 · 输出上限 ${lastPromptSnapshot.maxTokens}`
+            : '本次启动后还没有模型调用。';
+    }
+    if (ui?.promptPreview) {
+        const full = promptSnapshotText();
+        const limit = 12000;
+        ui.promptPreview.textContent = full
+            ? full.length > limit
+                ? `${full.slice(0, limit)}\n\n……界面只预览前 ${limit.toLocaleString('zh-CN')} 字符；复制或下载按钮会导出完整原文。`
+                : full
+            : '暂无提示词。';
+    }
+    for (const button of [ui?.copyPrompt, ui?.downloadPrompt]) {
+        if (button) button.disabled = !lastPromptSnapshot;
+    }
+}
+
+async function copyText(text) {
+    const value = String(text || '');
+    if (!value) return false;
+    try {
+        if (typeof navigator.clipboard?.writeText !== 'function') {
+            throw new Error('Clipboard API unavailable');
+        }
+        await navigator.clipboard.writeText(value);
+        return true;
+    } catch {
+        try {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            const copied = document.execCommand?.('copy') === true;
+            textarea.remove();
+            return copied;
+        } catch {
+            return false;
+        }
+    }
+}
+
+function downloadText(filename, text, type = 'text/plain;charset=utf-8') {
+    try {
+        const blob = new Blob([String(text || '')], { type });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return true;
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 导出文件失败：', error);
+        return false;
+    }
+}
+
+function injectionInspectionText(snapshot = lastInjectionInspection) {
+    const labels = {
+        'not-yet': '尚未生成，暂无注入落地记录',
+        success: '上轮活世界注入已进入最终提示词',
+        missing: '上轮已经注册活世界注入，但没有进入最终提示词',
+        skipped: '上轮没有注册活世界内容，按设计跳过',
+    };
+    return labels[snapshot?.status] || labels['not-yet'];
+}
+
+function promptPayloadContainsSentinel(eventData) {
+    if (!eventData || eventData.dryRun) return null;
+    if (typeof eventData.prompt === 'string') {
+        return {
+            apiType: 'text',
+            landed: eventData.prompt.includes(CONTINUITY_INJECTION_SENTINEL),
+        };
+    }
+    if (Array.isArray(eventData.chat)) {
+        return {
+            apiType: 'chat',
+            landed: eventData.chat.some((message) => (
+                String(message?.content || '').includes(CONTINUITY_INJECTION_SENTINEL)
+            )),
+        };
+    }
+    return null;
+}
+
+function inspectContinuityInjectionEvent(eventData) {
+    try {
+        const payload = promptPayloadContainsSentinel(eventData);
+        if (!payload) return;
+        const registered = !!lastRegisteredContinuityContent;
+        lastInjectionInspection = {
+            status: registered ? (payload.landed ? 'success' : 'missing') : 'skipped',
+            checkedAt: Date.now(),
+            registered,
+            landed: payload.landed,
+            apiType: payload.apiType,
+        };
+        renderEnvironmentReport();
+    } catch {
+        // 注入自检只读且绝不能影响生成。
+    }
+}
+
+function environmentCheck(kind, label, detail) {
+    return {
+        kind: ['ok', 'warn', 'error', 'info'].includes(kind) ? kind : 'info',
+        label: String(label || ''),
+        detail: String(detail || ''),
+    };
+}
+
+async function inspectEnvironment({ waitForMvu = false } = {}) {
+    const context = getContext();
+    let Mvu = window.Mvu || null;
+    if (!Mvu && waitForMvu) {
+        try {
+            Mvu = await getMvu();
+        } catch {
+            Mvu = null;
+        }
+    }
+    const checks = [];
+    checks.push(context
+        ? environmentCheck('ok', '酒馆上下文', '已连接当前聊天')
+        : environmentCheck('error', '酒馆上下文', 'SillyTavern/TauriTavern context 不可用'));
+
+    const completeMvu = !!(
+        Mvu
+        && typeof Mvu.getMvuData === 'function'
+        && typeof Mvu.parseMessage === 'function'
+        && typeof Mvu.replaceMvuData === 'function'
+    );
+    checks.push(completeMvu
+        ? environmentCheck('ok', 'MVU API', '读取、解析、精确写回接口完整')
+        : Mvu
+            ? environmentCheck('error', 'MVU API', '检测到 MVU，但缺少医生需要的完整接口')
+            : environmentCheck('error', 'MVU API', '尚未检测到 MVU；请确认 MVU 已安装并启用'));
+
+    if (typeof Mvu?.isDuringExtraAnalysis === 'function') {
+        let busy = null;
+        try {
+            busy = !!Mvu.isDuringExtraAnalysis();
+        } catch {
+            busy = null;
+        }
+        checks.push(busy === true
+            ? environmentCheck('warn', 'MVU 额外解析', '当前正在运行；医生会等待它完成，避免同时改变量')
+            : busy === false
+                ? environmentCheck(
+                    'info',
+                    'MVU 额外解析',
+                    '当前未运行。MVU 未向扩展公开开关状态，请仍在 MVU 设置里保持“额外 AI 解析变量”关闭',
+                )
+                : environmentCheck('warn', 'MVU 额外解析', '监测接口调用失败，无法确认当前是否繁忙'));
+    } else {
+        checks.push(environmentCheck(
+            'info',
+            'MVU 额外解析',
+            '当前 MVU 未提供运行状态接口；请手动确认“额外 AI 解析变量”关闭',
+        ));
+    }
+
+    const oracle = window.StoryOracleAPI;
+    if (!oracle) {
+        checks.push(environmentCheck('info', '故事神谕', '未安装或尚未就绪；医生会使用酒馆当前连接'));
+    } else if (!oracle?.isCompatible?.(1)) {
+        checks.push(environmentCheck('warn', '故事神谕', 'Hook API 版本不兼容，无法安全复用连接或检查 AUTO'));
+    } else {
+        let oracleSettings = null;
+        try {
+            oracleSettings = oracle.context?.getSettings?.();
+        } catch {
+            oracleSettings = null;
+        }
+        checks.push(!oracleSettings
+            ? environmentCheck('warn', '故事神谕 AUTO', '无法只读回查设置；自动写入时医生会保持阻断')
+            : oracleSettings.autoDiagnoseEnabled === true
+                ? environmentCheck('error', '故事神谕 AUTO', '仍处于开启状态，会造成两个程序竞争写变量')
+                : environmentCheck('ok', '故事神谕 AUTO', '已关闭；神谕手动诊断不受影响'));
+    }
+
+    const injectionCapable = !!(
+        typeof context?.setExtensionPrompt === 'function'
+        || typeof context?.registerInjection === 'function'
+        || Array.isArray(context?.extensionPrompts)
+    );
+    checks.push(injectionCapable
+        ? environmentCheck('ok', '活世界注入接口', '宿主提供可用的注入通道')
+        : environmentCheck('warn', '活世界注入接口', '宿主未提供已知注入通道，事件只能记账不能进入后续正文'));
+
+    const injectionKind = lastInjectionInspection.status === 'missing'
+        ? 'error'
+        : lastInjectionInspection.status === 'success'
+            ? 'ok'
+            : 'info';
+    checks.push(environmentCheck(
+        injectionKind,
+        '上轮注入落地',
+        injectionInspectionText(),
+    ));
+
+    checks.push(
+        typeof context?.generateRaw === 'function'
+        || (oracle?.isCompatible?.(1) && typeof oracle.run === 'function')
+            ? environmentCheck('ok', '模型连接', '至少一个变量诊断通道可用')
+            : environmentCheck('error', '模型连接', '故事神谕 Hook 与酒馆 generateRaw 均不可用'),
+    );
+
+    lastEnvironmentReport = {
+        checkedAt: Date.now(),
+        checks,
+        status: checks.some((check) => check.kind === 'error')
+            ? 'error'
+            : checks.some((check) => check.kind === 'warn')
+                ? 'warn'
+                : 'ok',
+    };
+    renderEnvironmentReport(lastEnvironmentReport);
+    return deepClone(lastEnvironmentReport);
+}
+
+function renderEnvironmentReport(report = lastEnvironmentReport) {
+    const root = ui?.environmentCheckList;
+    if (!root) return;
+    root.replaceChildren();
+    const value = report || {
+        status: 'info',
+        checks: [environmentCheck('info', '环境自检', '点击“重新检测”读取当前状态')],
+    };
+    for (const check of value.checks) {
+        const row = document.createElement('li');
+        row.className = 'mvuad-health-item';
+        row.dataset.kind = check.kind;
+        const icon = document.createElement('span');
+        icon.className = 'mvuad-health-icon';
+        icon.textContent = check.kind === 'ok'
+            ? '✓'
+            : check.kind === 'error'
+                ? '×'
+                : check.kind === 'warn'
+                    ? '!'
+                    : 'i';
+        const text = document.createElement('span');
+        const label = document.createElement('b');
+        label.textContent = check.label;
+        const detail = document.createElement('small');
+        detail.textContent = check.detail;
+        text.append(label, detail);
+        row.append(icon, text);
+        root.appendChild(row);
+    }
+    if (ui.environmentCheckSummary) {
+        ui.environmentCheckSummary.textContent = value.status === 'ok'
+            ? '环境自检：正常'
+            : value.status === 'error'
+                ? '环境自检：有必须处理的问题'
+                : '环境自检：有需要确认的项目';
+        ui.environmentCheckSummary.dataset.kind = value.status;
+    }
+}
+
+function diagnosticPayload() {
+    const context = getContext();
+    const namespace = readChatNamespace(context);
+    const continuity = continuityLedgerView(namespace.continuity, {
+        chatId: context?.chatId || '',
+        maxThreads: getSettings().continuityMaxThreads,
+    });
+    const forum = forumView(namespace.forum, {
+        chatId: context?.chatId || '',
+        maxPosts: getSettings().forumMaxPosts,
+        maxComments: getSettings().forumMaxComments,
+    });
+    return {
+        exportedAt: new Date().toISOString(),
+        plugin: { id: PLUGIN_ID, version: VERSION },
+        environment: {
+            userAgent: navigator.userAgent,
+            report: lastEnvironmentReport,
+            injection: lastInjectionInspection,
+            capabilities: {
+                updateChatMetadata: typeof context?.updateChatMetadata === 'function',
+                saveMetadata: typeof context?.saveMetadata === 'function',
+                saveChat: typeof context?.saveChat === 'function',
+                generateRaw: typeof context?.generateRaw === 'function',
+                storyOracle: !!window.StoryOracleAPI,
+                mvu: !!window.Mvu,
+            },
+        },
+        currentChat: {
+            present: !!context?.chatId,
+            messageCount: Array.isArray(context?.chat) ? context.chat.length : 0,
+            modelCalls: normalizedModelCallStats(modelCallStats),
+            repairJournalCount: Array.isArray(namespace.repairJournal)
+                ? namespace.repairJournal.length
+                : 0,
+            continuity: {
+                activeCount: continuity.activeCount,
+                resolvedCount: continuity.resolvedCount,
+            },
+            forum: {
+                postCount: forum.posts.length,
+                totalComments: forum.posts.reduce((sum, post) => sum + post.comments.length, 0),
+            },
+        },
+        latestStatuses: {
+            variable: { text: latestStatus, kind: latestStatusKind },
+            hardContract: { text: latestHardContractStatus, kind: latestHardContractKind },
+            continuity: { text: latestContinuityStatus, kind: latestContinuityKind },
+            forum: { text: latestForumStatus, kind: latestForumKind },
+        },
+        latestHardContract: latestHardContractAudit
+            ? {
+                checkedAt: latestHardContractAudit.checkedAt,
+                targetIndex: latestHardContractAudit.targetIndex,
+                issueCount: latestHardContractAudit.issues?.length || 0,
+                issues: (latestHardContractAudit.issues || []).map((issue) => ({
+                    code: issue.code,
+                    severity: issue.severity,
+                    path: issue.path || '',
+                    message: issue.message,
+                })),
+            }
+            : null,
+        lastPrompt: lastPromptSnapshot
+            ? {
+                task: lastPromptSnapshot.task,
+                capturedAt: lastPromptSnapshot.capturedAt,
+                maxTokens: lastPromptSnapshot.maxTokens,
+                totalChars: lastPromptSnapshot.totalChars,
+                segments: lastPromptSnapshot.messages.map((message) => ({
+                    role: message.role,
+                    chars: message.content.length,
+                })),
+                note: '为保护私人剧情，诊断包不包含提示词、正文、世界书或变量原文。',
+            }
+            : null,
+        operationLog: deepClone(operationLog),
+    };
+}
+
+function exportDiagnosticPackage() {
+    const filename = `mvu-auto-doctor-diagnostic-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    const ok = downloadText(filename, safeJson(diagnosticPayload()), 'application/json;charset=utf-8');
+    toast(ok ? 'success' : 'warning', ok ? '已导出脱敏诊断包。' : '诊断包导出失败。');
+    return ok;
 }
 
 function operationToken(captured) {
@@ -443,6 +1027,8 @@ function readChatNamespace(context = getContext()) {
             rev: 0,
             chatId: context?.chatId || '',
             repairJournal: [],
+            operationLog: [],
+            modelCallStats: normalizedModelCallStats(null),
             openingResourceSync: {
                 version: 1,
                 synced: {},
@@ -1959,21 +2545,45 @@ async function buildAuditMessages({
     };
 }
 
-async function withTimeout(promise, milliseconds, label) {
+async function withTimeout(promise, milliseconds, label, {
+    signal = null,
+    onTimeout = null,
+} = {}) {
     const timeout = Math.max(10000, Number(milliseconds) || 120000);
     let timer;
+    let abortHandler;
     try {
-        return await Promise.race([
+        const racers = [
             Promise.resolve(promise),
             new Promise((_, reject) => {
                 timer = setTimeout(
-                    () => reject(new Error(`${label || '模型请求'}超时（${timeout}ms）`)),
+                    () => {
+                        try {
+                            onTimeout?.();
+                        } catch {
+                            // Provider cancellation is optional.
+                        }
+                        reject(new Error(`${label || '模型请求'}超时（${timeout}ms）`));
+                    },
                     timeout,
                 );
             }),
-        ]);
+        ];
+        if (signal) {
+            racers.push(new Promise((_, reject) => {
+                abortHandler = () => {
+                    const error = new Error(`${label || '模型请求'}已取消`);
+                    error.name = 'AbortError';
+                    reject(error);
+                };
+                if (signal.aborted) abortHandler();
+                else signal.addEventListener('abort', abortHandler, { once: true });
+            }));
+        }
+        return await Promise.race(racers);
     } finally {
         clearTimeout(timer);
+        if (signal && abortHandler) signal.removeEventListener('abort', abortHandler);
     }
 }
 
@@ -1994,41 +2604,89 @@ async function callModel(messages, options = {}) {
         Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
     );
     const timeoutMs = Math.max(10000, Number(settings.modelTimeoutMs) || 120000);
+    const controller = new AbortController();
+    activeModelControllers.add(controller);
+    syncTaskCancelButtons();
+    const task = String(options.task || '模型任务');
+    const messageCopies = (Array.isArray(messages) ? messages : []).map((message) => ({
+        role: String(message?.role || ''),
+        content: String(message?.content || ''),
+    }));
+    lastPromptSnapshot = {
+        task,
+        capturedAt: Date.now(),
+        maxTokens,
+        totalChars: messageCopies.reduce((sum, message) => sum + message.content.length, 0),
+        messages: messageCopies,
+    };
+    renderPromptSnapshot();
+    recordModelCall(task, 'started');
 
-    if (settings.preferStoryOracle) {
-        const api = window.StoryOracleAPI;
-        if (api?.isCompatible?.(1) && typeof api.run === 'function') {
-            try {
-                const output = await withTimeout(
-                    api.run(messages, { stream: false, maxTokens }),
-                    timeoutMs,
-                    '故事神谕连接',
-                );
-                return String(output || '');
-            } catch (error) {
-                // Do not silently spend a second call through the Tavern
-                // connection after the preferred provider already failed.
-                // Parser/validation failures are retried explicitly by
-                // runTarget; transport/auth/rate failures are surfaced.
-                throw error;
+    try {
+        if (settings.preferStoryOracle) {
+            const api = window.StoryOracleAPI;
+            if (api?.isCompatible?.(1) && typeof api.run === 'function') {
+                try {
+                    const runOptions = {
+                        stream: false,
+                        maxTokens,
+                    };
+                    if (api.capabilities?.abortSignal === true) {
+                        runOptions.signal = controller.signal;
+                    }
+                    const output = await withTimeout(
+                        api.run(messages, runOptions),
+                        timeoutMs,
+                        '故事神谕连接',
+                        {
+                            signal: controller.signal,
+                            onTimeout: () => controller.abort('模型请求超时'),
+                        },
+                    );
+                    recordModelCall(task, 'succeeded');
+                    return String(output || '');
+                } catch (error) {
+                    // Do not silently spend a second call through the Tavern
+                    // connection after the preferred provider already failed.
+                    // Parser/validation failures are retried explicitly by
+                    // runTarget; transport/auth/rate failures are surfaced.
+                    throw error;
+                }
             }
         }
-    }
 
-    const context = getContext();
-    if (typeof context?.generateRaw !== 'function') {
-        throw new Error('故事神谕连接和酒馆当前连接都不可用');
+        const context = getContext();
+        if (typeof context?.generateRaw !== 'function') {
+            throw new Error('故事神谕连接和酒馆当前连接都不可用');
+        }
+        const rawOptions = {
+                systemPrompt: messages[0].content,
+                prompt: messages[1].content,
+                responseLength: maxTokens,
+                trimNames: false,
+            };
+        if (context.generateRawSupportsAbortSignal === true) {
+            rawOptions.signal = controller.signal;
+            rawOptions.abortSignal = controller.signal;
+        }
+        const output = await withTimeout(
+            context.generateRaw(rawOptions),
+            timeoutMs,
+            '酒馆当前连接',
+            {
+                signal: controller.signal,
+                onTimeout: () => controller.abort('模型请求超时'),
+            },
+        );
+        recordModelCall(task, 'succeeded');
+        return output;
+    } catch (error) {
+        recordModelCall(task, 'failed', error);
+        throw error;
+    } finally {
+        activeModelControllers.delete(controller);
+        syncTaskCancelButtons();
     }
-    return await withTimeout(
-        context.generateRaw({
-            systemPrompt: messages[0].content,
-            prompt: messages[1].content,
-            responseLength: maxTokens,
-            trimNames: false,
-        }),
-        timeoutMs,
-        '酒馆当前连接',
-    );
 }
 
 function skillNamesFromState(statData) {
@@ -2721,6 +3379,13 @@ async function runTarget(targetId, {
     const captured = queuedTarget || captureTarget(initialContext, initialResolved);
     if (!captured) return { status: 'stale', reason: '目标回复不可用' };
     const token = operationToken(captured);
+    const maxAttempts = Math.min(
+        3,
+        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
+    );
+    const progressId = beginTaskProgress('变量审计', maxAttempts);
+    try {
+    updateTaskProgress(progressId, '读取 MVU 与目标楼层');
 
     const Mvu = await getMvu();
     let targetCheck = targetIsCurrent(captured, token);
@@ -2738,6 +3403,7 @@ async function runTarget(targetId, {
     }
 
     if (!manual && !skipDelay) {
+        updateTaskProgress(progressId, '等待回复与 MVU 稳定');
         await sleep(Math.max(300, Number(settings.delayMs) || 1600));
     }
     targetCheck = targetIsCurrent(captured, token);
@@ -2791,22 +3457,19 @@ async function runTarget(targetId, {
     const previousData = await previousMvuData(Mvu, context, resolved);
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-    setStatus('正在核对最新回复与变量…', 'busy');
+    updateTaskProgress(progressId, '构建完整审计上下文');
 
     let retry = null;
     let candidate = null;
     let originalBlock = '';
     let finalBuilt = null;
-    const maxAttempts = Math.min(
-        3,
-        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
-    );
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) {
             return { status: 'stale', reason: targetCheck.reason };
         }
 
+        updateTaskProgress(progressId, '构建完整审计上下文', attempt + 1);
         const built = await buildAuditMessages({
             context,
             character,
@@ -2822,7 +3485,11 @@ async function runTarget(targetId, {
 
         let output;
         try {
-            output = await callModel(built.messages, { maxTokens: built.maxTokens });
+            updateTaskProgress(progressId, '模型分析正文与变量', attempt + 1);
+            output = await callModel(built.messages, {
+                maxTokens: built.maxTokens,
+                task: '变量诊断',
+            });
         } catch (error) {
             candidate = {
                 status: 'failed',
@@ -2834,6 +3501,7 @@ async function runTarget(targetId, {
         }
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+        updateTaskProgress(progressId, '本地解析与安全校验', attempt + 1);
         if (output !== undefined) candidate = await parseCandidate(Mvu, currentData, output);
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
@@ -2922,6 +3590,7 @@ async function runTarget(targetId, {
 
     let result;
     try {
+        updateTaskProgress(progressId, '写前恢复记录、提交与回读', candidate.attempts);
         result = await commitCandidate(Mvu, candidate, captured, token);
         result = {
             ...result,
@@ -3006,6 +3675,9 @@ async function runTarget(targetId, {
         toast('warning', `未改动变量。\n${result.reason}`);
     }
     return result;
+    } finally {
+        finishTaskProgress(progressId);
+    }
 }
 
 function automaticTargetKey(targetId) {
@@ -3277,46 +3949,53 @@ async function activePresetHasContinuityPrompt() {
 
 function registerContinuityInjection(content) {
     const context = getContext();
+    const registeredContent = String(content || '').trim()
+        ? `${CONTINUITY_INJECTION_SENTINEL}\n${String(content).trim()}`
+        : '';
     try {
         if (typeof context?.setExtensionPrompt === 'function') {
             context.setExtensionPrompt(
                 CONTINUITY_INJECTION_NAME,
-                content || '',
+                registeredContent,
                 IN_CHAT_POSITION,
                 IN_CHAT_DEPTH,
                 false,
                 'system',
             );
+            lastRegisteredContinuityContent = registeredContent;
             return true;
         }
         if (typeof context?.registerInjection === 'function') {
             context.unregisterInjection?.(CONTINUITY_INJECTION_NAME);
-            if (content) {
-                context.registerInjection(CONTINUITY_INJECTION_NAME, content, {
+            if (registeredContent) {
+                context.registerInjection(CONTINUITY_INJECTION_NAME, registeredContent, {
                     position: IN_CHAT_POSITION,
                     depth: IN_CHAT_DEPTH,
                     role: 'system',
                 });
             }
+            lastRegisteredContinuityContent = registeredContent;
             return true;
         }
         if (Array.isArray(context?.extensionPrompts)) {
             context.extensionPrompts = context.extensionPrompts
                 .filter((item) => item?.name !== CONTINUITY_INJECTION_NAME);
-            if (content) {
+            if (registeredContent) {
                 context.extensionPrompts.push({
                     name: CONTINUITY_INJECTION_NAME,
-                    content,
+                    content: registeredContent,
                     role: 'system',
                     position: IN_CHAT_POSITION,
                     depth: IN_CHAT_DEPTH,
                 });
             }
+            lastRegisteredContinuityContent = registeredContent;
             return true;
         }
     } catch (error) {
         console.warn('[MVU Auto Doctor] 支线账本注入失败：', error);
     }
+    lastRegisteredContinuityContent = '';
     return false;
 }
 
@@ -3744,7 +4423,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         let output = '';
         let validOutput = false;
         try {
-            output = await callModel(messages, { maxTokens: settings.continuityMaxTokens });
+            output = await callModel(messages, {
+                maxTokens: settings.continuityMaxTokens,
+                task: '活世界整理',
+            });
         } catch (error) {
             modelFailure = String(error.message || error);
             retryReason = `世界模型调用失败：${modelFailure}`;
@@ -4014,10 +4696,42 @@ function enqueueContinuity(targetId, {
     return continuityChain;
 }
 
+async function confirmDangerousAction(message) {
+    const text = String(message || '');
+    try {
+        const direct = getContext()?.callGenericPopup || window.callGenericPopup;
+        if (typeof direct === 'function') {
+            const type = window.POPUP_TYPE?.CONFIRM ?? 2;
+            return !!(await direct(text, type, '', {
+                okButton: '确认清空',
+                cancelButton: '取消',
+            }));
+        }
+        const popup = await import('/scripts/popup.js');
+        if (typeof popup.callGenericPopup === 'function') {
+            return !!(await popup.callGenericPopup(text, popup.POPUP_TYPE.CONFIRM, '', {
+                okButton: '确认清空',
+                cancelButton: '取消',
+            }));
+        }
+    } catch {
+        // Older hosts may not expose the themed popup module.
+    }
+    return window.confirm?.(text) === true;
+}
+
 async function clearContinuityState() {
     const context = getContext();
     if (!context?.chatId) return false;
-    if (!window.confirm?.('只清空当前聊天的活世界与事件账本？不会删除正文、MVU或数据库内容。')) {
+    const settings = getSettings();
+    const view = continuityLedgerView(readChatNamespace(context).continuity, {
+        chatId: context.chatId,
+        maxThreads: settings.continuityMaxThreads,
+    });
+    if (!await confirmDangerousAction(
+        `当前账本有 ${view.activeCount} 条未结事件、${view.resolvedCount} 条已收束事件。`
+        + '清空后无法撤销；不会删除正文、MVU、数据库或角色卡。确定只清空当前聊天的活世界账本吗？',
+    )) {
         return false;
     }
     const namespace = readChatNamespace(context);
@@ -4270,7 +4984,10 @@ async function runForumTarget(captured, {
         let output = '';
         let rateLimited = false;
         try {
-            output = await callModel(messages, { maxTokens: settings.forumMaxTokens });
+            output = await callModel(messages, {
+                maxTokens: settings.forumMaxTokens,
+                task: '内置论坛刷新',
+            });
         } catch (error) {
             retryReason = `模型调用失败：${error.message || error}`;
             rateLimited = isRateLimitError(error);
@@ -4402,7 +5119,17 @@ function enqueueForum(targetId, {
 async function clearForumState() {
     const context = getContext();
     if (!context?.chatId) return false;
-    if (!window.confirm?.('只清空当前聊天的内置论坛？不会删除正文、MVU、数据库、Zsd论坛或世界/事件账本。')) {
+    const settings = getSettings();
+    const view = forumView(readChatNamespace(context).forum, {
+        chatId: context.chatId,
+        maxPosts: settings.forumMaxPosts,
+        maxComments: settings.forumMaxComments,
+    });
+    const comments = view.posts.reduce((sum, post) => sum + post.comments.length, 0);
+    if (!await confirmDangerousAction(
+        `当前内置论坛有 ${view.posts.length} 个帖子、${comments} 条回复。`
+        + '清空后无法撤销；不会删除正文、MVU、数据库、Zsd论坛或世界账本。确定继续吗？',
+    )) {
         return false;
     }
     const namespace = readChatNamespace(context);
@@ -4455,6 +5182,25 @@ function appendLedgerField(host, label, value, emptyText = '未登记') {
     host.appendChild(row);
 }
 
+function appendLedgerGroup(host, title, fields, { open = false } = {}) {
+    const visible = fields.filter((field) => (
+        field.showEmpty || String(field.value || '').trim()
+    ));
+    if (!visible.length) return;
+    const group = document.createElement('details');
+    group.className = 'mvuad-thread-group';
+    group.open = open;
+    const summary = document.createElement('summary');
+    summary.textContent = `${title}（${visible.length}）`;
+    const body = document.createElement('div');
+    body.className = 'mvuad-thread-group-body';
+    for (const field of visible) {
+        appendLedgerField(body, field.label, field.value, field.emptyText);
+    }
+    group.append(summary, body);
+    host.appendChild(group);
+}
+
 function buildLedgerThreadCard(thread, {
     open = false,
     concealSpoiler = false,
@@ -4482,10 +5228,6 @@ function buildLedgerThreadCard(thread, {
     badges.className = 'mvuad-thread-badges';
     for (const [className, text] of [
         [`stage-${thread.stage}`, thread.stageLabel],
-        [`event-${thread.eventType}`, `${thread.eventType === 'progress' ? '事务' : '冲突'} Lv.${thread.level}`],
-        ['kind', thread.kindLabel],
-        [`origin-${thread.origin}`, thread.originLabel],
-        [`relation-${thread.relation}`, thread.relationLabel],
         [`urgency-${thread.urgency}`, `紧迫度：${thread.urgencyLabel}`],
     ]) {
         const badge = document.createElement('span');
@@ -4501,6 +5243,10 @@ function buildLedgerThreadCard(thread, {
     if (!['resolved', 'dormant'].includes(thread.stage)) {
         const progress = document.createElement('div');
         progress.className = 'mvuad-thread-progress';
+        progress.setAttribute('role', 'progressbar');
+        progress.setAttribute('aria-valuemin', '0');
+        progress.setAttribute('aria-valuemax', '9');
+        progress.setAttribute('aria-valuenow', String(thread.stageProgress));
         const bar = document.createElement('span');
         bar.style.setProperty('--mvuad-thread-progress', `${Math.round(thread.stageProgress / 9 * 100)}%`);
         const text = document.createElement('b');
@@ -4513,36 +5259,45 @@ function buildLedgerThreadCard(thread, {
         progress.append(bar, text);
         body.appendChild(progress);
     }
-    if (concealSpoiler) appendLedgerField(body, '真实事件', thread.title || thread.id);
-    appendLedgerField(
-        body,
-        '事件时钟',
-        `${thread.eventType === 'progress' ? '事务型' : '冲突型'} Lv.${thread.level} · ${thread.stageLabel} ${thread.stageProgress}/9`,
-    );
-    appendLedgerField(body, '事件来源', thread.originLabel);
-    appendLedgerField(body, '与主线关系', thread.relationLabel);
-    appendLedgerField(body, '设定依据', thread.seedBasis, '未登记；建议重新整理核对');
-    appendLedgerField(body, '因果父事件', thread.causedBy?.join('、'), '无；独立起源');
-    appendLedgerField(body, '当前进展', thread.summary, '暂无新增事实');
-    appendLedgerField(body, '最近幕后变化', thread.offscreenBeat, '本轮没有推进');
-    if (thread.stage === 'resolved') {
-        appendLedgerField(body, '结束方式', thread.resolution, '已结束但未登记结算说明');
-    }
-    appendLedgerField(body, '持续影响', thread.effects?.join('；'), '尚未形成长期影响');
-    appendLedgerField(body, '传播中的流言', thread.rumors?.join('；'), '当前没有传播中的流言');
-    appendLedgerField(body, '下一自然接口', thread.nextBeat, '保持现状，不强推');
-    appendLedgerField(body, '事件推进条件', thread.trigger, '等待自身条件成熟');
-    appendLedgerField(body, '与主线汇流条件', thread.intersection, '无；允许独立发展或在幕后结束');
-    appendLedgerField(body, '涉及人物/势力', thread.actors?.join('、'));
-    appendLedgerField(body, '涉及地点', thread.locations?.join('、'));
-    appendLedgerField(body, '知情范围', thread.knowledgeLabel);
-    appendLedgerField(
-        body,
-        '最近登记',
-        thread.latestSource
-            ? `第 ${thread.latestSource.index + 1} 楼 · 候选 ${thread.latestSource.swipeId + 1}`
-            : (thread.lastAdvancedTurn ? `账本第 ${thread.lastAdvancedTurn} 轮` : ''),
-    );
+    appendLedgerGroup(body, '当前', [
+        {
+            label: '真实事件',
+            value: concealSpoiler ? (thread.title || thread.id) : '',
+        },
+        {
+            label: '事件时钟',
+            value: `${thread.eventType === 'progress' ? '事务型' : '冲突型'} Lv.${thread.level} · ${thread.stageLabel} ${thread.stageProgress}/9`,
+            showEmpty: true,
+        },
+        { label: '当前进展', value: thread.summary, showEmpty: true, emptyText: '暂无新增事实' },
+        { label: '最近幕后变化', value: thread.offscreenBeat },
+        { label: '下一自然接口', value: thread.nextBeat },
+        {
+            label: '最近登记',
+            value: thread.latestSource
+                ? `第 ${thread.latestSource.index + 1} 楼 · 候选 ${thread.latestSource.swipeId + 1}`
+                : (thread.lastAdvancedTurn ? `账本第 ${thread.lastAdvancedTurn} 轮` : ''),
+        },
+    ], { open: true });
+    appendLedgerGroup(body, '因果', [
+        { label: '事件来源', value: thread.originLabel, showEmpty: true },
+        { label: '与主线关系', value: thread.relationLabel, showEmpty: true },
+        { label: '设定依据', value: thread.seedBasis },
+        { label: '因果父事件', value: thread.causedBy?.join('、') },
+        { label: '事件推进条件', value: thread.trigger },
+        { label: '与主线汇流条件', value: thread.intersection },
+        { label: '涉及人物/势力', value: thread.actors?.join('、') },
+        { label: '涉及地点', value: thread.locations?.join('、') },
+    ]);
+    appendLedgerGroup(body, '传播与收束', [
+        {
+            label: '结束方式',
+            value: thread.stage === 'resolved' ? thread.resolution : '',
+        },
+        { label: '持续影响', value: thread.effects?.join('；') },
+        { label: '传播中的流言', value: thread.rumors?.join('；') },
+        { label: '知情范围', value: thread.knowledgeLabel, showEmpty: true },
+    ]);
     details.appendChild(body);
     return details;
 }
@@ -4939,8 +5694,32 @@ function untuckFloatingOrb() {
     applyFloatingOrbPosition(position);
 }
 
+function trapDialogFocus(panel, event) {
+    if (event.key !== 'Tab' || !panel || panel.hidden) return;
+    const focusable = [...panel.querySelectorAll(
+        'button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => (
+        element instanceof HTMLElement
+        && !element.hidden
+        && element.getClientRects().length > 0
+    ));
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+        last.focus();
+        event.preventDefault();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        first.focus();
+        event.preventDefault();
+    }
+}
+
 function showFloatingPanel() {
     if (!ui?.floatingPanel) return;
+    lastFocusedBeforeFloatingPanel = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     untuckFloatingOrb();
     if (ui.floatingOrb) ui.floatingOrb.hidden = true;
     ui.floatingPanel.hidden = false;
@@ -4964,6 +5743,8 @@ function hideFloatingPanel() {
     if (ui.floatingOrb) {
         ui.floatingOrb.hidden = getSettings().floatingOrbEnabled === false;
     }
+    lastFocusedBeforeFloatingPanel?.focus?.({ preventScroll: true });
+    lastFocusedBeforeFloatingPanel = null;
     tuckFloatingOrb(1800);
 }
 
@@ -4995,7 +5776,18 @@ const FORUM_KIND_LABELS = Object.freeze({
     trade: '交易',
 });
 
-function buildForumPostCard(post, { openComments = false } = {}) {
+function forumAuthorHue(author) {
+    let hash = 0;
+    for (const char of String(author || '匿名')) {
+        hash = ((hash * 31) + char.codePointAt(0)) % 360;
+    }
+    return hash;
+}
+
+function buildForumPostCard(post, {
+    openComments = false,
+    currentTurn = 0,
+} = {}) {
     const card = document.createElement('article');
     card.className = 'mvuad-forum-post';
     card.dataset.board = post.board;
@@ -5024,10 +5816,12 @@ function buildForumPostCard(post, { openComments = false } = {}) {
     const meta = document.createElement('div');
     meta.className = 'mvuad-forum-post-meta';
     meta.dataset.kind = post.kind;
+    const age = Math.max(0, Number(currentTurn) - Number(post.updatedTurn));
     meta.textContent = [
         post.author,
         FORUM_KIND_LABELS[post.kind] || post.kind,
         `第 ${post.updatedTurn} 页`,
+        age === 0 ? '本页更新' : `${age} 回合前`,
         post.causalSignal ? '已形成外部影响' : '',
     ].filter(Boolean).join(' · ');
     card.append(heading, meta);
@@ -5086,6 +5880,10 @@ function buildForumPostCard(post, { openComments = false } = {}) {
         const floor = document.createElement('span');
         floor.className = 'mvuad-forum-comment-floor';
         floor.textContent = `${commentIndex + 1}楼`;
+        const avatar = document.createElement('span');
+        avatar.className = 'mvuad-forum-comment-avatar';
+        avatar.textContent = String(comment.author || '匿').trim().slice(0, 1) || '匿';
+        avatar.style.setProperty('--mvuad-avatar-hue', String(forumAuthorHue(comment.author)));
         const author = document.createElement('b');
         author.textContent = comment.author;
         const content = document.createElement('span');
@@ -5094,7 +5892,7 @@ function buildForumPostCard(post, { openComments = false } = {}) {
         likes.className = 'mvuad-forum-comment-likes';
         likes.title = '点赞数';
         likes.textContent = `▲ ${Math.max(0, Number(comment.likes) || 0)}`;
-        row.append(floor, author, content, likes);
+        row.append(floor, avatar, author, content, likes);
         list.appendChild(row);
     }
     comments.appendChild(list);
@@ -5333,7 +6131,10 @@ function renderForum() {
     });
     if (ui.forumFeed) {
         const cards = filtered.map((post, index) => (
-            buildForumPostCard(post, { openComments: index === 0 })
+            buildForumPostCard(post, {
+                openComments: index === 0,
+                currentTurn: state.turn,
+            })
         ));
         if (filtered.length) {
             const end = document.createElement('div');
@@ -5384,6 +6185,9 @@ function refreshForumManual() {
 
 function showForumPanel() {
     if (!ui?.forumPanel) return;
+    lastFocusedBeforeForumPanel = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     hideFloatingPanel();
     if (ui.forumControls) ui.forumControls.open = false;
     ui.forumPanel.hidden = false;
@@ -5406,6 +6210,8 @@ function hideForumPanel() {
     if (!ui?.forumPanel) return;
     ui.forumPanel.hidden = true;
     ui.forumPanel.classList.remove('mvuad-forum-panel-open');
+    lastFocusedBeforeForumPanel?.focus?.({ preventScroll: true });
+    lastFocusedBeforeForumPanel = null;
     tuckFloatingOrb(1800);
 }
 
@@ -5438,6 +6244,7 @@ function buildForumUi() {
     panel.id = 'mvuad-forum-panel';
     panel.hidden = true;
     panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
     panel.setAttribute('aria-label', '世界论坛');
     panel.innerHTML = `
         <div class="mvuad-forum-shell">
@@ -5515,6 +6322,7 @@ function buildForumUi() {
     });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && !panel.hidden) hideForumPanel();
+        trapDialogFocus(panel, event);
     });
     renderForum();
 }
@@ -5522,6 +6330,9 @@ function buildForumUi() {
 function makeFloatingOrbDraggable(orb) {
     let dragging = false;
     let moved = false;
+    let longPressed = false;
+    let longPressTimer = null;
+    let activePointerId = null;
     let startX = 0;
     let startY = 0;
     let startTop = 0;
@@ -5532,11 +6343,29 @@ function makeFloatingOrbDraggable(orb) {
         const rect = orb.getBoundingClientRect();
         dragging = true;
         moved = false;
+        longPressed = false;
         startX = event.clientX;
         startY = event.clientY;
         startTop = rect.top;
+        activePointerId = event.pointerId;
         orb.classList.add('mvuad-orb-dragging');
         orb.setPointerCapture?.(event.pointerId);
+        clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+            if (!dragging || moved) return;
+            dragging = false;
+            longPressed = true;
+            orb.classList.remove('mvuad-orb-dragging');
+            orb.releasePointerCapture?.(activePointerId);
+            const position = {
+                side: 'right',
+                top: Math.max(72, Math.min(window.innerHeight * 0.34, window.innerHeight - 64)),
+                tucked: false,
+            };
+            saveFloatingOrbPosition(position);
+            applyFloatingOrbPosition(position);
+            toast('info', '悬浮球已归位。');
+        }, 900);
         event.preventDefault();
     });
     orb.addEventListener('pointermove', (event) => {
@@ -5544,6 +6373,7 @@ function makeFloatingOrbDraggable(orb) {
         const dx = event.clientX - startX;
         const dy = event.clientY - startY;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+        if (moved) clearTimeout(longPressTimer);
         if (!moved) return;
         const size = orb.offsetWidth || 50;
         const top = Math.max(8, Math.min(startTop + dy, window.innerHeight - size - 8));
@@ -5552,8 +6382,10 @@ function makeFloatingOrbDraggable(orb) {
         event.preventDefault();
     });
     const finish = (event) => {
+        clearTimeout(longPressTimer);
         if (!dragging) return;
         dragging = false;
+        activePointerId = null;
         orb.classList.remove('mvuad-orb-dragging');
         orb.releasePointerCapture?.(event.pointerId);
         if (moved) {
@@ -5568,8 +6400,9 @@ function makeFloatingOrbDraggable(orb) {
     orb.addEventListener('pointerup', finish);
     orb.addEventListener('pointercancel', finish);
     orb.addEventListener('click', (event) => {
-        if (moved) {
+        if (moved || longPressed) {
             moved = false;
+            longPressed = false;
             event.preventDefault();
             event.stopImmediatePropagation();
             return;
@@ -5637,6 +6470,7 @@ function buildFloatingUi() {
     panel.id = 'mvuad-floating-panel';
     panel.hidden = true;
     panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
     panel.setAttribute('aria-label', 'MVU 自动医生与世界动态');
     panel.innerHTML = `
         <div class="mvuad-floating-header">
@@ -5691,6 +6525,7 @@ function buildFloatingUi() {
                 </section>
                 <section class="mvuad-floating-page" data-page="tools" hidden>
                     <div class="mvuad-floating-page-heading"><b>医生工具</b><span>手动操作集中在这里</span></div>
+                    <div class="mvuad-model-call-stats mvuad-floating-model-call-stats" role="status"></div>
                     <div class="mvuad-floating-statuses">
                         <div class="mvuad-floating-repair-status" role="status"></div>
                         <div class="mvuad-floating-hard-contract-status" role="status"></div>
@@ -5701,6 +6536,7 @@ function buildFloatingUi() {
                         <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
                         <button class="menu_button mvuad-floating-protocol" type="button">检查硬规则</button>
                         <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
+                        <button class="menu_button mvuad-floating-cancel-task" type="button" hidden>停止当前后台任务</button>
                     </div>
                     <details class="mvuad-settings-fold mvuad-oplog-fold">
                         <summary>最近操作时间线</summary>
@@ -5740,9 +6576,12 @@ function buildFloatingUi() {
         floatingTabs: [...panel.querySelectorAll('.mvuad-floating-tabs [data-page]')],
         floatingPages: [...panel.querySelectorAll('.mvuad-floating-page[data-page]')],
         floatingOperationLogList: panel.querySelector('.mvuad-floating-oplog-list'),
+        floatingModelCallStats: panel.querySelector('.mvuad-floating-model-call-stats'),
+        floatingCancelTask: panel.querySelector('.mvuad-floating-cancel-task'),
     });
     registerLedgerSurface(panel.querySelector('.mvuad-ledger'));
     renderOperationLog();
+    renderModelCallStats();
     ui.floatingClose.addEventListener('click', hideFloatingPanel);
     for (const tab of ui.floatingTabs) {
         tab.addEventListener('click', () => switchFloatingPage(tab.dataset.page));
@@ -5757,17 +6596,19 @@ function buildFloatingUi() {
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
+    panel.querySelector('.mvuad-floating-cancel-task').addEventListener('click', cancelCurrentOperations);
     panel.querySelector('.mvuad-floating-forum').addEventListener('click', openSelectedForum);
     panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
     makeFloatingOrbDraggable(orb);
     window.addEventListener('resize', () => applyFloatingOrbPosition());
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && !panel.hidden) hideFloatingPanel();
+        trapDialogFocus(panel, event);
     });
-    setStatus(latestStatus);
-    setHardContractStatus(latestHardContractStatus);
-    setContinuityStatus(latestContinuityStatus);
-    setForumStatus(latestForumStatus);
+    setStatus(latestStatus, latestStatusKind, { record: false });
+    setHardContractStatus(latestHardContractStatus, latestHardContractKind, { record: false });
+    setContinuityStatus(latestContinuityStatus, latestContinuityKind, { record: false });
+    setForumStatus(latestForumStatus, latestForumKind, { record: false });
     syncFloatingUiVisibility();
     syncForumProviderUi();
 }
@@ -5834,154 +6675,184 @@ function buildSettingsPanel() {
                         每条 AI 回复后读取当前卡的 Schema、MVU 规则和实时状态；
                         只在补丁完整通过路径检查、MVU/Zod 解析和写后回读时提交。
                     </div>
-                    <div class="mvuad-options"></div>
-                    <details class="mvuad-settings-fold mvuad-variable-prompt-settings">
-                        <summary>变量诊断模型适配与输出空间</summary>
+                    <details class="mvuad-settings-fold mvuad-health-card" open>
+                        <summary class="mvuad-health-summary">环境自检：正在读取</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <ul class="mvuad-health-list"></ul>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-health-refresh" type="button">重新检测</button>
+                                <button class="menu_button mvuad-diagnostic-export" type="button">导出脱敏诊断包</button>
+                            </div>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-timeline" open>
+                        <summary>最近操作时间线</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-model-call-stats mvuad-settings-model-call-stats" role="status"></div>
+                            <ul class="mvuad-oplog-list mvuad-settings-oplog-list"></ul>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-variable-section">
+                        <summary>变量诊断与自动修复</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-options"></div>
+                            <details class="mvuad-settings-fold mvuad-variable-prompt-settings">
+                                <summary>模型适配、输出空间与提示词透明</summary>
+                                <div class="mvuad-settings-fold-body">
+                                    <div class="mvuad-description">
+                                        医生会自动提供完整的 Schema、规则、状态、正文和补丁协议。
+                                        下框只用于粘贴你自己的破限/模型适配语句；正常成功只调用一次，
+                                        仅分析结果损坏时最多三次尝试。
+                                    </div>
+                                    <label class="mvuad-number">
+                                        <span>单次分析 max_tokens</span>
+                                        <input class="text_pole mvuad-variable-max-tokens" type="number" min="4096" step="1024">
+                                    </label>
+                                    <div class="mvuad-token-chips" aria-label="常用输出上限">
+                                        <button type="button" data-max-tokens="8192">8192</button>
+                                        <button type="button" data-max-tokens="16384">16384</button>
+                                        <button type="button" data-max-tokens="32768">32768</button>
+                                    </div>
+                                    <div class="mvuad-description">
+                                        请填模型/公益站实际允许的单次输出上限。医生不会为了省钱新增全局 token 硬限；
+                                        只保留防止单一异常条目挤爆模型窗口的分段安全上限。
+                                    </div>
+                                    <label class="mvuad-prompt-addon-label" for="mvuad-variable-prompt-addon">
+                                        附加破限/模型适配提示词
+                                    </label>
+                                    <textarea
+                                        id="mvuad-variable-prompt-addon"
+                                        class="text_pole mvuad-variable-prompt-addon"
+                                        rows="6"
+                                        placeholder="留空使用内置完整诊断提示；这里只粘贴你负责的那几句破限提示。"
+                                    ></textarea>
+                                    <div class="mvuad-save-hint" aria-live="polite"></div>
+                                    <div class="mvuad-actions">
+                                        <button class="menu_button mvuad-variable-prompt-save" type="button">保存模型适配</button>
+                                        <button class="menu_button mvuad-variable-prompt-reset" type="button">清空附加提示</button>
+                                    </div>
+                                    <details class="mvuad-prompt-inspector">
+                                        <summary>查看本次启动后最后一次实际提示词</summary>
+                                        <div class="mvuad-prompt-meta"></div>
+                                        <div class="mvuad-description">可能含私人剧情、变量和世界书原文；诊断包不会包含这些内容。</div>
+                                        <div class="mvuad-actions">
+                                            <button class="menu_button mvuad-copy-prompt" type="button">复制完整提示词</button>
+                                            <button class="menu_button mvuad-download-prompt" type="button">下载完整提示词</button>
+                                        </div>
+                                        <pre class="mvuad-prompt-preview"></pre>
+                                    </details>
+                                </div>
+                            </details>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-run" type="button">检查最新回复</button>
+                                <button class="menu_button mvuad-undo" type="button">撤销上次修复</button>
+                                <button class="menu_button mvuad-cancel-task" type="button" hidden>停止当前后台任务</button>
+                            </div>
+                            <div class="mvuad-status" role="status"></div>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section">
+                        <summary>正文与装备硬合同</summary>
                         <div class="mvuad-settings-fold-body">
                             <div class="mvuad-description">
-                                医生会自动提供完整的 Schema、规则、状态、正文和补丁协议。
-                                下框只用于粘贴你自己的破限/模型适配语句；正常成功只调用一次，
-                                仅分析结果损坏时最多三次尝试。
+                                本地检查字数、结构标签、四选项、骰后改判、场景时间、技能资源、背包与装备字段合同。
+                                自动修正版复用变量诊断的同一次模型请求，并作为新 swipe 写入；原文可左滑恢复。
+                                玩家新增行动、对白、技能或检定会被本地守卫拦截。
                             </div>
-                            <label class="mvuad-number">
-                                <span>单次分析 max_tokens</span>
-                                <input class="text_pole mvuad-variable-max-tokens" type="number" min="4096" step="1024">
-                            </label>
-                            <div class="mvuad-description">
-                                请填所用模型/公益站实际允许的单次输出上限。医生不再把它压到 4096；默认 32768。
-                            </div>
-                            <label class="mvuad-prompt-addon-label" for="mvuad-variable-prompt-addon">
-                                附加破限/模型适配提示词
-                            </label>
-                            <textarea
-                                id="mvuad-variable-prompt-addon"
-                                class="text_pole mvuad-variable-prompt-addon"
-                                rows="6"
-                                placeholder="留空使用内置诊断提示；这里只粘贴你负责的那几句破限提示。"
-                            ></textarea>
+                            <div class="mvuad-protocol-options"></div>
                             <div class="mvuad-actions">
-                                <button class="menu_button mvuad-variable-prompt-save" type="button">保存模型适配</button>
-                                <button class="menu_button mvuad-variable-prompt-reset" type="button">清空附加提示</button>
+                                <button class="menu_button mvuad-protocol-run" type="button">检查正文硬规则</button>
                             </div>
+                            <div class="mvuad-status mvuad-protocol-status" role="status"></div>
+                            <details class="mvuad-protocol-details">
+                                <summary class="mvuad-protocol-summary">查看硬合同明细</summary>
+                                <ul class="mvuad-protocol-list"></ul>
+                            </details>
                         </div>
                     </details>
-                    <label class="mvuad-number">
-                        <span>回复后等待（毫秒）</span>
-                        <input class="text_pole mvuad-delay" type="number" min="300" max="10000" step="100">
-                    </label>
-                    <label class="mvuad-select">
-                        <span>通知级别</span>
-                        <select class="text_pole mvuad-notification-level">
-                            <option value="all">全部弹出提示</option>
-                            <option value="warnings">只弹警告与失败（推荐）</option>
-                            <option value="silent">静默（只记入时间线）</option>
-                        </select>
-                    </label>
-                    <div class="mvuad-actions">
-                        <button class="menu_button mvuad-run" type="button">检查最新回复</button>
-                        <button class="menu_button mvuad-undo" type="button">撤销上次修复</button>
-                    </div>
-                    <div class="mvuad-status" role="status"></div>
-                    <div class="mvuad-section-title">正文与装备硬合同</div>
-                    <div class="mvuad-description">
-                        本地检查字数、结构标签、四选项、骰后改判、场景时间、技能资源、背包与装备字段合同。
-                        自动修正版复用变量诊断的同一次模型请求，并作为新 swipe 写入；原文可左滑恢复。
-                        玩家新增行动/对白/技能/检定会被本地守卫拦截。
-                    </div>
-                    <div class="mvuad-protocol-options"></div>
-                    <div class="mvuad-actions">
-                        <button class="menu_button mvuad-protocol-run" type="button">检查正文硬规则</button>
-                    </div>
-                    <div class="mvuad-status mvuad-protocol-status" role="status"></div>
-                    <details class="mvuad-protocol-details">
-                        <summary class="mvuad-protocol-summary">查看硬合同明细</summary>
-                        <ul class="mvuad-protocol-list"></ul>
-                    </details>
-                    <div class="mvuad-section-title">活世界与事件连续性</div>
-                    <div class="mvuad-description">
-                        每个完成的 AI 回合都调度一次世界节拍：本地事件时钟先给出推进、保持或受挫基线，
-                        模型再按真实因果增量维护事件、长期趋势、势力、风声、声誉、环境、隐秘与跨类别影响。
-                        不强求与主线汇流，不替玩家行动，也不写 MVU 或数据库。
-                    </div>
-                    <label class="mvuad-select">
-                        <span>运行模式</span>
-                        <select class="text_pole mvuad-continuity-mode">
-                            <option value="auto">自动活世界（推荐）</option>
-                            <option value="on">始终运行</option>
-                            <option value="off">关闭</option>
-                        </select>
-                    </label>
-                    <label class="mvuad-select">
-                        <span>世界自主度</span>
-                        <select class="text_pole mvuad-continuity-autonomy">
-                            <option value="conservative">保守·只接正文</option>
-                            <option value="living">活世界·平衡（推荐）</option>
-                            <option value="expansive">活跃·更多幕后事件</option>
-                        </select>
-                    </label>
-                    <div class="mvuad-continuity-options"></div>
-                    <div class="mvuad-actions">
-                        <button class="menu_button mvuad-continuity-run" type="button">立即整理世界</button>
-                        <button class="menu_button mvuad-continuity-clear" type="button">清空世界账本</button>
-                    </div>
-                    <div class="mvuad-status mvuad-continuity-status" role="status"></div>
-                    <div class="mvuad-ledger" aria-label="事件账本">
-                        <div class="mvuad-ledger-header">
-                            <b>事件账本</b>
-                            <button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button>
-                        </div>
-                        <div class="mvuad-ledger-note">
-                            玩家审计视图：可能包含角色尚不知道的幕后事件；这里只展示账本，不会把隐藏信息写进正文。
-                        </div>
-                        <div class="mvuad-ledger-summary"></div>
-                        <div class="mvuad-ledger-empty">当前没有未结事件。生成新回复后会自动整理，也可点击“立即整理世界”。</div>
-                        <details class="mvuad-settings-fold">
-                            <summary class="mvuad-settings-fold-summary">查看事件与风声明细</summary>
-                            <div class="mvuad-settings-fold-body">
-                                <div class="mvuad-ledger-active"></div>
-                                <details class="mvuad-ledger-resolved">
-                                    <summary class="mvuad-ledger-resolved-summary">已收束事件（0）</summary>
-                                    <div class="mvuad-ledger-resolved-list"></div>
-                                </details>
-                                <div class="mvuad-echo-section">
-                                    <b>事件风声</b>
-                                    <div class="mvuad-ledger-note">这里只列出与事件因果有关的消息。普通水帖、吐槽和闲聊由卡内贴吧或独立论坛维护，不会被医生强行变成任务。</div>
-                                    <div class="mvuad-echo-empty">当前没有形成传播链的风声。</div>
-                                    <div class="mvuad-echo-list"></div>
-                                </div>
+                    <details class="mvuad-settings-fold mvuad-settings-section">
+                        <summary>活世界与事件连续性</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                每个完成的 AI 回合都调度一次世界节拍，并按真实因果增量维护独立事件与世界影响。
+                                不强求汇流，不替玩家行动，也不写 MVU 或数据库。
                             </div>
-                        </details>
-                    </div>
-                    <div class="mvuad-section-title">内置世界论坛</div>
-                    <div class="mvuad-description">
-                        独立生成日常水帖、求助、攻略、交易、吐槽和公开风声，不占正文；
-                        普通帖子不会变成世界事件，只有已经造成持续公共行动的信号才会进入下一轮因果调度。
-                    </div>
-                    <label class="mvuad-select">
-                        <span>论坛来源</span>
-                        <select class="text_pole mvuad-forum-provider-settings">
-                            <option value="builtin">医生内置论坛</option>
-                            <option value="zsd">Zsd 论坛（由 Zsd 自己刷新）</option>
-                        </select>
-                    </label>
-                    <label class="mvuad-select">
-                        <span>刷新方式</span>
-                        <select class="text_pole mvuad-forum-refresh-mode-settings">
-                            <option value="manual">手动刷新（推荐）</option>
-                            <option value="auto">按 AI 回合自动刷新</option>
-                        </select>
-                    </label>
-                    <div class="mvuad-forum-options"></div>
-                    <label class="mvuad-number mvuad-forum-interval-field">
-                        <span>每几个 AI 回合自动刷新</span>
-                        <input class="text_pole mvuad-forum-interval" type="number" min="1" max="12" step="1">
-                    </label>
-                    <div class="mvuad-actions">
-                        <button class="menu_button mvuad-forum-open" type="button">打开所选论坛</button>
-                        <button class="menu_button mvuad-forum-run" type="button">刷新内置论坛</button>
-                        <button class="menu_button mvuad-forum-clear-settings" type="button">清空内置帖子</button>
-                    </div>
-                    <div class="mvuad-status mvuad-settings-forum-status" role="status"></div>
+                            <label class="mvuad-select">
+                                <span>运行模式</span>
+                                <select class="text_pole mvuad-continuity-mode">
+                                    <option value="auto">自动活世界（推荐）</option>
+                                    <option value="on">始终运行</option>
+                                    <option value="off">关闭</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>世界自主度</span>
+                                <select class="text_pole mvuad-continuity-autonomy">
+                                    <option value="conservative">保守·只接正文</option>
+                                    <option value="living">活世界·平衡（推荐）</option>
+                                    <option value="expansive">活跃·更多幕后事件</option>
+                                </select>
+                            </label>
+                            <div class="mvuad-continuity-options"></div>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-continuity-open" type="button">打开世界与事件面板</button>
+                                <button class="menu_button mvuad-continuity-run" type="button">立即整理世界</button>
+                                <button class="menu_button mvuad-continuity-clear mvuad-danger" type="button">清空世界账本</button>
+                            </div>
+                            <div class="mvuad-status mvuad-continuity-status" role="status"></div>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section">
+                        <summary>内置世界论坛</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                独立生成日常水帖、求助、攻略、交易、吐槽和公开风声，不占正文。
+                                普通帖子不会被强行变成任务。
+                            </div>
+                            <label class="mvuad-select">
+                                <span>论坛来源</span>
+                                <select class="text_pole mvuad-forum-provider-settings">
+                                    <option value="builtin">医生内置论坛</option>
+                                    <option value="zsd">Zsd 论坛（由 Zsd 自己刷新）</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>刷新方式</span>
+                                <select class="text_pole mvuad-forum-refresh-mode-settings">
+                                    <option value="manual">手动刷新（推荐）</option>
+                                    <option value="auto">按 AI 回合自动刷新</option>
+                                </select>
+                            </label>
+                            <div class="mvuad-forum-options"></div>
+                            <label class="mvuad-number mvuad-forum-interval-field">
+                                <span>每几个 AI 回合自动刷新</span>
+                                <input class="text_pole mvuad-forum-interval" type="number" min="1" max="12" step="1">
+                            </label>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-forum-open" type="button">打开所选论坛</button>
+                                <button class="menu_button mvuad-forum-run" type="button">刷新内置论坛</button>
+                                <button class="menu_button mvuad-forum-clear-settings mvuad-danger" type="button">清空内置帖子</button>
+                            </div>
+                            <div class="mvuad-status mvuad-settings-forum-status" role="status"></div>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section">
+                        <summary>进阶与低频设置</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <label class="mvuad-number">
+                                <span>回复后等待（毫秒）</span>
+                                <input class="text_pole mvuad-delay" type="number" min="300" max="10000" step="100">
+                            </label>
+                            <label class="mvuad-select">
+                                <span>通知级别</span>
+                                <select class="text_pole mvuad-notification-level">
+                                    <option value="all">全部弹出提示</option>
+                                    <option value="warnings">只弹警告与失败（推荐）</option>
+                                    <option value="silent">静默（只记入时间线）</option>
+                                </select>
+                            </label>
+                        </div>
+                    </details>
                     <div class="mvuad-version">v${VERSION} · 独立安装，不修改角色卡或故事神谕文件</div>
                 </div>
             </div>
@@ -6003,24 +6874,48 @@ function buildSettingsPanel() {
     const variableMaxTokens = wrapper.querySelector('.mvuad-variable-max-tokens');
     variableMaxTokens.value = String(getSettings().maxTokens);
     variableMaxTokens.addEventListener('change', () => {
-        getSettings().maxTokens = Math.max(
+        const requested = Number(variableMaxTokens.value);
+        const normalized = Math.max(
             4096,
-            Math.round((Number(variableMaxTokens.value) || DEFAULTS.maxTokens) / 1024) * 1024,
+            Math.round((requested || DEFAULTS.maxTokens) / 1024) * 1024,
         );
-        variableMaxTokens.value = String(getSettings().maxTokens);
+        getSettings().maxTokens = normalized;
+        variableMaxTokens.value = String(normalized);
         saveSettings();
+        if (!Number.isFinite(requested) || requested !== normalized) {
+            toast('info', `max_tokens 已按 1024 对齐为 ${normalized}。`);
+        }
     });
+    for (const chip of wrapper.querySelectorAll('[data-max-tokens]')) {
+        chip.addEventListener('click', () => {
+            variableMaxTokens.value = chip.dataset.maxTokens;
+            variableMaxTokens.dispatchEvent(new Event('change'));
+        });
+    }
     const variablePromptAddon = wrapper.querySelector('.mvuad-variable-prompt-addon');
+    const promptSaveHint = wrapper.querySelector('.mvuad-save-hint');
     variablePromptAddon.value = String(getSettings().variablePromptAddon || '');
-    wrapper.querySelector('.mvuad-variable-prompt-save').addEventListener('click', () => {
-        getSettings().variablePromptAddon = variablePromptAddon.value.trim();
+    const saveVariablePromptAddon = ({ notify = false } = {}) => {
+        const value = variablePromptAddon.value.trim();
+        const changed = getSettings().variablePromptAddon !== value;
+        getSettings().variablePromptAddon = value;
         saveSettings();
-        toast('success', '变量诊断附加提示词已保存。');
+        promptSaveHint.textContent = changed ? '已保存' : '没有未保存改动';
+        if (notify) toast('success', '变量诊断附加提示词已保存。');
+    };
+    variablePromptAddon.addEventListener('input', () => {
+        promptSaveHint.textContent = '有未保存改动；离开输入框时会自动保存';
     });
+    variablePromptAddon.addEventListener('blur', () => saveVariablePromptAddon());
+    wrapper.querySelector('.mvuad-variable-prompt-save').addEventListener(
+        'click',
+        () => saveVariablePromptAddon({ notify: true }),
+    );
     wrapper.querySelector('.mvuad-variable-prompt-reset').addEventListener('click', () => {
         variablePromptAddon.value = '';
         getSettings().variablePromptAddon = '';
         saveSettings();
+        promptSaveHint.textContent = '已清空并保存';
         toast('info', '已清空附加提示，继续使用医生内置完整诊断提示。');
     });
     const notificationLevel = wrapper.querySelector('.mvuad-notification-level');
@@ -6045,6 +6940,7 @@ function buildSettingsPanel() {
         enqueueHardContractAudit(null, { manual: true });
     });
     wrapper.querySelector('.mvuad-undo').addEventListener('click', undoLast);
+    wrapper.querySelector('.mvuad-cancel-task').addEventListener('click', cancelCurrentOperations);
     wrapper.querySelector('.mvuad-protocol-run').addEventListener('click', () => {
         enqueueHardContractAudit(null, { manual: true });
     });
@@ -6069,6 +6965,10 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-continuity-run').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
+    wrapper.querySelector('.mvuad-continuity-open').addEventListener('click', () => {
+        showFloatingPanel();
+        switchFloatingPage('world');
+    });
     wrapper.querySelector('.mvuad-continuity-clear').addEventListener('click', clearContinuityState);
     Object.assign(ui, {
         wrapper,
@@ -6078,10 +6978,31 @@ function buildSettingsPanel() {
         hardContractSummary: wrapper.querySelector('.mvuad-protocol-summary'),
         hardContractList: wrapper.querySelector('.mvuad-protocol-list'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
+        operationLogList: wrapper.querySelector('.mvuad-settings-oplog-list'),
+        modelCallStats: wrapper.querySelector('.mvuad-settings-model-call-stats'),
+        cancelTask: wrapper.querySelector('.mvuad-cancel-task'),
+        environmentCheckList: wrapper.querySelector('.mvuad-health-list'),
+        environmentCheckSummary: wrapper.querySelector('.mvuad-health-summary'),
+        promptMeta: wrapper.querySelector('.mvuad-prompt-meta'),
+        promptPreview: wrapper.querySelector('.mvuad-prompt-preview'),
+        copyPrompt: wrapper.querySelector('.mvuad-copy-prompt'),
+        downloadPrompt: wrapper.querySelector('.mvuad-download-prompt'),
     });
-    registerLedgerSurface(wrapper.querySelector('.mvuad-ledger'));
-    wrapper.querySelector('.mvuad-ledger-refresh').addEventListener('click', () => {
-        renderContinuityLedger();
+    wrapper.querySelector('.mvuad-health-refresh').addEventListener('click', async () => {
+        ui.environmentCheckSummary.textContent = '环境自检：正在读取';
+        await inspectEnvironment({ waitForMvu: true });
+    });
+    wrapper.querySelector('.mvuad-diagnostic-export').addEventListener('click', exportDiagnosticPackage);
+    ui.copyPrompt.addEventListener('click', async () => {
+        const copied = await copyText(promptSnapshotText());
+        toast(copied ? 'success' : 'warning', copied ? '完整提示词已复制。' : '复制失败，请改用下载按钮。');
+    });
+    ui.downloadPrompt.addEventListener('click', () => {
+        const ok = downloadText(
+            `mvu-auto-doctor-last-prompt-${Date.now()}.txt`,
+            promptSnapshotText(),
+        );
+        toast(ok ? 'success' : 'warning', ok ? '完整提示词已下载。' : '提示词下载失败。');
     });
     wrapper.querySelector('.mvuad-forum-options').append(
         makeCheckbox('启用内置世界论坛', 'builtInForumEnabled'),
@@ -6098,10 +7019,16 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-forum-clear-settings').addEventListener('click', clearForumState);
     ui.forumSettingsStatus = wrapper.querySelector('.mvuad-settings-forum-status');
     ui.forumSettingsOpen = wrapper.querySelector('.mvuad-forum-open');
-    setStatus(latestStatus);
-    setHardContractStatus(latestHardContractStatus);
-    setContinuityStatus(latestContinuityStatus);
-    setForumStatus(latestForumStatus);
+    setStatus(latestStatus, latestStatusKind, { record: false });
+    setHardContractStatus(latestHardContractStatus, latestHardContractKind, { record: false });
+    setContinuityStatus(latestContinuityStatus, latestContinuityKind, { record: false });
+    setForumStatus(latestForumStatus, latestForumKind, { record: false });
+    renderOperationLog();
+    renderModelCallStats();
+    syncTaskCancelButtons();
+    renderPromptSnapshot();
+    renderEnvironmentReport();
+    syncTaskCancelButtons();
     syncFloatingUiVisibility();
     syncForumProviderUi();
 }
@@ -6175,6 +7102,13 @@ function bindEvents() {
         return;
     }
     const types = context.eventTypes || context.event_types || {};
+    const injectionInspectionEvents = new Set([
+        types.CHAT_COMPLETION_PROMPT_READY || 'chat_completion_prompt_ready',
+        types.GENERATE_AFTER_COMBINE_PROMPTS || 'generate_after_combine_prompts',
+    ]);
+    for (const eventName of injectionInspectionEvents) {
+        context.eventSource.on(eventName, inspectContinuityInjectionEvent);
+    }
     context.eventSource.on(
         types.GENERATION_STARTED || 'generation_started',
         async (type, _options, dryRun) => {
@@ -6240,6 +7174,8 @@ function bindEvents() {
     const onChatChanged = () => {
             clearTimeout(pendingChatSaveTimer);
             pendingChatSaveTimer = null;
+            clearTimeout(pendingOperationLogSaveTimer);
+            pendingOperationLogSaveTimer = null;
             invalidateOperations('聊天已经切换');
             automaticPendingKeys.clear();
             automaticCompletedKeys.clear();
@@ -6253,15 +7189,24 @@ function bindEvents() {
             forumCompletedKeys.clear();
             presetContinuityCache = { checkedAt: 0, active: false };
             lastUndo = latestUndoRecord(readChatNamespace());
-            setStatus('等待新的 AI 回复');
+            lastInjectionInspection = {
+                status: 'not-yet',
+                checkedAt: 0,
+                registered: false,
+                landed: false,
+                apiType: '',
+            };
+            setStatus('等待新的 AI 回复', '', { record: false });
             latestHardContractAudit = null;
-            setHardContractStatus('硬合同：等待检查');
-            setForumStatus('论坛：等待世界消息');
+            setHardContractStatus('硬合同：等待检查', '', { record: false });
+            setForumStatus('论坛：等待世界消息', '', { record: false });
+            loadOperationLogFromChat();
             applyContinuityInjection();
             renderForum();
             disableStoryOracleAutoIfNeeded();
             scheduleOpeningResourceSync();
             scheduleLatestHardContractAudit();
+            inspectEnvironment();
         };
     const chatEvents = new Set([
         types.CHAT_CHANGED || 'chat_changed',
@@ -6276,6 +7221,7 @@ function initialize() {
     if (window.__MVU_AUTO_DOCTOR_INITIALIZED__) return;
     window.__MVU_AUTO_DOCTOR_INITIALIZED__ = true;
     getSettings();
+    loadOperationLogFromChat();
     buildFloatingUi();
     buildForumUi();
     buildSettingsPanel();
@@ -6285,9 +7231,12 @@ function initialize() {
     applyContinuityInjection();
     scheduleOpeningResourceSync();
     scheduleLatestHardContractAudit();
+    inspectEnvironment();
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
+        apiVersion: 1,
+        isCompatible: (required = 1) => Number(required) <= 1,
         runLatest: () => enqueue(null, { manual: true }),
         auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
         getHardContractAudit: () => deepClone(latestHardContractAudit),
@@ -6301,6 +7250,24 @@ function initialize() {
         openForum: showForumPanel,
         undoLast,
         getStatus: () => latestStatus,
+        cancelCurrent: cancelCurrentOperations,
+        inspectEnvironment: () => inspectEnvironment({ waitForMvu: true }),
+        getEnvironmentReport: () => deepClone(lastEnvironmentReport),
+        getInjectionInspection: () => deepClone(lastInjectionInspection),
+        getModelCallStats: () => deepClone(normalizedModelCallStats(modelCallStats)),
+        getLastPromptInfo: () => lastPromptSnapshot
+            ? {
+                task: lastPromptSnapshot.task,
+                capturedAt: lastPromptSnapshot.capturedAt,
+                maxTokens: lastPromptSnapshot.maxTokens,
+                totalChars: lastPromptSnapshot.totalChars,
+                segments: lastPromptSnapshot.messages.map((message) => ({
+                    role: message.role,
+                    chars: message.content.length,
+                })),
+            }
+            : null,
+        exportDiagnosticPackage,
     });
     console.info(`[MVU Auto Doctor] v${VERSION} initialized`);
 }

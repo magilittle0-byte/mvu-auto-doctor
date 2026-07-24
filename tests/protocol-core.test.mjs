@@ -10,6 +10,7 @@ import {
     auditReplyProtocol,
     auditSkillResourceCosts,
     countHanCharacters,
+    detectContentTag,
     extractHardContractCorrection,
     verifyHardContractEvidence,
 } from '../protocol-core.mjs';
@@ -266,6 +267,34 @@ test('agency guard allows NPC/environment expansion but rejects new player B/C a
 
     const addedDialogue = '<content>你扣下扳机，子弹击中门边的敌人。你喊：“所有人跟我走！”</content>';
     assert.equal(auditCorrectionAgencyGuard(original, addedDialogue).ok, false);
+});
+
+test('detects and safely corrects common non-content narrative wrappers', () => {
+    const reply = `<gametxt>${'甲'.repeat(80)}</gametxt>
+<UpdateVariable><JSONPatch>[]</JSONPatch></UpdateVariable>`;
+    assert.equal(detectContentTag(reply)?.tag, 'gametxt');
+    const audit = auditReplyProtocol(reply, {
+        contractTexts: ['正文100~200汉字'],
+    });
+    assert.equal(audit.metrics.contentTag, 'gametxt');
+    assert.ok(audit.issues.some((issue) => issue.code === 'content-under-budget'));
+
+    const applied = applyHardContractCorrection(reply, {
+        content: '乙'.repeat(120),
+        options: null,
+    });
+    assert.equal(applied.error, undefined);
+    assert.match(applied.text, /<gametxt>乙{120}<\/gametxt>/u);
+    assert.match(applied.text, /<UpdateVariable>/u);
+});
+
+test('reports an explicit safe degradation when the narrative wrapper is unknown', () => {
+    const audit = auditReplyProtocol('没有正文标签，只有一小段叙事。', {
+        contractTexts: ['正文100~200汉字'],
+    });
+    assert.equal(audit.metrics.contentTag, '');
+    assert.ok(audit.issues.some((issue) => issue.code === 'content-tag-unrecognized'));
+    assert.ok(!audit.issues.some((issue) => issue.code === 'content-under-budget'));
 });
 
 test('combines reply and equipment findings into one read-only audit', () => {
