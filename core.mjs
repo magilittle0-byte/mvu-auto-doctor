@@ -119,6 +119,11 @@ export function extractLastUpdateBlock(text) {
 
 function balancedJsonArrayEnd(source, start) {
     if (start < 0 || source[start] !== '[') return -1;
+    return balancedJsonValueEnd(source, start);
+}
+
+function balancedJsonValueEnd(source, start) {
+    if (start < 0 || !['[', '{'].includes(source[start])) return -1;
     let depth = 0;
     let inString = false;
     let escaped = false;
@@ -146,10 +151,81 @@ function balancedJsonArrayEnd(source, start) {
     return -1;
 }
 
+const SUPPORTED_PATCH_OPS = new Set(['replace', 'delta', 'insert', 'remove', 'move']);
+const PATCH_ARRAY_KEYS = new Set([
+    'jsonpatch',
+    'json_patch',
+    'patch',
+    'patches',
+    'operations',
+    'ops',
+]);
+
+function normalizedPatchRoot(value) {
+    if (Array.isArray(value)) return { ops: value, repaired: false, repairReason: '' };
+    if (!isPlainObject(value)) {
+        return { error: 'JSONPatch 根节点必须是数组' };
+    }
+    if (SUPPORTED_PATCH_OPS.has(value.op)) {
+        return {
+            ops: [value],
+            repaired: true,
+            repairReason: '模型返回了单个补丁对象；已安全包装为单元素 JSONPatch 数组',
+        };
+    }
+    const candidates = Object.entries(value)
+        .filter(([key, item]) => PATCH_ARRAY_KEYS.has(String(key).toLowerCase()) && Array.isArray(item));
+    if (candidates.length === 1) {
+        return {
+            ops: candidates[0][1],
+            repaired: true,
+            repairReason: `模型把补丁数组包装在 ${candidates[0][0]} 字段中；已安全提取`,
+        };
+    }
+    if (candidates.length > 1) {
+        return { error: 'JSONPatch 对象中存在多个候选补丁数组，无法安全判断' };
+    }
+    return { error: 'JSONPatch 根节点必须是数组或单个合法补丁对象' };
+}
+
+function parseJsonPatchBody(source) {
+    const body = String(source || '').trim();
+    if (!body) return { error: 'JSONPatch 不是完整的 JSON 数组' };
+    let value;
+    try {
+        value = JSON.parse(body);
+    } catch (wholeError) {
+        const arrayStart = body.indexOf('[');
+        const objectStart = body.indexOf('{');
+        const starts = [arrayStart, objectStart].filter((index) => index >= 0);
+        if (!starts.length) return { error: 'JSONPatch 不是完整的 JSON 数组' };
+        const start = Math.min(...starts);
+        const end = balancedJsonValueEnd(body, start);
+        if (end < 0) {
+            return {
+                error: body[start] === '['
+                    ? 'JSONPatch 不是完整的 JSON 数组'
+                    : 'JSONPatch 不是完整的 JSON 对象',
+            };
+        }
+        try {
+            value = JSON.parse(body.slice(start, end));
+        } catch (error) {
+            return { error: `JSONPatch JSON 解析失败：${error.message || error}` };
+        }
+    }
+    return normalizedPatchRoot(value);
+}
+
 export function extractUpdateBlockCandidate(text) {
     const source = String(text || '');
     const complete = extractLastUpdateBlock(source);
-    if (complete) {
+    const completeLower = complete.toLowerCase();
+    const jsonClose = completeLower.lastIndexOf('</jsonpatch>');
+    const jsonOpen = jsonClose >= 0
+        ? completeLower.lastIndexOf('<jsonpatch>', jsonClose)
+        : -1;
+    if (complete && jsonOpen >= 0 && jsonClose > jsonOpen) {
         return { block: complete, recovered: false, incomplete: false };
     }
 
@@ -164,8 +240,8 @@ export function extractUpdateBlockCandidate(text) {
         };
     }
     const updateOpenEnd = source.indexOf('>', updateOpen);
-    const jsonOpen = lower.indexOf('<jsonpatch', updateOpenEnd);
-    if (updateOpenEnd < 0 || jsonOpen < 0) {
+    const candidateJsonOpen = lower.indexOf('<jsonpatch', updateOpenEnd);
+    if (updateOpenEnd < 0 || candidateJsonOpen < 0) {
         return {
             block: '',
             recovered: false,
@@ -173,7 +249,7 @@ export function extractUpdateBlockCandidate(text) {
             reason: '模型的 <UpdateVariable> 在 JSONPatch 之前被截断',
         };
     }
-    const jsonOpenEnd = source.indexOf('>', jsonOpen);
+    const jsonOpenEnd = source.indexOf('>', candidateJsonOpen);
     const arrayStart = source.indexOf('[', jsonOpenEnd + 1);
     if (jsonOpenEnd < 0 || arrayStart < 0) {
         return {
@@ -232,30 +308,18 @@ export function parsePatchBlock(patchBlock) {
     }
 
     const openEnd = openStart + '<JSONPatch>'.length;
-    let body = original
+    const body = original
         .slice(openEnd, closeStart)
         .replace(/```(?:json)?/giu, '')
         .trim();
-    const arrayStart = body.indexOf('[');
-    const arrayEnd = body.lastIndexOf(']');
-    if (arrayStart < 0 || arrayEnd < arrayStart) {
-        return { error: 'JSONPatch 不是完整的 JSON 数组' };
-    }
-    body = body.slice(arrayStart, arrayEnd + 1);
+    const normalized = parseJsonPatchBody(body);
+    if (normalized.error) return normalized;
+    const { ops } = normalized;
 
-    let ops;
-    try {
-        ops = JSON.parse(body);
-    } catch (error) {
-        return { error: `JSONPatch JSON 解析失败：${error.message || error}` };
-    }
-    if (!Array.isArray(ops)) return { error: 'JSONPatch 根节点必须是数组' };
-
-    const supported = new Set(['replace', 'delta', 'insert', 'remove', 'move']);
     const errors = [];
     ops.forEach((op, index) => {
         const number = index + 1;
-        if (!isPlainObject(op) || !supported.has(op.op)) {
+        if (!isPlainObject(op) || !SUPPORTED_PATCH_OPS.has(op.op)) {
             errors.push(`第 ${number} 项 op 无效`);
             return;
         }
@@ -294,7 +358,12 @@ export function parsePatchBlock(patchBlock) {
     if (errors.length) return { error: [...new Set(errors)].join('；') };
 
     const block = renderPatchBlock(original, ops);
-    return { block, ops };
+    return {
+        block,
+        ops,
+        repaired: normalized.repaired === true,
+        repairReason: normalized.repairReason || '',
+    };
 }
 
 function renderPatchBlock(original, ops) {
@@ -666,6 +735,94 @@ export function stripAutomaticallyComputedOps(patchBlock, automaticPaths = []) {
         block: renderPatchBlock(parsed.block, ops),
         ops,
         ignoredPaths: [...new Set(ignoredPaths)],
+        repaired: parsed.repaired === true,
+        repairReason: parsed.repairReason || '',
+    };
+}
+
+export function stripRedundantExistingContainerOps(patchBlock, oldData) {
+    const parsed = parsePatchBlock(patchBlock);
+    if (parsed.error) return parsed;
+    const oldStat = statDataOf(oldData);
+    if (!oldStat) return { error: '当前 MVU 状态中没有 stat_data' };
+
+    const ignoredPaths = [];
+    const ops = parsed.ops.filter((op, index, allOps) => {
+        if (
+            op.op !== 'insert'
+            || !isPlainObject(op.value)
+            || Object.keys(op.value).length
+        ) return true;
+        const current = pointerGet(oldStat, op.path);
+        if (!current.found || !isPlainObject(current.value)) return true;
+        const hasDescendantWrite = allOps.some((candidate, candidateIndex) => {
+            if (candidateIndex === index) return false;
+            const paths = candidate.op === 'move'
+                ? [candidate.from, candidate.to]
+                : [candidate.path];
+            return paths.some((path) => (
+                typeof path === 'string' && path.startsWith(`${op.path}/`)
+            ));
+        });
+        if (!hasDescendantWrite) return true;
+        ignoredPaths.push(op.path);
+        return false;
+    });
+    return {
+        block: renderPatchBlock(parsed.block, ops),
+        ops,
+        ignoredPaths,
+        repaired: parsed.repaired === true || ignoredPaths.length > 0,
+        repairReason: [
+            parsed.repairReason,
+            ignoredPaths.length
+                ? `已移除 ${ignoredPaths.length} 个对现有对象的冗余空容器 insert`
+                : '',
+        ].filter(Boolean).join('；'),
+    };
+}
+
+export function normalizeObjectPropertyOps(patchBlock, oldData) {
+    const parsed = parsePatchBlock(patchBlock);
+    if (parsed.error) return parsed;
+    const oldStat = statDataOf(oldData);
+    if (!oldStat) return { error: '当前 MVU 状态中没有 stat_data' };
+
+    let working = deepClone(oldStat);
+    const repairedPaths = [];
+    const ops = [];
+    for (const original of parsed.ops) {
+        let op = original;
+        if (['replace', 'insert'].includes(original.op) && original.path) {
+            const parts = pointerSegments(original.path);
+            const parentPath = parts?.length ? pointerPath(parts.slice(0, -1)) : null;
+            const target = pointerGet(working, original.path);
+            const parent = parentPath == null ? { found: false } : pointerGet(working, parentPath);
+            if (parent.found && isPlainObject(parent.value)) {
+                if (original.op === 'replace' && !target.found) {
+                    op = { ...original, op: 'insert' };
+                    repairedPaths.push(original.path);
+                } else if (original.op === 'insert' && target.found) {
+                    op = { ...original, op: 'replace' };
+                    repairedPaths.push(original.path);
+                }
+            }
+        }
+        ops.push(op);
+        const simulated = simulateOps(working, [op]);
+        if (!simulated.error) working = simulated.expected;
+    }
+    return {
+        block: renderPatchBlock(parsed.block, ops),
+        ops,
+        repairedPaths,
+        repaired: parsed.repaired === true || repairedPaths.length > 0,
+        repairReason: [
+            parsed.repairReason,
+            repairedPaths.length
+                ? `已按普通对象现状修正 ${repairedPaths.length} 个 replace/insert 操作类型`
+                : '',
+        ].filter(Boolean).join('；'),
     };
 }
 

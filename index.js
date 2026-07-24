@@ -12,6 +12,7 @@ import {
     hasUsableStatData,
     inferAutomaticallyComputedPaths,
     isPlainObject,
+    normalizeObjectPropertyOps,
     parseInitializationText,
     parsePatchBlock,
     preparePatch,
@@ -19,6 +20,7 @@ import {
     restoreTouchedPaths,
     statDataOf,
     stripAutomaticallyComputedOps,
+    stripRedundantExistingContainerOps,
     validatePatchResult,
 } from './core.mjs';
 import {
@@ -63,7 +65,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.5';
+const VERSION = '1.8.6';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -191,6 +193,7 @@ let activeTaskProgress = null;
 let taskProgressSerial = 0;
 let lastPromptSnapshot = null;
 let lastEnvironmentReport = null;
+let pendingEnvironmentRefresh = null;
 let lastInjectionInspection = {
     status: 'not-yet',
     checkedAt: 0,
@@ -883,9 +886,34 @@ function environmentCheck(kind, label, detail) {
     };
 }
 
-async function inspectEnvironment({ waitForMvu = false } = {}) {
+function hasCompleteMvuApi(Mvu) {
+    return !!(
+        Mvu
+        && typeof Mvu.getMvuData === 'function'
+        && typeof Mvu.parseMessage === 'function'
+        && typeof Mvu.replaceMvuData === 'function'
+    );
+}
+
+function environmentReportHasHealthyMvu(report = lastEnvironmentReport) {
+    return !!report?.checks?.some((check) => check?.label === 'MVU API' && check?.kind === 'ok');
+}
+
+function refreshEnvironmentAfterMvuReady(Mvu) {
+    if (!hasCompleteMvuApi(Mvu) || environmentReportHasHealthyMvu() || pendingEnvironmentRefresh) return;
+    pendingEnvironmentRefresh = Promise.resolve()
+        .then(() => inspectEnvironment({ mvuOverride: Mvu }))
+        .catch((error) => {
+            console.warn('[MVU Auto Doctor] MVU 就绪后的环境自检刷新失败：', error);
+        })
+        .finally(() => {
+            pendingEnvironmentRefresh = null;
+        });
+}
+
+async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {}) {
     const context = getContext();
-    let Mvu = window.Mvu || null;
+    let Mvu = mvuOverride || window.Mvu || null;
     if (!Mvu && waitForMvu) {
         try {
             Mvu = await getMvu();
@@ -898,12 +926,7 @@ async function inspectEnvironment({ waitForMvu = false } = {}) {
         ? environmentCheck('ok', '酒馆上下文', '已连接当前聊天')
         : environmentCheck('error', '酒馆上下文', 'SillyTavern/TauriTavern context 不可用'));
 
-    const completeMvu = !!(
-        Mvu
-        && typeof Mvu.getMvuData === 'function'
-        && typeof Mvu.parseMessage === 'function'
-        && typeof Mvu.replaceMvuData === 'function'
-    );
+    const completeMvu = hasCompleteMvuApi(Mvu);
     checks.push(completeMvu
         ? environmentCheck('ok', 'MVU API', '读取、解析、精确写回接口完整')
         : Mvu
@@ -1140,7 +1163,8 @@ function diagnosticPayload() {
     };
 }
 
-function exportDiagnosticPackage() {
+async function exportDiagnosticPackage() {
+    await inspectEnvironment({ waitForMvu: true });
     const filename = `mvu-auto-doctor-diagnostic-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     const ok = downloadText(filename, safeJson(diagnosticPayload()), 'application/json;charset=utf-8');
     toast(ok ? 'success' : 'warning', ok ? '已导出脱敏诊断包。' : '诊断包导出失败。');
@@ -1789,26 +1813,32 @@ async function collectContinuityWorldContext(context, character) {
 }
 
 async function getMvu() {
-    if (window.Mvu) return window.Mvu;
-    if (mvuPromise) return mvuPromise;
-    mvuPromise = (async () => {
-        const helper = window.TavernHelper;
-        if (typeof helper?.waitGlobalInitialized === 'function') {
-            try {
-                const result = await Promise.race([
-                    helper.waitGlobalInitialized('Mvu'),
-                    new Promise((_, reject) => {
-                        setTimeout(() => reject(new Error('等待 MVU 超时')), 12000);
-                    }),
-                ]);
-                if (result) return result;
-            } catch (error) {
-                console.warn('[MVU Auto Doctor] 等待 MVU 失败：', error);
-            }
+    let Mvu = window.Mvu || null;
+    if (!Mvu) {
+        if (!mvuPromise) {
+            mvuPromise = (async () => {
+                const helper = window.TavernHelper;
+                if (typeof helper?.waitGlobalInitialized === 'function') {
+                    try {
+                        const result = await Promise.race([
+                            helper.waitGlobalInitialized('Mvu'),
+                            new Promise((_, reject) => {
+                                setTimeout(() => reject(new Error('等待 MVU 超时')), 12000);
+                            }),
+                        ]);
+                        if (result) return result;
+                    } catch (error) {
+                        console.warn('[MVU Auto Doctor] 等待 MVU 失败：', error);
+                    }
+                }
+                return window.Mvu || null;
+            })();
         }
-        return window.Mvu || null;
-    })();
-    return mvuPromise;
+        Mvu = await mvuPromise;
+        if (!Mvu) mvuPromise = null;
+    }
+    refreshEnvironmentAfterMvuReady(Mvu);
+    return Mvu;
 }
 
 function sleep(milliseconds) {
@@ -3382,6 +3412,30 @@ function correctionOnlyExpandsReportedLength(correction, built) {
     return /content-under-budget|字数|汉字|篇幅|长度|下限|补字|扩写/iu.test(explanation);
 }
 
+async function recognizeDeterministicMvuSideEffects(Mvu, oldData, parsed, prepared, checked) {
+    const candidates = (checked?.details || []).filter((detail) => (
+        detail?.reason === '补丁未触碰的旧字段必须保留'
+        && detail.actual !== '(路径不存在)'
+    ));
+    if (!candidates.length) return [];
+
+    let repeated;
+    try {
+        repeated = await Mvu.parseMessage(prepared.block, deepClone(oldData));
+    } catch {
+        return [];
+    }
+    const repeatedStat = statDataOf(repeated);
+    if (!repeatedStat) return [];
+
+    return candidates
+        .filter((detail) => {
+            const hit = pointerGet(repeatedStat, detail.path);
+            return hit.found && safeJson(hit.value, 0) === safeJson(detail.actual, 0);
+        })
+        .map((detail) => detail.path);
+}
+
 async function parseCandidate(Mvu, oldData, output, {
     automaticallyComputedPaths = [],
 } = {}) {
@@ -3416,11 +3470,62 @@ async function parseCandidate(Mvu, oldData, output, {
             reason: stripped.error,
             output,
             block: extracted.block,
-            recoveredOutput: extracted.recovered,
+            recoveredOutput: extracted.recovered || stripped.repaired === true,
+            recoveryReason: stripped.repairReason || '',
             correctionWarning,
         };
     }
-    const prepared = preparePatch(stripped.block, oldData);
+    const containerNormalized = stripRedundantExistingContainerOps(stripped.block, oldData);
+    if (containerNormalized.error) {
+        return {
+            status: 'failed',
+            retryable: true,
+            failureKind: 'invalid-patch',
+            reason: containerNormalized.error,
+            output,
+            block: extracted.block,
+            recoveredOutput: extracted.recovered
+                || stripped.repaired === true
+                || containerNormalized.repaired === true,
+            recoveryReason: [
+                stripped.repairReason,
+                containerNormalized.repairReason,
+            ].filter(Boolean).join('；'),
+            correctionWarning,
+        };
+    }
+    const objectOpsNormalized = normalizeObjectPropertyOps(containerNormalized.block, oldData);
+    if (objectOpsNormalized.error) {
+        return {
+            status: 'failed',
+            retryable: true,
+            failureKind: 'invalid-patch',
+            reason: objectOpsNormalized.error,
+            output,
+            block: extracted.block,
+            recoveredOutput: extracted.recovered
+                || stripped.repaired === true
+                || containerNormalized.repaired === true
+                || objectOpsNormalized.repaired === true,
+            recoveryReason: [
+                stripped.repairReason,
+                containerNormalized.repairReason,
+                objectOpsNormalized.repairReason,
+            ].filter(Boolean).join('；'),
+            correctionWarning,
+        };
+    }
+    const locallyRecovered = extracted.recovered
+        || stripped.repaired === true
+        || containerNormalized.repaired === true
+        || objectOpsNormalized.repaired === true;
+    const localRecoveryReason = [
+        extracted.recovered ? extracted.reason : '',
+        stripped.repairReason,
+        containerNormalized.repairReason,
+        objectOpsNormalized.repairReason,
+    ].filter(Boolean).join('；');
+    const prepared = preparePatch(objectOpsNormalized.block, oldData);
     if (prepared.error) {
         return {
             status: 'failed',
@@ -3429,12 +3534,15 @@ async function parseCandidate(Mvu, oldData, output, {
             reason: prepared.error,
             output,
             block: extracted.block,
-            recoveredOutput: extracted.recovered,
+            recoveredOutput: locallyRecovered,
+            recoveryReason: localRecoveryReason,
             correctionWarning,
         };
     }
     prepared.automaticallyComputedPaths = [...automaticallyComputedPaths];
     prepared.ignoredAutomaticallyComputedPaths = stripped.ignoredPaths;
+    prepared.ignoredRedundantContainerPaths = containerNormalized.ignoredPaths;
+    prepared.normalizedObjectPropertyPaths = objectOpsNormalized.repairedPaths;
     if (!prepared.ops.length) {
         return {
             status: 'nochange',
@@ -3443,7 +3551,8 @@ async function parseCandidate(Mvu, oldData, output, {
             output,
             correction,
             ignoredAutomaticallyComputedPaths: stripped.ignoredPaths,
-            recoveredOutput: extracted.recovered,
+            recoveredOutput: locallyRecovered,
+            recoveryReason: localRecoveryReason,
             correctionWarning,
         };
     }
@@ -3459,10 +3568,32 @@ async function parseCandidate(Mvu, oldData, output, {
             reason: `MVU 解析候选补丁失败：${error.message || error}`,
             output,
             block: prepared.block,
+            recoveredOutput: locallyRecovered,
+            recoveryReason: localRecoveryReason,
             correctionWarning,
         };
     }
-    const checked = validatePatchResult(oldData, parsed, prepared);
+    let checked = validatePatchResult(oldData, parsed, prepared);
+    let parserSideEffectPaths = [];
+    if (!checked.ok && !checked.nochange) {
+        parserSideEffectPaths = await recognizeDeterministicMvuSideEffects(
+            Mvu,
+            oldData,
+            parsed,
+            prepared,
+            checked,
+        );
+        if (parserSideEffectPaths.length) {
+            prepared.automaticallyComputedPaths = [
+                ...new Set([
+                    ...prepared.automaticallyComputedPaths,
+                    ...parserSideEffectPaths,
+                ]),
+            ];
+            prepared.detectedParserSideEffectPaths = parserSideEffectPaths;
+            checked = validatePatchResult(oldData, parsed, prepared);
+        }
+    }
     if (!checked.ok) {
         return {
             status: checked.nochange ? 'nochange' : 'failed',
@@ -3472,6 +3603,8 @@ async function parseCandidate(Mvu, oldData, output, {
             details: checked.details,
             output,
             block: prepared.block,
+            recoveredOutput: locallyRecovered,
+            recoveryReason: localRecoveryReason,
             correctionWarning,
         };
     }
@@ -3484,7 +3617,10 @@ async function parseCandidate(Mvu, oldData, output, {
         newData: parsed,
         correction,
         ignoredAutomaticallyComputedPaths: stripped.ignoredPaths,
-        recoveredOutput: extracted.recovered,
+        ignoredRedundantContainerPaths: containerNormalized.ignoredPaths,
+        parserSideEffectPaths,
+        recoveredOutput: locallyRecovered,
+        recoveryReason: localRecoveryReason,
         correctionWarning,
     };
 }
@@ -3746,6 +3882,22 @@ function touchedValuesMatch(data, expectedEntries) {
     });
 }
 
+function changedStatePaths(beforeData, afterData, paths = []) {
+    const beforeStat = statDataOf(beforeData);
+    const afterStat = statDataOf(afterData);
+    if (!beforeStat || !afterStat) return [];
+    return [...new Set(paths || [])].filter((path) => {
+        const before = pointerGet(beforeStat, path);
+        const after = pointerGet(afterStat, path);
+        if (before.found !== after.found) return true;
+        if (!before.found) return false;
+        return !(
+            deepSubset(before.value, after.value)
+            && deepSubset(after.value, before.value)
+        );
+    });
+}
+
 async function discardRepairRecord(recordId, expectedChatId) {
     const namespace = readChatNamespace();
     namespace.repairJournal = (Array.isArray(namespace.repairJournal)
@@ -3790,6 +3942,17 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
     }
 
     const snapshot = deepClone(oldData);
+    const changedAutomaticPaths = changedStatePaths(
+        snapshot,
+        reparsed,
+        candidate.prepared?.automaticallyComputedPaths,
+    );
+    const recordTouched = [
+        ...new Set([
+            ...(candidate.prepared?.touched || []),
+            ...changedAutomaticPaths,
+        ]),
+    ];
     const record = {
         id: `repair_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
         createdAt: Date.now(),
@@ -3802,13 +3965,13 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
         messageFingerprint: captured.fingerprint,
         generationType: captured.generationType,
         beforeFingerprint: fingerprint(safeJson(snapshot, 0)),
-        touched: deepClone(candidate.prepared?.touched || []),
-        beforeTouched: captureTouchedValues(snapshot, candidate.prepared?.touched),
+        touched: deepClone(recordTouched),
+        beforeTouched: captureTouchedValues(snapshot, recordTouched),
         // The whole-tree fingerprint remains diagnostic/legacy fallback. New
         // records use touched snapshots for normalization-tolerant safe undo.
         afterFingerprint: fingerprint(safeJson(reparsed, 0)),
         afterFingerprintPredicted: true,
-        afterTouched: captureTouchedValues(reparsed, candidate.prepared?.touched),
+        afterTouched: captureTouchedValues(reparsed, recordTouched),
         snapshot,
         block: candidate.block,
         frontendSynced: false,
@@ -3859,7 +4022,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
         record.writeVerified = false;
         record.afterFingerprint = fingerprint(safeJson(landed, 0));
         record.afterFingerprintPredicted = false;
-        record.afterTouched = captureTouchedValues(landed, candidate.prepared?.touched);
+        record.afterTouched = captureTouchedValues(landed, recordTouched);
         await persistRepairRecord(record, captured.chatId);
         const rollbackGuard = targetIsCurrent(captured, token, { requireLatest: false });
         let rollbackFailure = null;
@@ -3869,7 +4032,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
                 const rollbackCandidate = restoreTouchedPaths(
                     landed,
                     snapshot,
-                    candidate.prepared?.touched,
+                    recordTouched,
                 );
                 if (!rollbackCandidate) throw new Error('无法构造仅恢复本次触碰路径的回滚状态');
                 await Mvu.replaceMvuData(rollbackCandidate, options);
@@ -3912,7 +4075,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
     record.writeVerified = true;
     record.afterFingerprint = fingerprint(safeJson(landed, 0));
     record.afterFingerprintPredicted = false;
-    record.afterTouched = captureTouchedValues(landed, candidate.prepared?.touched);
+    record.afterTouched = captureTouchedValues(landed, recordTouched);
     // Journal the successful state mutation before touching message text.  If
     // the user changes swipe during the following refresh, the repair remains
     // discoverable and undoable from the original target.
@@ -4210,6 +4373,8 @@ async function runTarget(targetId, {
             ...result,
             attempts: candidate.attempts,
             recoveredOutput: candidate.recoveredOutput,
+            recoveryReason: candidate.recoveryReason,
+            parserSideEffectPaths: candidate.parserSideEffectPaths || [],
             correctionWarning: candidate.correctionWarning,
         };
     } catch (error) {
@@ -8161,6 +8326,11 @@ function buildSettingsPanel() {
         ui.environmentCheckSummary.textContent = '环境自检：正在读取';
         await inspectEnvironment({ waitForMvu: true });
     });
+    wrapper.querySelector('.mvuad-health-card').addEventListener('toggle', async (event) => {
+        if (!event.currentTarget.open) return;
+        ui.environmentCheckSummary.textContent = '环境自检：正在读取';
+        await inspectEnvironment({ waitForMvu: true });
+    });
     wrapper.querySelector('.mvuad-diagnostic-export').addEventListener('click', exportDiagnosticPackage);
     ui.copyPrompt.addEventListener('click', async () => {
         const copied = await copyText(promptSnapshotText());
@@ -8474,7 +8644,7 @@ function bindEvents() {
             disableStoryOracleAutoIfNeeded();
             scheduleOpeningResourceSync();
             scheduleLatestHardContractAudit();
-            inspectEnvironment();
+            inspectEnvironment({ waitForMvu: true });
         };
     const chatEvents = new Set([
         types.CHAT_CHANGED || 'chat_changed',
@@ -8483,6 +8653,14 @@ function bindEvents() {
     for (const eventName of chatEvents) {
         context.eventSource.on(eventName, onChatChanged);
     }
+    context.eventSource.on('global_Mvu_initialized', () => {
+        mvuPromise = null;
+        Promise.resolve()
+            .then(() => inspectEnvironment({ waitForMvu: true }))
+            .catch((error) => {
+                console.warn('[MVU Auto Doctor] MVU 初始化事件后的环境自检刷新失败：', error);
+            });
+    });
 }
 
 function initialize() {
@@ -8499,7 +8677,7 @@ function initialize() {
     applyContinuityInjection();
     scheduleOpeningResourceSync();
     scheduleLatestHardContractAudit();
-    inspectEnvironment();
+    inspectEnvironment({ waitForMvu: true });
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,

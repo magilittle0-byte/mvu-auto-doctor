@@ -3,13 +3,105 @@ import {
     extractUpdateBlockCandidate,
     findOpeningResourceMismatches,
     inferAutomaticallyComputedPaths,
+    normalizeObjectPropertyOps,
     parseInitializationText,
+    parsePatchBlock,
     preparePatch,
     restoreTouchedPaths,
     simulateOps,
     stripAutomaticallyComputedOps,
+    stripRedundantExistingContainerOps,
     validatePatchResult,
 } from '../core.mjs';
+
+const singleObjectPatch = parsePatchBlock(
+    '<UpdateVariable><Analysis>模型漏了数组外壳</Analysis><JSONPatch>'
+    + '{"op":"replace","path":"/账户/代币","value":3}'
+    + '</JSONPatch></UpdateVariable>',
+);
+assert.equal(singleObjectPatch.error, undefined);
+assert.equal(singleObjectPatch.repaired, true);
+assert.equal(singleObjectPatch.ops.length, 1);
+assert.match(singleObjectPatch.repairReason, /单个补丁对象/u);
+assert.deepEqual(
+    JSON.parse(singleObjectPatch.block.match(/<JSONPatch>\s*([\s\S]*?)\s*<\/JSONPatch>/iu)[1]),
+    [{ op: 'replace', path: '/账户/代币', value: 3 }],
+);
+
+const wrappedPatchArray = parsePatchBlock(
+    '<UpdateVariable><Analysis>模型多包了一层</Analysis><JSONPatch>'
+    + '{"operations":[{"op":"delta","path":"/账户/代币","value":1}]}'
+    + '</JSONPatch></UpdateVariable>',
+);
+assert.equal(wrappedPatchArray.error, undefined);
+assert.equal(wrappedPatchArray.repaired, true);
+assert.deepEqual(wrappedPatchArray.ops, [{ op: 'delta', path: '/账户/代币', value: 1 }]);
+
+assert.match(
+    parsePatchBlock(
+        '<UpdateVariable><Analysis>存在歧义</Analysis><JSONPatch>'
+        + '{"operations":[],"patches":[]}'
+        + '</JSONPatch></UpdateVariable>',
+    ).error,
+    /多个候选/u,
+);
+assert.match(
+    parsePatchBlock(
+        '<UpdateVariable><Analysis>任意对象</Analysis><JSONPatch>'
+        + '{"answer":"没有补丁"}'
+        + '</JSONPatch></UpdateVariable>',
+    ).error,
+    /必须是数组或单个合法补丁对象/u,
+);
+assert.match(
+    parsePatchBlock(
+        '<UpdateVariable><Analysis>数组被截断</Analysis><JSONPatch>'
+        + '[{"op":"replace","path":"/账户/代币","value":3}'
+        + '</JSONPatch></UpdateVariable>',
+    ).error,
+    /不是完整的 JSON 数组/u,
+);
+
+const redundantContainer = stripRedundantExistingContainerOps(
+    '<UpdateVariable><Analysis>重复初始化已有背包</Analysis><JSONPatch>'
+    + '[{"op":"insert","path":"/角色/背包","value":{}},'
+    + '{"op":"insert","path":"/角色/背包/子弹","value":{"数量":50}}]'
+    + '</JSONPatch></UpdateVariable>',
+    { stat_data: { 角色: { 背包: {} } } },
+);
+assert.equal(redundantContainer.error, undefined);
+assert.equal(redundantContainer.repaired, true);
+assert.deepEqual(redundantContainer.ignoredPaths, ['/角色/背包']);
+assert.deepEqual(redundantContainer.ops, [
+    { op: 'insert', path: '/角色/背包/子弹', value: { 数量: 50 } },
+]);
+
+const normalizedObjectOps = normalizeObjectPropertyOps(
+    '<UpdateVariable><Analysis>对象字段操作类型混淆</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/角色/天赋/效果/新效果","value":"已触发"},'
+    + '{"op":"insert","path":"/角色/姓名","value":"林默"}]'
+    + '</JSONPatch></UpdateVariable>',
+    { stat_data: { 角色: { 姓名: 'User', 天赋: { 效果: {} } } } },
+);
+assert.equal(normalizedObjectOps.error, undefined);
+assert.equal(normalizedObjectOps.repaired, true);
+assert.deepEqual(normalizedObjectOps.repairedPaths, [
+    '/角色/天赋/效果/新效果',
+    '/角色/姓名',
+]);
+assert.deepEqual(normalizedObjectOps.ops, [
+    { op: 'insert', path: '/角色/天赋/效果/新效果', value: '已触发' },
+    { op: 'replace', path: '/角色/姓名', value: '林默' },
+]);
+assert.equal(
+    normalizeObjectPropertyOps(
+        '<UpdateVariable><Analysis>数组不猜</Analysis><JSONPatch>'
+        + '[{"op":"replace","path":"/列表/1","value":"b"}]'
+        + '</JSONPatch></UpdateVariable>',
+        { stat_data: { 列表: ['a'] } },
+    ).ops[0].op,
+    'replace',
+);
 
 const completeCandidate = extractUpdateBlockCandidate(
     '<UpdateVariable><Analysis>完整</Analysis><JSONPatch>'
@@ -33,6 +125,15 @@ assert.equal(
     ).length,
     2,
 );
+
+const recoveredInnerCloseCandidate = extractUpdateBlockCandidate(
+    '<UpdateVariable><Analysis>外层闭合但内层漏标签</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/账户/代币","value":3}]'
+    + '</UpdateVariable>',
+);
+assert.equal(recoveredInnerCloseCandidate.recovered, true);
+assert.equal(recoveredInnerCloseCandidate.incomplete, false);
+assert.match(recoveredInnerCloseCandidate.block, /<\/JSONPatch>\s*<\/UpdateVariable>/u);
 
 const truncatedCandidate = extractUpdateBlockCandidate(
     '<UpdateVariable><Analysis>被截断</Analysis><JSONPatch>'
