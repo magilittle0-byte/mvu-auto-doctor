@@ -16,6 +16,17 @@ const bundledNodeModules = path.join(
     'node_modules',
     '.pnpm',
 );
+const bundledDirectPlaywright = path.join(
+    process.env.USERPROFILE || '',
+    '.cache',
+    'codex-runtimes',
+    'codex-primary-runtime',
+    'dependencies',
+    'node',
+    'node_modules',
+    'playwright',
+    'index.mjs',
+);
 const bundledPlaywright = fs.existsSync(bundledNodeModules)
     ? fs.readdirSync(bundledNodeModules)
         .filter((name) => /^playwright@/u.test(name))
@@ -32,6 +43,7 @@ const playwrightCandidates = [
     process.env.PLAYWRIGHT_PATH,
     path.join(pluginRoot, 'node_modules', 'playwright', 'index.mjs'),
     bundledPlaywright,
+    bundledDirectPlaywright,
 ].filter(Boolean);
 const playwrightPath = playwrightCandidates.find((candidate) => fs.existsSync(candidate));
 if (!playwrightPath) {
@@ -320,6 +332,34 @@ window.StoryOracleAPI = {
       if (mode === 'invalid-continuity') {
         return '<ContinuityState>{"turn":';
       }
+      if (mode === 'future-continuity-turn') {
+        return '<ContinuityState>' + JSON.stringify({
+          turn: 99,
+          threads: [{
+            id: 'FUTURE-TURN-01',
+            title: 'Future turn must be clamped locally',
+            kind: 'parallel',
+            eventType: 'progress',
+            level: 2,
+            origin: 'main_derivative',
+            relation: 'linked',
+            stage: 'seeded',
+            stageProgress: 1,
+            summary: 'A current-reply consequence starts now.',
+            offscreenBeat: 'The consequence begins during this local tick.',
+            nextBeat: 'It will continue on the next actual chat turn.',
+            trigger: 'The current reply established the cause.',
+            intersection: 'It can meet the main line through the same actors.',
+            seedBasis: 'Current reply created a persistent consequence.',
+            causedBy: ['CURRENT-REPLY'],
+            actors: ['tester'],
+            locations: ['test-room'],
+            knowledge: 'hidden',
+            urgency: 2,
+            lastAdvancedTurn: 99,
+          }],
+        }) + '</ContinuityState>';
+      }
       if (mode === 'replacement-reroll') {
         const branch = calls.continuityRuns === 1 ? 'OLD' : 'NEW';
         const summary = branch === 'OLD'
@@ -414,6 +454,10 @@ window.StoryOracleAPI = {
       return '<UpdateVariable><Analysis>模型漏掉数组外壳</Analysis><JSONPatch>'
         + '{"op":"delta","path":"/账户/代币","value":1}'
         + '</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'single-object-missing-close') {
+      return '<UpdateVariable><Analysis>single object and missing close tags</Analysis><JSONPatch>'
+        + '{"op":"delta","path":"/账户/代币","value":1}';
     }
     if (mode === 'redundant-container') {
       return '<UpdateVariable><Analysis>模型重复初始化已有父对象</Analysis><JSONPatch>'
@@ -619,7 +663,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.6');
+    assert.equal(continuity.version, '1.8.8');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -838,8 +882,16 @@ try {
             floors: panel?.querySelectorAll('.mvuad-forum-comment-floor').length || 0,
             heatBadges: panel?.querySelectorAll('.mvuad-forum-heat').length || 0,
             hotPosts: panel?.querySelectorAll('.mvuad-forum-post[data-heat-tier="hot"]').length || 0,
+            hotComments: panel?.querySelectorAll('.mvuad-forum-hot-comment').length || 0,
             longBodies: panel?.querySelectorAll('.mvuad-forum-body-details').length || 0,
             feedEnds: panel?.querySelectorAll('.mvuad-forum-feed-end').length || 0,
+            headerHeight: panel?.querySelector('.mvuad-forum-header')?.getBoundingClientRect().height || 0,
+            firstPostHeight: panel?.querySelector('.mvuad-forum-post')?.getBoundingClientRect().height || 0,
+            visiblePosts: [...(panel?.querySelectorAll('.mvuad-forum-post') || [])].filter((post) => {
+                const postRect = post.getBoundingClientRect();
+                const feedRect = panel?.querySelector('.mvuad-forum-feed')?.getBoundingClientRect();
+                return feedRect && postRect.top < feedRect.bottom && postRect.bottom > feedRect.top;
+            }).length,
             clearInsideToolbar: panel?.querySelectorAll('.mvuad-forum-toolbar .mvuad-forum-clear').length || 0,
             controlsOpen: !!panel?.querySelector('.mvuad-forum-controls')?.open,
             toolbarVisible: (panel?.querySelector('.mvuad-forum-toolbar')?.getClientRects().length || 0) > 0,
@@ -855,13 +907,23 @@ try {
     assert.ok(forumPanel.left >= 0 && forumPanel.right <= 391);
     assert.equal(forumPanel.posts, 4);
     assert.equal(forumPanel.comments, 6);
-    assert.equal(forumPanel.openComments, 1, '首个活跃帖应默认展开回复，让论坛打开即有互动感');
-    assert.equal(forumPanel.chips, 5);
+    assert.equal(forumPanel.openComments, 0, '信息流首页不得默认展开整串楼层');
+    assert.equal(forumPanel.chips, 3);
     assert.equal(forumPanel.floors, 6);
     assert.equal(forumPanel.heatBadges, 4);
     assert.equal(forumPanel.hotPosts, 1);
+    assert.equal(forumPanel.hotComments, 4, '每个有回复的主题只显示一条紧凑热评预览');
     assert.equal(forumPanel.longBodies, 1);
     assert.equal(forumPanel.feedEnds, 1);
+    assert.ok(forumPanel.headerHeight <= 64, '论坛顶栏不得再次膨胀成大面积空头图');
+    assert.ok(
+        forumPanel.firstPostHeight <= 210,
+        `默认帖子必须保持手机信息流密度（实测 ${forumPanel.firstPostHeight}px）`,
+    );
+    assert.ok(
+        forumPanel.visiblePosts >= 2,
+        `手机首屏至少应同时看见两个主题（实测 ${forumPanel.visiblePosts} 个）`,
+    );
     assert.equal(forumPanel.clearInsideToolbar, 0, '清空操作不得继续与刷新按钮同级拥挤');
     assert.equal(forumPanel.controlsOpen, false, '完整论坛打开时低频来源与管理选项必须默认收起');
     assert.equal(forumPanel.toolbarVisible, false, '收起状态不得继续占据手机首屏');
@@ -870,8 +932,8 @@ try {
     assert.equal(forumPanel.statusHidden, false);
     assert.equal(forumPanel.statusKind, 'ok', '刚完成刷新时只保留明确的成功状态行');
     assert.match(forumPanel.text, /北门面摊/u);
-    assert.match(forumPanel.text, /评论 2/u);
-    assert.match(forumPanel.text, /来源：医生内置论坛/u);
+    assert.match(forumPanel.text, /查看全部 2 条回复/u);
+    assert.match(forumPanel.text, /医生内置论坛/u);
     assert.match(forumPanel.text, /刷新：手动/u);
     assert.equal(forumPanel.externalHidden, true, '未安装Zsd时仍必须显示内置论坛，而不是空跳转');
     await page.click('.mvuad-forum-controls > summary');
@@ -1119,7 +1181,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.6');
+    assert.equal(lifecycle.version, '1.8.8');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1913,9 +1975,14 @@ try {
     await metadataRacePage.evaluate(() => {
         window.__METADATA_RACE__.continuityPromise = window.MvuAutoDoctorAPI.runContinuity();
     });
-    await metadataRacePage.waitForFunction(() => (
-        !!window.__METADATA_RACE__?.pending?.continuity
-    ), null, { timeout: 20000 });
+    const sameConnectionSerialized = await metadataRacePage.evaluate(() => (
+        !window.__METADATA_RACE__?.pending?.continuity
+    ));
+    assert.equal(
+        sameConnectionSerialized,
+        true,
+        'forum and continuity sharing one provider connection must never overlap',
+    );
     await metadataRacePage.evaluate(() => {
         const posts = ['A', 'B', 'C', 'D'].map((suffix, index) => ({
             id: `RACE-${suffix}`,
@@ -1942,6 +2009,9 @@ try {
     });
     await metadataRacePage.waitForFunction(() => (
         window.MvuAutoDoctorAPI.getForumState().turn === 1
+    ), null, { timeout: 20000 });
+    await metadataRacePage.waitForFunction(() => (
+        !!window.__METADATA_RACE__?.pending?.continuity
     ), null, { timeout: 20000 });
     await metadataRacePage.evaluate(() => {
         window.__METADATA_RACE__.pending.continuity(
@@ -2194,12 +2264,13 @@ try {
         calls: structuredClone(window.__TEST__.calls),
         externalButtonHidden: document.querySelector('.mvuad-forum-external')?.hidden,
         summary: document.querySelector('.mvuad-forum-summary')?.textContent || '',
+        controlsMeta: document.querySelector('.mvuad-forum-controls-meta')?.textContent || '',
         note: document.querySelector('.mvuad-forum-source-note')?.textContent || '',
     }));
     assert.equal(externalForumBuiltin.forum.turn, 1, '安装Zsd后手动刷新仍应使用默认内置来源');
     assert.equal(externalForumBuiltin.calls.forumRuns, 1);
     assert.equal(externalForumBuiltin.externalButtonHidden, false);
-    assert.match(externalForumBuiltin.summary, /来源：医生内置论坛/u);
+    assert.match(externalForumBuiltin.controlsMeta, /医生内置论坛/u);
     assert.match(externalForumBuiltin.note, /额外产生模型请求/u);
     await externalForumPage.evaluate(() => {
         const select = document.querySelector('.mvuad-forum-provider-settings');
@@ -2771,6 +2842,52 @@ try {
     assert.equal(singleObjectResult.data.stat_data.账户.代币, 3);
     await singleObjectPage.close();
 
+    const missingCloseDiagnosticPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await missingCloseDiagnosticPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await missingCloseDiagnosticPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const missingCloseDiagnosticResult = await missingCloseDiagnosticPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('single-object-missing-close');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            calls: t.calls.model.length - callsBefore,
+            diagnostics: window.MvuAutoDoctorAPI.getModelDiagnostics(),
+        };
+    });
+    assert.equal(missingCloseDiagnosticResult.result.status, 'applied');
+    assert.equal(missingCloseDiagnosticResult.result.recoveredOutput, true);
+    assert.equal(missingCloseDiagnosticResult.calls, 1);
+    const recoveredDiagnostic = missingCloseDiagnosticResult.diagnostics.find(
+        (entry) => entry.status === 'recovered' && entry.rootType === 'object',
+    );
+    assert.ok(recoveredDiagnostic, 'local structured-output recovery must create a diagnostic entry');
+    assert.deepEqual(
+        {
+            updateOpen: recoveredDiagnostic.tags.updateOpen,
+            updateClose: recoveredDiagnostic.tags.updateClose,
+            jsonOpen: recoveredDiagnostic.tags.jsonOpen,
+            jsonClose: recoveredDiagnostic.tags.jsonClose,
+        },
+        { updateOpen: true, updateClose: false, jsonOpen: true, jsonClose: false },
+        'diagnostics must preserve redacted tag completeness without storing model output',
+    );
+    await missingCloseDiagnosticPage.waitForFunction(() => (
+        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.modelDiagnostics?.some(
+            (entry) => entry.status === 'recovered' && entry.rootType === 'object',
+        )
+    ));
+    const persistedDiagnostic = await missingCloseDiagnosticPage.evaluate(() => (
+        window.__TEST__.context.chatMetadata.mvu_auto_doctor.modelDiagnostics.find(
+            (entry) => entry.status === 'recovered' && entry.rootType === 'object',
+        )
+    ));
+    assert.equal(persistedDiagnostic.output, undefined, 'raw model output must never enter diagnostics');
+    assert.equal(persistedDiagnostic.prompt, undefined, 'raw prompt must never enter diagnostics');
+    assert.equal(persistedDiagnostic.apiKey, undefined, 'API credentials must never enter diagnostics');
+    await missingCloseDiagnosticPage.close();
+
     const redundantContainerPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await redundantContainerPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await redundantContainerPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -3029,6 +3146,26 @@ try {
     assert.equal(transportResult.result.status, 'stalled');
     await transportPage.close();
 
+    const futureTurnPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await futureTurnPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await futureTurnPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const futureTurnResult = await futureTurnPage.evaluate(async () => {
+        const t = window.__TEST__;
+        await window.MvuAutoDoctorAPI.clearContinuityState();
+        t.setMode('future-continuity-turn');
+        const result = await window.MvuAutoDoctorAPI.runContinuity();
+        return {
+            result,
+            state: window.MvuAutoDoctorAPI.getContinuityState(),
+        };
+    });
+    assert.equal(futureTurnResult.result.status, 'applied');
+    assert.equal(futureTurnResult.state.turn, 1, 'model-provided future turn must be clamped to local chat time');
+    assert.equal(futureTurnResult.state.lastTick.turn, 1);
+    assert.equal(futureTurnResult.state.threads[0].createdTurn, 1);
+    assert.equal(futureTurnResult.state.threads[0].lastAdvancedTurn, 1);
+    await futureTurnPage.close();
+
     const invalidContinuityPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await invalidContinuityPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await invalidContinuityPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -3076,6 +3213,7 @@ try {
             result,
             status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
             stats: window.MvuAutoDoctorAPI.getModelCallStats(),
+            diagnostics: window.MvuAutoDoctorAPI.getModelDiagnostics(),
         };
     });
     assert.equal(invalidContinuity.result.status, 'applied');
@@ -3083,6 +3221,13 @@ try {
     assert.match(invalidContinuity.status, /模型返回未通过账本校验/u);
     assert.doesNotMatch(invalidContinuity.status, /模型暂不可用/u);
     assert.equal(invalidContinuity.stats.failed, 0, '格式失败不得误报成连接失败');
+    const invalidContinuityDiagnostic = invalidContinuity.diagnostics.find(
+        (entry) => entry.failureKind === 'invalid-continuity',
+    );
+    assert.ok(invalidContinuityDiagnostic, 'parse failures must remain visible outside connection counters');
+    assert.equal(invalidContinuityDiagnostic.rootType, 'object');
+    assert.equal(invalidContinuityDiagnostic.tags.continuityOpen, true);
+    assert.equal(invalidContinuityDiagnostic.tags.continuityClose, false);
     await invalidContinuityPage.close();
 
     const deletionRacePage = await browser.newPage({ viewport: { width: 390, height: 844 } });

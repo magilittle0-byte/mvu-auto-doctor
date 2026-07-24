@@ -1107,18 +1107,29 @@ export function enforceContinuityPolicy(previous, candidate, {
     };
     const oldById = new Map(before.threads.map((thread) => [thread.id, thread]));
     const newById = new Map(after.threads.map((thread) => [thread.id, thread]));
+    const changeLimit = autonomy === 'expansive'
+        ? 6
+        : autonomy === 'living'
+            ? 3
+            : 1;
+    const requestedTickId = String(after.lastTick?.threadId || '');
     const changedExisting = after.threads
         .filter((thread) => {
             const old = oldById.get(thread.id);
             return old && stableThreadContent(old) !== stableThreadContent(thread);
         })
         .sort((left, right) => (
-            right.lastAdvancedTurn - left.lastAdvancedTurn
+            Number(right.id === requestedTickId) - Number(left.id === requestedTickId)
             || right.urgency - left.urgency
+            || left.lastAdvancedTurn - right.lastAdvancedTurn
         ));
-    const selectedChangedId = changedExisting[0]?.id || '';
+    const selectedChangedIds = changedExisting
+        .slice(0, changeLimit)
+        .map((thread) => thread.id);
+    const selectedChangedIdSet = new Set(selectedChangedIds);
+    const selectedChangedId = selectedChangedIds[0] || '';
     const threads = before.threads.map((old) => {
-        if (old.id !== selectedChangedId) return clone(old);
+        if (!selectedChangedIdSet.has(old.id)) return clone(old);
         const proposed = gateUnmanifestedKnowledge(old, newById.get(old.id));
         proposed.origin = old.origin;
         proposed.createdTurn = old.createdTurn;
@@ -1154,8 +1165,8 @@ export function enforceContinuityPolicy(previous, candidate, {
         && thread.stage !== 'resolved'
         && thread.stage !== 'dormant'
     ));
-    const cadence = autonomy === 'expansive' ? 2 : 3;
-    const autonomousLimit = autonomy === 'expansive' ? 4 : 3;
+    const cadence = 1;
+    const autonomousLimit = autonomy === 'expansive' ? 12 : 8;
     const latestAutonomousCreation = autonomousBefore.reduce(
         (maximum, thread) => Math.max(maximum, thread.createdTurn || 0),
         0,
@@ -1184,13 +1195,13 @@ export function enforceContinuityPolicy(previous, candidate, {
     ));
 
     for (const thread of causal) {
-        if (remaining <= 0 || accepted.length >= 2) break;
+        if (remaining <= 0 || accepted.length >= 3) break;
         accepted.push(thread);
         remaining -= ['resolved', 'dormant'].includes(thread.stage) ? 0 : 1;
     }
     if (
         remaining > 0
-        && accepted.length < 2
+        && accepted.length < 3
         && autonomy !== 'conservative'
         && allowAutonomous
         && cadenceReady

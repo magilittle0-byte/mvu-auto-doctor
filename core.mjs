@@ -251,48 +251,46 @@ export function extractUpdateBlockCandidate(text) {
     }
     const jsonOpenEnd = source.indexOf('>', candidateJsonOpen);
     const arrayStart = source.indexOf('[', jsonOpenEnd + 1);
-    if (jsonOpenEnd < 0 || arrayStart < 0) {
+    const objectStart = source.indexOf('{', jsonOpenEnd + 1);
+    const starts = [arrayStart, objectStart].filter((index) => index >= 0);
+    if (jsonOpenEnd < 0 || !starts.length) {
         return {
             block: '',
             recovered: false,
             incomplete: true,
-            reason: '模型的 <JSONPatch> 在补丁数组之前被截断',
+            reason: '模型的 <JSONPatch> 在补丁 JSON 之前被截断',
         };
     }
-    const arrayEnd = balancedJsonArrayEnd(source, arrayStart);
-    if (arrayEnd < 0) {
+    const jsonStart = Math.min(...starts);
+    const jsonEnd = balancedJsonValueEnd(source, jsonStart);
+    if (jsonEnd < 0) {
         return {
             block: '',
             recovered: false,
             incomplete: true,
-            reason: '模型输出在 JSONPatch 数组完成前被截断',
+            reason: source[jsonStart] === '['
+                ? '模型输出在 JSONPatch 数组完成前被截断'
+                : '模型输出在 JSONPatch 对象完成前被截断',
         };
     }
-    let ops;
-    try {
-        ops = JSON.parse(source.slice(arrayStart, arrayEnd));
-    } catch (error) {
+    const normalized = parseJsonPatchBody(source.slice(jsonStart, jsonEnd));
+    if (normalized.error) {
         return {
             block: '',
             recovered: false,
             incomplete: false,
-            reason: `模型返回的 JSONPatch 无法解析：${error.message || error}`,
+            reason: normalized.error,
         };
     }
-    if (!Array.isArray(ops)) {
-        return {
-            block: '',
-            recovered: false,
-            incomplete: false,
-            reason: '模型返回的 JSONPatch 不是数组',
-        };
-    }
-    const partial = source.slice(updateOpen, arrayEnd);
+    const partial = source.slice(updateOpen, jsonEnd);
     return {
-        block: renderPatchBlock(partial, ops),
+        block: renderPatchBlock(partial, normalized.ops),
         recovered: true,
         incomplete: false,
-        reason: '模型遗漏了闭合标签；已从完整 JSONPatch 数组安全恢复',
+        reason: [
+            '模型遗漏了闭合标签；已从完整 JSONPatch 安全恢复',
+            normalized.repairReason,
+        ].filter(Boolean).join('；'),
     };
 }
 

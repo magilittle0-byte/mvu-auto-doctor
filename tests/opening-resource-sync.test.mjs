@@ -135,6 +135,17 @@ assert.equal(recoveredInnerCloseCandidate.recovered, true);
 assert.equal(recoveredInnerCloseCandidate.incomplete, false);
 assert.match(recoveredInnerCloseCandidate.block, /<\/JSONPatch>\s*<\/UpdateVariable>/u);
 
+const recoveredSingleObjectTail = extractUpdateBlockCandidate(
+    '<UpdateVariable><Analysis>单对象与闭合标签同时缺失</Analysis><JSONPatch>'
+    + '{"op":"replace","path":"/账户/代币","value":3}',
+);
+assert.equal(recoveredSingleObjectTail.recovered, true);
+assert.equal(recoveredSingleObjectTail.incomplete, false);
+assert.match(recoveredSingleObjectTail.reason, /单个补丁对象/u);
+assert.deepEqual(parsePatchBlock(recoveredSingleObjectTail.block).ops, [
+    { op: 'replace', path: '/账户/代币', value: 3 },
+]);
+
 const truncatedCandidate = extractUpdateBlockCandidate(
     '<UpdateVariable><Analysis>被截断</Analysis><JSONPatch>'
     + '[{"op":"replace","path":"/账户/代币","value":',

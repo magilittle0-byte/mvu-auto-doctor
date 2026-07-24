@@ -56,6 +56,7 @@ import {
     forumView,
     normalizeForumState,
 } from './forum-core.mjs';
+import { ConnectionTaskScheduler } from './model-queue.mjs';
 import {
     applyHardContractCorrection,
     auditCorrectionAgencyGuard,
@@ -65,9 +66,9 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.6';
+const VERSION = '1.8.8';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 5;
+const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const IN_CHAT_POSITION = 1;
@@ -112,11 +113,11 @@ const DEFAULTS = Object.freeze({
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
     floatingOrbEnabled: true,
-    continuitySettingsVersion: 4,
-    continuityMaxThreads: 8,
+    continuitySettingsVersion: 5,
+    continuityMaxThreads: 12,
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
-    continuityMaxTokens: 3200,
+    continuityMaxTokens: 12288,
     builtInForumEnabled: true,
     forumAutoRefresh: false,
     forumRefreshMode: 'manual',
@@ -135,6 +136,7 @@ let mvuWriteChain = Promise.resolve();
 let hardContractChain = Promise.resolve();
 let continuityChain = Promise.resolve();
 let forumChain = Promise.resolve();
+const modelConnectionScheduler = new ConnectionTaskScheduler();
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
 const openingSyncPendingKeys = new Set();
@@ -158,6 +160,7 @@ let latestForumStatus = '论坛：等待世界消息';
 let latestForumKind = '';
 // 最近操作时间线：内存即时渲染，并按聊天防抖保存，刷新后仍可追溯。
 const operationLog = [];
+const modelDiagnostics = [];
 let pendingOperationLogSaveTimer = null;
 let modelCallStats = {
     version: 2,
@@ -366,6 +369,19 @@ function getSettings() {
         settings.continuitySettingsVersion = 4;
         changed = true;
     }
+    if (previousContinuitySettingsVersion < 5) {
+        // Earlier builds intentionally kept the living world small while the
+        // reroll and ledger guards were being hardened. Migrate only the exact
+        // old defaults so intentional custom limits remain untouched.
+        if (Number(settings.continuityMaxThreads) === 8) {
+            settings.continuityMaxThreads = DEFAULTS.continuityMaxThreads;
+        }
+        if (Number(settings.continuityMaxTokens) === 3200) {
+            settings.continuityMaxTokens = DEFAULTS.continuityMaxTokens;
+        }
+        settings.continuitySettingsVersion = 5;
+        changed = true;
+    }
     if (changed) context.saveSettingsDebounced?.();
     return settings;
 }
@@ -436,6 +452,100 @@ function normalizedModelCallStats(value) {
             },
         },
     };
+}
+
+function safeDiagnosticReason(value) {
+    return String(value || '')
+        .replace(/\bBearer\s+[^\s,;]+/giu, 'Bearer [redacted]')
+        .replace(/\b(?:sk|key|token|gho)_[A-Za-z0-9_-]{8,}\b/gu, '[redacted]')
+        .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, '[redacted]')
+        .slice(0, 500);
+}
+
+function normalizedModelDiagnostics(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({
+            at: Math.max(0, Number(entry.at) || 0),
+            phase: ['transport', 'parse', 'validation'].includes(entry.phase)
+                ? entry.phase
+                : 'parse',
+            task: String(entry.task || '模型任务').slice(0, 80),
+            channel: ['strict', 'fast', ''].includes(entry.channel) ? entry.channel : '',
+            provider: String(entry.provider || '').slice(0, 40),
+            model: String(entry.model || '').slice(0, 120),
+            status: ['started', 'succeeded', 'failed', 'recovered'].includes(entry.status)
+                ? entry.status
+                : 'failed',
+            durationMs: Math.max(0, Math.floor(Number(entry.durationMs) || 0)),
+            queueWaitMs: Math.max(0, Math.floor(Number(entry.queueWaitMs) || 0)),
+            outputChars: Math.max(0, Math.floor(Number(entry.outputChars) || 0)),
+            attempt: Math.max(0, Math.floor(Number(entry.attempt) || 0)),
+            targetIndex: Number.isInteger(Number(entry.targetIndex))
+                ? Number(entry.targetIndex)
+                : -1,
+            failureKind: String(entry.failureKind || '').slice(0, 80),
+            reason: safeDiagnosticReason(entry.reason),
+            rootType: ['array', 'object', 'other', 'empty', ''].includes(entry.rootType)
+                ? entry.rootType
+                : 'other',
+            tags: {
+                updateOpen: entry.tags?.updateOpen === true,
+                updateClose: entry.tags?.updateClose === true,
+                jsonOpen: entry.tags?.jsonOpen === true,
+                jsonClose: entry.tags?.jsonClose === true,
+                continuityOpen: entry.tags?.continuityOpen === true,
+                continuityClose: entry.tags?.continuityClose === true,
+                forumOpen: entry.tags?.forumOpen === true,
+                forumClose: entry.tags?.forumClose === true,
+            },
+            recovered: entry.recovered === true,
+            recoveryReason: safeDiagnosticReason(entry.recoveryReason),
+        }))
+        .slice(0, 80);
+}
+
+function structuredOutputShape(output) {
+    const source = String(output || '');
+    const lower = source.toLowerCase();
+    const jsonOpen = lower.lastIndexOf('<jsonpatch');
+    const jsonOpenEnd = jsonOpen >= 0 ? source.indexOf('>', jsonOpen) : -1;
+    const continuityOpen = lower.lastIndexOf('<continuitystate');
+    const continuityOpenEnd = continuityOpen >= 0 ? source.indexOf('>', continuityOpen) : -1;
+    const forumOpen = lower.lastIndexOf('<forumupdate');
+    const forumOpenEnd = forumOpen >= 0 ? source.indexOf('>', forumOpen) : -1;
+    const bodyStart = jsonOpenEnd >= 0
+        ? jsonOpenEnd + 1
+        : continuityOpenEnd >= 0
+            ? continuityOpenEnd + 1
+            : forumOpenEnd >= 0
+                ? forumOpenEnd + 1
+                : 0;
+    const body = source.slice(bodyStart).trimStart();
+    const first = body[0] || '';
+    return {
+        rootType: first === '[' ? 'array' : first === '{' ? 'object' : first ? 'other' : 'empty',
+        tags: {
+            updateOpen: /<updatevariable\b/iu.test(source),
+            updateClose: /<\/updatevariable>/iu.test(source),
+            jsonOpen: /<jsonpatch\b/iu.test(source),
+            jsonClose: /<\/jsonpatch>/iu.test(source),
+            continuityOpen: /<continuitystate\b/iu.test(source),
+            continuityClose: /<\/continuitystate>/iu.test(source),
+            forumOpen: /<forumupdate\b/iu.test(source),
+            forumClose: /<\/forumupdate>/iu.test(source),
+        },
+    };
+}
+
+function recordModelDiagnostic(entry) {
+    modelDiagnostics.unshift(normalizedModelDiagnostics([{
+        at: Date.now(),
+        ...entry,
+    }])[0]);
+    modelDiagnostics.splice(80);
+    scheduleOperationLogSave();
 }
 
 function modelCallTaskKey(task) {
@@ -527,6 +637,11 @@ function loadOperationLogFromChat(context = getContext()) {
         ...normalizedOperationLog(namespace.operationLog),
     );
     modelCallStats = normalizedModelCallStats(namespace.modelCallStats);
+    modelDiagnostics.splice(
+        0,
+        modelDiagnostics.length,
+        ...normalizedModelDiagnostics(namespace.modelDiagnostics),
+    );
     renderOperationLog();
     renderModelCallStats();
 }
@@ -546,8 +661,9 @@ function scheduleOperationLogSave() {
         const namespace = readChatNamespace();
         namespace.operationLog = deepClone(operationLog.slice(0, 30));
         namespace.modelCallStats = normalizedModelCallStats(modelCallStats);
+        namespace.modelDiagnostics = normalizedModelDiagnostics(modelDiagnostics);
         await writeChatNamespace(namespace, chatId, {
-            fields: ['operationLog', 'modelCallStats'],
+            fields: ['operationLog', 'modelCallStats', 'modelDiagnostics'],
         });
     }, 700);
 }
@@ -1115,6 +1231,14 @@ function diagnosticPayload() {
             present: !!context?.chatId,
             messageCount: Array.isArray(context?.chat) ? context.chat.length : 0,
             modelCalls: normalizedModelCallStats(modelCallStats),
+            modelQueue: modelConnectionScheduler.snapshot().map((connection) => ({
+                active: connection.active,
+                activeTask: connection.activeLabel,
+                pendingTasks: connection.pending.map((item) => ({
+                    task: item.label,
+                    priority: item.priority,
+                })),
+            })),
             repairJournalCount: Array.isArray(namespace.repairJournal)
                 ? namespace.repairJournal.length
                 : 0,
@@ -1160,6 +1284,7 @@ function diagnosticPayload() {
             }
             : null,
         operationLog: deepClone(operationLog),
+        modelDiagnostics: normalizedModelDiagnostics(modelDiagnostics),
     };
 }
 
@@ -1258,6 +1383,7 @@ function readChatNamespace(context = getContext()) {
             repairJournal: [],
             operationLog: [],
             modelCallStats: normalizedModelCallStats(null),
+            modelDiagnostics: [],
             openingResourceSync: {
                 version: 1,
                 synced: {},
@@ -3094,8 +3220,9 @@ async function callDirectModel(messages, {
     maxTokens = 4096,
     signal = null,
     jsonMode = false,
+    profile: capturedProfile = null,
 } = {}) {
-    const profile = directProfile(getSettings(), channel);
+    const profile = capturedProfile || directProfile(getSettings(), channel);
     const url = openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl);
     if (!url || !profile.model || !profile.apiKey) {
         throw new Error(
@@ -3170,6 +3297,36 @@ async function callDirectModel(messages, {
     return output;
 }
 
+function modelConnectionKey(profile) {
+    const provider = String(profile?.provider || 'tavern');
+    if (provider === 'direct') {
+        const endpoint = openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl)
+            .toLowerCase();
+        // The key never leaves memory and never enters logs. Fingerprinting the
+        // credential makes differently named presets sharing the same upstream
+        // serialize correctly without retaining the raw secret in the Map key.
+        const credential = fingerprint(String(profile.apiKey || ''));
+        return [
+            'direct',
+            profile.viaBackend === true ? 'backend' : 'browser',
+            endpoint,
+            credential,
+        ].join(':');
+    }
+    if (provider === 'story-oracle') return 'story-oracle';
+    return 'tavern-current-connection';
+}
+
+function modelTaskPriority(task, explicitPriority) {
+    if (Number.isFinite(Number(explicitPriority))) return Number(explicitPriority);
+    const text = String(task || '');
+    if (/连接测试/iu.test(text)) return 50;
+    if (/变量|MVU/iu.test(text)) return 40;
+    if (/世界|连续|事件/iu.test(text)) return 30;
+    if (/论坛|帖子/iu.test(text)) return 10;
+    return 20;
+}
+
 async function callModel(messages, options = {}) {
     const settings = getSettings();
     disableStoryOracleAutoIfNeeded();
@@ -3182,6 +3339,10 @@ async function callModel(messages, options = {}) {
     activeModelControllers.add(controller);
     syncTaskCancelButtons();
     const task = String(options.task || '模型任务');
+    const channel = options.channel === 'fast' ? 'fast' : 'strict';
+    const profile = directProfile(settings, channel);
+    const connectionKey = modelConnectionKey(profile);
+    const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
     const messageCopies = (Array.isArray(messages) ? messages : []).map((message) => ({
         role: String(message?.role || ''),
@@ -3195,90 +3356,113 @@ async function callModel(messages, options = {}) {
         messages: messageCopies,
     };
     renderPromptSnapshot();
-    recordModelCall(task, 'started', null, callGenerationSerial);
-
     try {
-        const channel = options.channel === 'fast' ? 'fast' : 'strict';
-        const profile = directProfile(settings, channel);
-        if (profile.provider === 'direct') {
-            const output = await withTimeout(
-                callDirectModel(messages, {
+        return await modelConnectionScheduler.enqueue(connectionKey, async () => {
+            const callStartedAt = Date.now();
+            recordModelCall(task, 'started', null, callGenerationSerial);
+            const succeed = (output) => {
+                recordModelCall(task, 'succeeded', null, callGenerationSerial);
+                recordModelDiagnostic({
+                    phase: 'transport',
+                    task,
                     channel,
-                    maxTokens,
-                    signal: controller.signal,
-                    jsonMode: options.jsonMode === true,
-                }),
-                timeoutMs,
-                `${channel === 'fast' ? '轻量' : '严格'}独立 API`,
-                {
-                    signal: controller.signal,
-                    onTimeout: () => controller.abort('模型请求超时'),
-                },
-            );
-            recordModelCall(task, 'succeeded', null, callGenerationSerial);
-            return output;
-        }
-        if (profile.provider === 'story-oracle') {
-            const api = window.StoryOracleAPI;
-            if (api?.isCompatible?.(1) && typeof api.run === 'function') {
-                try {
-                    const runOptions = {
-                        stream: false,
-                        maxTokens,
-                    };
-                    if (api.capabilities?.abortSignal === true) {
-                        runOptions.signal = controller.signal;
-                    }
+                    provider: profile.provider,
+                    model: profile.model,
+                    status: 'succeeded',
+                    durationMs: Date.now() - callStartedAt,
+                    queueWaitMs: callStartedAt - queuedAt,
+                    outputChars: String(output || '').length,
+                });
+                return output;
+            };
+            try {
+                if (profile.provider === 'direct') {
                     const output = await withTimeout(
-                        api.run(messages, runOptions),
+                        callDirectModel(messages, {
+                            channel,
+                            maxTokens,
+                            signal: controller.signal,
+                            jsonMode: options.jsonMode === true,
+                            profile,
+                        }),
                         timeoutMs,
-                        '故事神谕连接',
+                        `${channel === 'fast' ? '轻量' : '严格'}独立 API`,
                         {
                             signal: controller.signal,
                             onTimeout: () => controller.abort('模型请求超时'),
                         },
                     );
-                    recordModelCall(task, 'succeeded', null, callGenerationSerial);
-                    return String(output || '');
-                } catch (error) {
-                    // Do not silently spend a second call through the Tavern
-                    // connection after the preferred provider already failed.
-                    // Parser/validation failures are retried explicitly by
-                    // runTarget; transport/auth/rate failures are surfaced.
-                    throw error;
+                    return succeed(output);
                 }
-            }
-            throw new Error('所选故事神谕兼容通道不可用');
-        }
+                if (profile.provider === 'story-oracle') {
+                    const api = window.StoryOracleAPI;
+                    if (api?.isCompatible?.(1) && typeof api.run === 'function') {
+                        const runOptions = {
+                            stream: false,
+                            maxTokens,
+                        };
+                        if (api.capabilities?.abortSignal === true) {
+                            runOptions.signal = controller.signal;
+                        }
+                        const output = await withTimeout(
+                            api.run(messages, runOptions),
+                            timeoutMs,
+                            '故事神谕连接',
+                            {
+                                signal: controller.signal,
+                                onTimeout: () => controller.abort('模型请求超时'),
+                            },
+                        );
+                        return succeed(String(output || ''));
+                    }
+                    throw new Error('所选故事神谕兼容通道不可用');
+                }
 
-        const context = getContext();
-        if (typeof context?.generateRaw !== 'function') {
-            throw new Error('酒馆当前模型连接不可用');
-        }
-        const rawOptions = {
-                systemPrompt: messages[0].content,
-                prompt: messages[1].content,
-                responseLength: maxTokens,
-                trimNames: false,
-            };
-        if (context.generateRawSupportsAbortSignal === true) {
-            rawOptions.signal = controller.signal;
-            rawOptions.abortSignal = controller.signal;
-        }
-        const output = await withTimeout(
-            context.generateRaw(rawOptions),
-            timeoutMs,
-            '酒馆当前连接',
-            {
-                signal: controller.signal,
-                onTimeout: () => controller.abort('模型请求超时'),
-            },
-        );
-        recordModelCall(task, 'succeeded', null, callGenerationSerial);
-        return output;
-    } catch (error) {
-        recordModelCall(task, 'failed', error, callGenerationSerial);
-        throw error;
+                const context = getContext();
+                if (typeof context?.generateRaw !== 'function') {
+                    throw new Error('酒馆当前模型连接不可用');
+                }
+                const rawOptions = {
+                    systemPrompt: messages[0].content,
+                    prompt: messages[1].content,
+                    responseLength: maxTokens,
+                    trimNames: false,
+                };
+                if (context.generateRawSupportsAbortSignal === true) {
+                    rawOptions.signal = controller.signal;
+                    rawOptions.abortSignal = controller.signal;
+                }
+                const output = await withTimeout(
+                    context.generateRaw(rawOptions),
+                    timeoutMs,
+                    '酒馆当前连接',
+                    {
+                        signal: controller.signal,
+                        onTimeout: () => controller.abort('模型请求超时'),
+                    },
+                );
+                return succeed(output);
+            } catch (error) {
+                recordModelCall(task, 'failed', error, callGenerationSerial);
+                recordModelDiagnostic({
+                    phase: 'transport',
+                    task,
+                    channel,
+                    provider: profile.provider,
+                    model: profile.model,
+                    status: 'failed',
+                    durationMs: Date.now() - callStartedAt,
+                    queueWaitMs: callStartedAt - queuedAt,
+                    failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
+                    reason: error?.message || error,
+                });
+                throw error;
+            }
+        }, {
+            priority: modelTaskPriority(task, options.priority),
+            signal: controller.signal,
+            label: task,
+        });
     } finally {
         activeModelControllers.delete(controller);
         syncTaskCancelButtons();
@@ -4271,6 +4455,24 @@ async function runTarget(targetId, {
             candidate = await parseCandidate(Mvu, currentData, output, {
                 automaticallyComputedPaths: built.automaticallyComputedPaths,
             });
+            if (candidate.status === 'failed' || candidate.recoveredOutput) {
+                recordModelDiagnostic({
+                    phase: candidate.failureKind === 'validation-failed'
+                        ? 'validation'
+                        : 'parse',
+                    task: '变量诊断',
+                    channel: 'strict',
+                    status: candidate.status === 'failed' ? 'failed' : 'recovered',
+                    attempt: attempt + 1,
+                    targetIndex: resolved,
+                    failureKind: candidate.failureKind,
+                    reason: candidate.reason,
+                    outputChars: String(output || '').length,
+                    ...structuredOutputShape(output),
+                    recovered: candidate.recoveredOutput === true,
+                    recoveryReason: candidate.recoveryReason,
+                });
+            }
         }
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
@@ -4986,8 +5188,9 @@ function buildContinuityMessages({
         autonomousOrigins.has(thread.origin)
         && thread.stage !== 'resolved'
     ));
-    const cadence = settings.continuityAutonomy === 'expansive' ? 2 : 3;
-    const autonomousLimit = settings.continuityAutonomy === 'expansive' ? 4 : 3;
+    const cadence = 1;
+    const autonomousLimit = settings.continuityAutonomy === 'expansive' ? 12 : 8;
+    const changeLimit = settings.continuityAutonomy === 'expansive' ? 6 : 3;
     const latestAutonomousCreation = (base.threads || [])
         .filter((thread) => autonomousOrigins.has(thread.origin))
         .reduce((latest, thread) => Math.max(latest, Number(thread.createdTurn) || 0), 0);
@@ -5004,8 +5207,8 @@ function buildContinuityMessages({
     const autonomyRule = settings.continuityAutonomy === 'conservative'
         ? '保守：只能登记正文/预设/缝合怪已经提出的未决因果，不得新建世界自主事件。'
         : settings.continuityAutonomy === 'expansive'
-            ? '活跃：允许从世界设定建立自主事件；两次新建至少间隔2个账本轮次，未结自主事件最多4条，每轮仍最多只推进1条。'
-            : '活世界：允许从世界设定建立自主事件；两次新建至少间隔3个账本轮次，未结自主事件最多3条，每轮仍最多只推进1条。';
+            ? '活跃：允许每轮从世界设定建立1条自主事件，未结自主事件最多12条；每轮可让同一因果簇内最多6条旧事件发生实质变化。'
+            : '活世界：允许每轮从世界设定建立1条自主事件，未结自主事件最多8条；每轮可让同一因果簇内最多3条旧事件发生实质变化。';
     const system = [
         '你是一个通用的跑团“活世界事件与状态”记账与调度引擎。你不写主回复，只维护结构化事件账本与分类世界快照。',
         '你必须服从当前角色卡与已发生正文，不得套用别的角色卡设定。',
@@ -5015,8 +5218,8 @@ function buildContinuityMessages({
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 调用模型前，本地事件时钟已为每条未结事件掷出success/hold/setback，并更新stageProgress；这是防止世界永久停摆的基线，不等于所有事件都要在正文显现。你可按真实能力、资源、信息、距离和阻力纠正阶段、进度与stalled，但不得为了热闹强推。',
-        '- 每个账本轮次最多让一条旧事件产生新的实质叙事变化；其他事件可只保留本地时钟结果。推进可以完全发生在幕后，不要求正文出现镜头或伏笔。已有事件优先，禁止为同一因果另造同义ID。',
-        '- 每个完成的AI回复都必须运行一次世界调度，但“运行调度”不等于机械推进时间。通常让一条未结事件推进、显现、转入休眠或结束；若正文只过去片刻、trigger尚未满足或因果前提缺失，可原样保留线程，并在lastTick登记held、目标threadId和不少于8字的具体依据。',
+        `- 每个账本轮次可让同一因果簇内最多${changeLimit}条旧事件产生新的实质叙事变化；优先选择共享人物、势力、地点、资源、传播链或causedBy关系的稀疏事件簇。其他事件只保留本地时钟结果。`,
+        '- 每个完成的AI回复都必须运行一次世界调度，但“运行调度”不等于所有事件机械前进。通常让一个相关事件簇推进、显现、转入休眠或结束；若正文只过去片刻、trigger尚未满足或因果前提缺失，可原样保留线程，并在lastTick登记held、目标threadId和不少于8字的具体依据。',
         '- held不是偷懒选项：不得只写“暂不推进/无变化”。必须说明是哪一项时间、地点、人物行动或因果条件尚未成立；存在更合适的其他未结事件时，应改调度其他事件。',
         '- 本轮正文若明确造成新的持续因果，必须登记一条main_derivative新事件；它不占用“推进一条旧事件”的名额。A造成B、B留下C时，用seedBasis写明正文证据。',
         '- 区分hidden、rumor、observed。隐藏事实不能令不知情角色全知，必须经过观察、传播、调查或后果显现。',
@@ -5066,9 +5269,10 @@ function buildContinuityMessages({
         '【knowledge枚举】hidden / rumor / observed',
         '【eventType】conflict表示会积累至爆发/消散的冲突；progress表示会积累至完成/失败的事务。level 1-4：冲突level越高越易升级，事务level越高越难完成。',
         '【stageProgress】非终局阶段1-8；达到9由本地晋级。stalled只是暂时受阻，恢复条件写入trigger或offscreenBeat；永久失去条件才resolved并将outcome写failed/dissipated。',
+        '- threads采用增量输出：只返回本轮实质变化的旧线程和新线程，未返回的旧线程由本地账本原样保留。更新旧线程必须沿用稳定ID，禁止输出同义副本。world同样只返回增量。',
         jsonOnly
-            ? '只输出一个合法JSON对象，不要标签、代码围栏或解释；threads必须保留所有旧线程及稳定ID，world只返回增量。'
-            : '只输出一个<ContinuityState>包裹的JSON对象；threads必须保留所有旧线程及稳定ID，world只返回增量。',
+            ? '只输出一个合法JSON对象，不要标签、代码围栏或解释。'
+            : '只输出一个<ContinuityState>包裹的JSON对象。',
     ].join('\n');
     const markerText = markers.taggedSections
         .map((item) => `<${item.tag}>${item.content}</${item.tag}>`)
@@ -5277,7 +5481,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                     parsed.raw?.world,
                     { turn: tickTurn },
                 );
-                candidate.turn = Math.max(tickTurn, Number(candidate.turn) || 0);
+                // The local chat index is the only authority for world time.
+                // Models occasionally echo a guessed future turn; accepting it
+                // made rerolls drift to state.turn=N+1 while lastTick stayed N.
+                candidate.turn = tickTurn;
                 candidate = preserveMissingThreadClockFields(
                     scheduledBase,
                     candidate,
@@ -5285,7 +5492,21 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 );
                 validOutput = true;
             }
-            else retryReason = parsed.error;
+            else {
+                retryReason = parsed.error;
+                recordModelDiagnostic({
+                    phase: 'parse',
+                    task: '活世界整理',
+                    channel: 'fast',
+                    status: 'failed',
+                    attempt: attempt + 1,
+                    targetIndex: captured.index,
+                    failureKind: 'invalid-continuity',
+                    reason: parsed.error,
+                    outputChars: String(output || '').length,
+                    ...structuredOutputShape(output),
+                });
+            }
         } else {
             retryReason = '模型没有返回账本JSON';
         }
@@ -5838,6 +6059,18 @@ async function runForumTarget(captured, {
         const parsed = extractForumUpdate(output);
         if (!parsed.update) {
             retryReason = parsed.error;
+            recordModelDiagnostic({
+                phase: 'parse',
+                task: '内置论坛刷新',
+                channel: 'fast',
+                status: 'failed',
+                attempt: attempt + 1,
+                targetIndex: captured.index,
+                failureKind: 'invalid-forum-update',
+                reason: parsed.error,
+                outputChars: String(output || '').length,
+                ...structuredOutputShape(output),
+            });
             continue;
         }
         safelyRepairedJson ||= parsed.repaired === true;
@@ -6642,32 +6875,35 @@ function buildForumPostCard(post, {
     heading.className = 'mvuad-forum-post-heading';
     const board = document.createElement('span');
     board.className = 'mvuad-forum-board-badge';
-    board.textContent = post.board;
+    board.textContent = FORUM_KIND_LABELS[post.kind] || post.board;
     const title = document.createElement('b');
     title.className = 'mvuad-forum-post-title';
     title.textContent = post.title;
-    const heat = document.createElement('span');
-    heat.className = 'mvuad-forum-heat';
-    heat.title = `帖子热度 ${heatValue}`;
-    heat.textContent = heatValue > 50
-        ? `🔥🔥 ${heatValue}`
-        : heatValue > 20
-            ? `🔥 ${heatValue}`
-            : `热 ${heatValue}`;
-    heading.append(board, title, heat);
+    heading.append(board, title);
 
     const meta = document.createElement('div');
     meta.className = 'mvuad-forum-post-meta';
     meta.dataset.kind = post.kind;
     const age = Math.max(0, Number(currentTurn) - Number(post.updatedTurn));
-    meta.textContent = [
+    const authorMeta = document.createElement('span');
+    authorMeta.className = 'mvuad-forum-post-author';
+    authorMeta.textContent = [
         post.author,
-        FORUM_KIND_LABELS[post.kind] || post.kind,
-        `第 ${post.updatedTurn} 页`,
-        age === 0 ? '本页更新' : `${age} 回合前`,
-        post.causalSignal ? '已形成外部影响' : '',
+        age === 0 ? '刚刚' : `${age} 回合前`,
     ].filter(Boolean).join(' · ');
-    card.append(heading, meta);
+    const metrics = document.createElement('span');
+    metrics.className = 'mvuad-forum-post-metrics';
+    const heat = document.createElement('span');
+    heat.className = 'mvuad-forum-heat';
+    heat.title = `帖子热度 ${heatValue}`;
+    heat.textContent = `♥ ${heatValue}`;
+    const replyCount = document.createElement('span');
+    replyCount.className = 'mvuad-forum-reply-count';
+    replyCount.title = `${post.comments.length} 条回复`;
+    replyCount.textContent = `▰ ${post.comments.length}`;
+    metrics.append(heat, replyCount);
+    meta.append(authorMeta, metrics);
+    card.append(heading);
 
     const bodyText = String(post.body || '');
     if (bodyText.length > 180) {
@@ -6691,22 +6927,48 @@ function buildForumPostCard(post, {
         card.appendChild(body);
     }
 
-    if (post.tags.length) {
+    if (post.tags.length || post.causalSignal) {
         const tags = document.createElement('div');
         tags.className = 'mvuad-forum-tags';
-        for (const value of post.tags) {
+        const values = [
+            ...post.tags.slice(0, 3),
+            ...(post.causalSignal ? ['已形成外部影响'] : []),
+        ];
+        for (const value of values) {
             const tag = document.createElement('span');
             tag.textContent = `#${value}`;
             tags.appendChild(tag);
         }
         card.appendChild(tags);
     }
+    card.appendChild(meta);
 
     const comments = document.createElement('details');
     comments.className = 'mvuad-forum-comments';
     comments.open = openComments && post.comments.length > 0;
     const summary = document.createElement('summary');
-    summary.textContent = `评论 ${post.comments.length}`;
+    summary.textContent = post.comments.length
+        ? `查看全部 ${post.comments.length} 条回复`
+        : '暂时没有回复';
+    if (post.comments.length) {
+        const hotComment = [...post.comments].sort(
+            (left, right) => (Number(right.likes) || 0) - (Number(left.likes) || 0),
+        )[0];
+        const preview = document.createElement('div');
+        preview.className = 'mvuad-forum-hot-comment';
+        const label = document.createElement('b');
+        label.textContent = heatValue > 50 ? '热评' : '新回复';
+        const body = document.createElement('span');
+        body.textContent = hotComment.body;
+        const byline = document.createElement('small');
+        byline.textContent = `— ${hotComment.author}`;
+        preview.append(label, body, byline);
+        preview.addEventListener('click', () => {
+            comments.open = true;
+            comments.querySelector('summary')?.focus?.({ preventScroll: true });
+        });
+        card.appendChild(preview);
+    }
     comments.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'mvuad-forum-comment-list';
@@ -6916,11 +7178,9 @@ function renderForum() {
         summaryLead.className = 'mvuad-forum-summary-lead';
         summaryLead.textContent = state.summary || '世界各处的闲聊、求助与风声';
         const chips = [
-            `来源：${forumProviderLabel(settings.forumProvider)}`,
-            autoState,
             `第 ${state.turn} 页`,
-            `${state.active.length} 个活跃主题`,
-            `更新：${formatLedgerTime(state.updatedAt)}`,
+            `${state.active.length} 个主题`,
+            autoState,
         ].map((value) => {
             const chip = document.createElement('span');
             chip.className = 'mvuad-forum-chip';
@@ -6973,9 +7233,9 @@ function renderForum() {
         return true;
     });
     if (ui.forumFeed) {
-        const cards = filtered.map((post, index) => (
+        const cards = filtered.map((post) => (
             buildForumPostCard(post, {
-                openComments: index === 0,
+                openComments: false,
                 currentTurn: state.turn,
             })
         ));
@@ -7092,15 +7352,26 @@ function buildForumUi() {
     panel.innerHTML = `
         <div class="mvuad-forum-shell">
             <div class="mvuad-forum-header">
-                <div><b>世界论坛</b><span>独立于正文 · v${VERSION}</span><span class="mvuad-forum-primary-mode">手动刷新</span></div>
+                <div class="mvuad-forum-brand">
+                    <span class="mvuad-forum-brand-mark" aria-hidden="true">界</span>
+                    <span><b>世界论坛</b><small>独立社区 · v${VERSION}</small></span>
+                </div>
                 <div class="mvuad-forum-header-actions">
-                    <button class="menu_button mvuad-forum-refresh-main" type="button">刷新论坛</button>
+                    <span class="mvuad-forum-primary-mode">手动刷新</span>
+                    <button class="mvuad-forum-refresh-main" type="button" aria-label="刷新论坛" title="刷新论坛"><span aria-hidden="true">↻</span><small>刷新</small></button>
                     <button class="mvuad-forum-close" type="button" aria-label="关闭论坛">×</button>
                 </div>
             </div>
+            <div class="mvuad-forum-board-head">
+                <div>
+                    <b>今日世界动态</b>
+                    <span>路人、行商、旅客与当地人的公共讨论</span>
+                </div>
+                <div class="mvuad-forum-summary"></div>
+            </div>
             <details class="mvuad-forum-controls">
                 <summary>
-                    <span>来源与管理</span>
+                    <span>⚙ 来源与刷新设置</span>
                     <span class="mvuad-forum-controls-meta"></span>
                 </summary>
                 <div class="mvuad-forum-controls-body">
@@ -7127,7 +7398,6 @@ function buildForumUi() {
                     </div>
                     <div class="mvuad-forum-source-note" hidden></div>
                     <div class="mvuad-forum-status" role="status" hidden></div>
-                    <div class="mvuad-forum-summary"></div>
                     <div class="mvuad-forum-utility">
                         <button class="mvuad-forum-clear" type="button">清空当前内置帖子</button>
                     </div>
@@ -8701,6 +8971,7 @@ function initialize() {
         getEnvironmentReport: () => deepClone(lastEnvironmentReport),
         getInjectionInspection: () => deepClone(lastInjectionInspection),
         getModelCallStats: () => deepClone(normalizedModelCallStats(modelCallStats)),
+        getModelDiagnostics: () => deepClone(normalizedModelDiagnostics(modelDiagnostics)),
         getLastPromptInfo: () => lastPromptSnapshot
             ? {
                 task: lastPromptSnapshot.task,
