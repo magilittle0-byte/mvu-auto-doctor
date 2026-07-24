@@ -95,6 +95,7 @@ let throwRollbackAfterCorruption = false;
 let normalizeReplacements = false;
 let normalizationVersion = 0;
 let recomputeDerivedFields = false;
+let recomputeUnlistedLifeState = false;
 const chat = [
   { is_user: false, is_system: false, mes: '开场', swipe_id: 0, extra: {} },
   { is_user: true, is_system: false, mes: '继续观察港口', swipe_id: 0, extra: {} },
@@ -163,7 +164,10 @@ window.toastr = {
   success(message) { calls.toasts.push(['success', String(message)]); },
   warning(message) { calls.toasts.push(['warning', String(message)]); },
 };
-window.Mvu = {
+const delayedMvuParam = new URLSearchParams(location.search).get('delayedMvu');
+const delayedMvuBoot = delayedMvuParam !== null;
+const delayedMvuDelay = Math.max(100, Number(delayedMvuParam) || 100);
+const mvuApi = {
   isDuringExtraAnalysis: () => mvuAlwaysBusy,
   getMvuData: (options = {}) => (
     messageScopedMvuUnavailable && options.message_id !== 'latest'
@@ -181,6 +185,12 @@ window.Mvu = {
         for (const part of parts.slice(0, -1)) parent = parent[part];
         parent[parts.at(-1)] = op.value;
       }
+      if (op.op === 'insert') {
+        const parts = op.path.slice(1).split('/').map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+        let parent = data.stat_data;
+        for (const part of parts.slice(0, -1)) parent = parent[part];
+        parent[parts.at(-1)] = structuredClone(op.value);
+      }
     }
     if (recomputeDerivedFields) {
       const base = data.stat_data?.角色?.属性?.基础;
@@ -190,6 +200,17 @@ window.Mvu = {
         actual.STR = base.STR;
         derived.MP_最大 = base.STR * 10;
         derived.闪避值 = base.STR + 5;
+      }
+    }
+    if (recomputeUnlistedLifeState) {
+      const base = data.stat_data?.角色?.属性?.基础;
+      const actual = data.stat_data?.角色?.属性?.实际;
+      const derived = data.stat_data?.角色?.衍生;
+      const status = data.stat_data?.角色?.状态;
+      if (base && actual && derived && status) {
+        actual.CON = base.CON;
+        derived.HP_最大 = base.CON * 15;
+        status.生命状态 = derived.HP_当前 < derived.HP_最大 ? '受伤' : '健康';
       }
     }
     return data;
@@ -228,6 +249,13 @@ window.Mvu = {
     }
   },
 };
+window.Mvu = delayedMvuBoot ? null : mvuApi;
+if (delayedMvuBoot) {
+  setTimeout(() => {
+    window.Mvu = mvuApi;
+    context.eventSource.emit('global_Mvu_initialized');
+  }, delayedMvuDelay);
+}
 window.StoryOracleAPI = {
   isCompatible: () => true,
   context: { getSettings: () => ({ autoDiagnoseEnabled: false }) },
@@ -377,6 +405,32 @@ window.StoryOracleAPI = {
       return '<UpdateVariable><Analysis>补丁数组完整但闭合标签丢失</Analysis><JSONPatch>'
         + '[{"op":"delta","path":"/账户/代币","value":1}]';
     }
+    if (mode === 'missing-inner-close') {
+      return '<UpdateVariable><Analysis>外层闭合但 JSONPatch 闭合标签丢失</Analysis><JSONPatch>'
+        + '[{"op":"delta","path":"/账户/代币","value":1}]'
+        + '</UpdateVariable>';
+    }
+    if (mode === 'single-object-patch') {
+      return '<UpdateVariable><Analysis>模型漏掉数组外壳</Analysis><JSONPatch>'
+        + '{"op":"delta","path":"/账户/代币","value":1}'
+        + '</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'redundant-container') {
+      return '<UpdateVariable><Analysis>模型重复初始化已有父对象</Analysis><JSONPatch>'
+        + '[{"op":"insert","path":"/账户","value":{}},'
+        + '{"op":"delta","path":"/账户/代币","value":1}]'
+        + '</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'object-op-mismatch') {
+      return '<UpdateVariable><Analysis>新对象字段误用了 replace</Analysis><JSONPatch>'
+        + '[{"op":"replace","path":"/账户/奖励","value":"已领取"}]'
+        + '</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'unlisted-host-side-effect') {
+      return '<UpdateVariable><Analysis>只修改可写的体力基础值。</Analysis>'
+        + '<JSONPatch>[{"op":"replace","path":"/角色/属性/基础/CON","value":8}]'
+        + '</JSONPatch></UpdateVariable>';
+    }
     if (mode === 'malformed-correction-valid-variable') {
       return '<UpdateVariable><Analysis>变量区块正确</Analysis><JSONPatch>'
         + '[{"op":"delta","path":"/账户/代币","value":1}]'
@@ -405,6 +459,7 @@ window.__TEST__ = {
   setMessageScopedMvuUnavailable(value) { messageScopedMvuUnavailable = !!value; },
   setNormalizeReplacements(value) { normalizeReplacements = !!value; },
   setRecomputeDerivedFields(value) { recomputeDerivedFields = !!value; },
+  setRecomputeUnlistedLifeState(value) { recomputeUnlistedLifeState = !!value; },
   armCorruptReplace() { corruptNextReplace = true; },
   armCorruptThenThrowRollback() {
     corruptNextReplace = true;
@@ -457,22 +512,23 @@ function typeOf(file) {
 }
 
 const server = http.createServer((request, response) => {
-    if (request.url === '/') {
+    const requestPath = new URL(request.url, 'http://127.0.0.1').pathname;
+    if (requestPath === '/') {
         response.writeHead(200, { 'content-type': typeOf('.html') });
         response.end(harness);
         return;
     }
-    if (request.url === '/scripts/world-info.js') {
+    if (requestPath === '/scripts/world-info.js') {
         response.writeHead(200, { 'content-type': typeOf('.js') });
         response.end(worldInfoModule);
         return;
     }
-    if (request.url === '/scripts/openai.js') {
+    if (requestPath === '/scripts/openai.js') {
         response.writeHead(200, { 'content-type': typeOf('.js') });
         response.end(openaiModule);
         return;
     }
-    const file = path.join(pluginRoot, request.url.slice(1));
+    const file = path.join(pluginRoot, requestPath.slice(1));
     if (file.startsWith(pluginRoot) && fs.existsSync(file)) {
         response.writeHead(200, { 'content-type': typeOf(file) });
         response.end(fs.readFileSync(file));
@@ -563,7 +619,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.5');
+    assert.equal(continuity.version, '1.8.6');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -1063,7 +1119,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.5');
+    assert.equal(lifecycle.version, '1.8.6');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2548,6 +2604,62 @@ try {
     );
     await derivedCardPage.close();
 
+    const unlistedSideEffectPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await unlistedSideEffectPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await unlistedSideEffectPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const unlistedSideEffectResult = await unlistedSideEffectPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.characters[0].data.extensions.tavern_helper.scripts = [{
+            name: '变量结构',
+            enabled: true,
+            content: 'registerMvuSchema(z.object({角色:z.object({属性:z.any(),衍生:z.any(),状态:z.any()})}))',
+        }];
+        t.context.characters[0].data.character_book.entries[0].content = 'CON 按正文明确变化更新。';
+        t.setLatestData({
+            stat_data: {
+                角色: {
+                    属性: { 基础: { CON: 5 }, 实际: { CON: 5 } },
+                    衍生: { HP_当前: 75, HP_最大: 75 },
+                    状态: { 生命状态: '健康' },
+                },
+            },
+            display_data: {},
+        });
+        t.setRecomputeUnlistedLifeState(true);
+        t.setMode('unlisted-host-side-effect');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        const data = t.getLatestData();
+        const undone = await window.MvuAutoDoctorAPI.undoLast();
+        return {
+            result,
+            data,
+            undone,
+            afterUndo: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(unlistedSideEffectResult.result.status, 'applied');
+    assert.equal(unlistedSideEffectResult.calls, 1, '确定性的 MVU 本地联动不得触发模型重试');
+    assert.equal(unlistedSideEffectResult.data.stat_data.角色.属性.基础.CON, 8);
+    assert.equal(unlistedSideEffectResult.data.stat_data.角色.属性.实际.CON, 8);
+    assert.equal(unlistedSideEffectResult.data.stat_data.角色.衍生.HP_最大, 120);
+    assert.equal(unlistedSideEffectResult.data.stat_data.角色.状态.生命状态, '受伤');
+    assert.equal(unlistedSideEffectResult.undone, true);
+    assert.equal(unlistedSideEffectResult.afterUndo.stat_data.角色.属性.基础.CON, 5);
+    assert.equal(unlistedSideEffectResult.afterUndo.stat_data.角色.属性.实际.CON, 5);
+    assert.equal(unlistedSideEffectResult.afterUndo.stat_data.角色.衍生.HP_最大, 75);
+    assert.equal(unlistedSideEffectResult.afterUndo.stat_data.角色.状态.生命状态, '健康');
+    assert.deepEqual(
+        new Set(unlistedSideEffectResult.result.parserSideEffectPaths),
+        new Set([
+            '/角色/属性/实际/CON',
+            '/角色/衍生/HP_最大',
+            '/角色/状态/生命状态',
+        ]),
+    );
+    await unlistedSideEffectPage.close();
+
     const analysisRetryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await analysisRetryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await analysisRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -2611,6 +2723,138 @@ try {
     assert.equal(recoveryResult.calls, 1, '完整 JSONPatch 只缺尾标签时应本地恢复，不浪费重试');
     assert.equal(recoveryResult.data.stat_data.账户.代币, 3);
     await recoveryPage.close();
+
+    const innerCloseRecoveryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await innerCloseRecoveryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await innerCloseRecoveryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const innerCloseRecoveryResult = await innerCloseRecoveryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('missing-inner-close');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(innerCloseRecoveryResult.result.status, 'applied');
+    assert.equal(innerCloseRecoveryResult.result.recoveredOutput, true);
+    assert.equal(innerCloseRecoveryResult.result.attempts, 1);
+    assert.equal(
+        innerCloseRecoveryResult.calls,
+        1,
+        '外层已闭合但 JSONPatch 闭合标签缺失时也必须本地恢复',
+    );
+    assert.equal(innerCloseRecoveryResult.data.stat_data.账户.代币, 3);
+    await innerCloseRecoveryPage.close();
+
+    const singleObjectPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await singleObjectPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await singleObjectPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const singleObjectResult = await singleObjectPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('single-object-patch');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(singleObjectResult.result.status, 'applied');
+    assert.equal(singleObjectResult.result.recoveredOutput, true);
+    assert.match(singleObjectResult.result.recoveryReason, /单个补丁对象/u);
+    assert.equal(singleObjectResult.result.attempts, 1);
+    assert.equal(singleObjectResult.calls, 1, '单对象补丁必须本地归一化，不得增加模型调用');
+    assert.equal(singleObjectResult.data.stat_data.账户.代币, 3);
+    await singleObjectPage.close();
+
+    const redundantContainerPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await redundantContainerPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await redundantContainerPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const redundantContainerResult = await redundantContainerPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('redundant-container');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(redundantContainerResult.result.status, 'applied');
+    assert.equal(redundantContainerResult.result.recoveredOutput, true);
+    assert.match(redundantContainerResult.result.recoveryReason, /冗余空容器/u);
+    assert.equal(redundantContainerResult.result.attempts, 1);
+    assert.equal(redundantContainerResult.calls, 1, '冗余父对象 insert 必须本地移除，不得触发模型重试');
+    assert.equal(redundantContainerResult.data.stat_data.账户.代币, 3);
+    await redundantContainerPage.close();
+
+    const objectOpMismatchPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await objectOpMismatchPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await objectOpMismatchPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const objectOpMismatchResult = await objectOpMismatchPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('object-op-mismatch');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(objectOpMismatchResult.result.status, 'applied');
+    assert.equal(objectOpMismatchResult.result.recoveredOutput, true);
+    assert.match(objectOpMismatchResult.result.recoveryReason, /replace\/insert/u);
+    assert.equal(objectOpMismatchResult.result.attempts, 1);
+    assert.equal(objectOpMismatchResult.calls, 1, '普通对象字段的 replace/insert 混淆必须本地修正');
+    assert.equal(objectOpMismatchResult.data.stat_data.账户.奖励, '已领取');
+    await objectOpMismatchPage.close();
+
+    const delayedMvuPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const delayedMvuErrors = [];
+    delayedMvuPage.on('pageerror', (error) => delayedMvuErrors.push(String(error?.stack || error)));
+    delayedMvuPage.on('console', (message) => {
+        if (message.type() === 'error') delayedMvuErrors.push(message.text());
+    });
+    await delayedMvuPage.goto(`http://127.0.0.1:${port}/?delayedMvu=2500`, { waitUntil: 'networkidle' });
+    try {
+        await delayedMvuPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    } catch (error) {
+        throw new Error(`delayed MVU bootstrap failed: ${delayedMvuErrors.join('\n') || error.message}`);
+    }
+    const delayedMvuResult = await delayedMvuPage.evaluate(async () => {
+        let stale = window.MvuAutoDoctorAPI.getEnvironmentReport();
+        for (let index = 0; index < 80; index += 1) {
+            stale = window.MvuAutoDoctorAPI.getEnvironmentReport();
+            if (stale?.checks?.some((check) => check.label === 'MVU API' && check.kind === 'error')) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        for (let index = 0; index < 160 && !window.Mvu; index += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        for (let index = 0; index < 80; index += 1) {
+            const report = window.MvuAutoDoctorAPI.getEnvironmentReport();
+            if (report?.checks?.some((check) => check.label === 'MVU API' && check.kind === 'ok')) {
+                return { stale, refreshed: report };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        return { stale, refreshed: window.MvuAutoDoctorAPI.getEnvironmentReport() };
+    });
+    assert.ok(
+        delayedMvuResult.stale.checks.some((check) => check.label === 'MVU API' && check.kind === 'error'),
+        '探针必须先建立一个过期的 MVU 红灯',
+    );
+    assert.ok(
+        delayedMvuResult.refreshed.checks.some((check) => check.label === 'MVU API' && check.kind === 'ok'),
+        'TavernHelper 通知 MVU 初始化后必须自动刷新过期环境报告',
+    );
+    await delayedMvuPage.close();
 
     const optionalCorrectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await optionalCorrectionPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
