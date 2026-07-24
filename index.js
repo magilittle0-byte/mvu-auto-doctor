@@ -10,6 +10,7 @@ import {
     findMvuRuleEntries,
     fingerprint,
     hasUsableStatData,
+    inferAutomaticallyComputedPaths,
     isPlainObject,
     parseInitializationText,
     parsePatchBlock,
@@ -17,6 +18,7 @@ import {
     pointerGet,
     restoreTouchedPaths,
     statDataOf,
+    stripAutomaticallyComputedOps,
     validatePatchResult,
 } from './core.mjs';
 import {
@@ -61,7 +63,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.2';
+const VERSION = '1.8.3';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -2455,6 +2457,10 @@ async function buildAuditMessages({
         settings.contextMessages,
     );
     const currentStat = statDataOf(currentData);
+    const automaticallyComputedPaths = inferAutomaticallyComputedPaths(currentStat, {
+        schemaTexts: schemaScripts.map((script) => script.content),
+        ruleTexts,
+    });
     const lifecycleHints = buildLifecycleHistoryHints(
         currentStat,
         rules,
@@ -2583,6 +2589,11 @@ async function buildAuditMessages({
         '=== 当前 stat_data（原更新应用之后）===',
         stateForPrompt(currentStat),
         '',
+        '=== 本地从 Schema/规则识别的自动派生字段（禁止直接写入）===',
+        automaticallyComputedPaths.length
+            ? automaticallyComputedPaths.join('\n')
+            : '未识别到明确标注为自动计算的现有字段。',
+        '',
         auditMode === 'opening'
             ? '=== 开局初始化声明（只读基线；可能有多份候选，需与Schema/正文交叉核对）==='
             : '',
@@ -2649,6 +2660,7 @@ async function buildAuditMessages({
         previousUserText: previousUserMessageText(context, targetIndex),
         auditMode,
         initializationStates,
+        automaticallyComputedPaths,
         // This value is the provider/model ceiling configured by the user.
         // Never silently lower it for ordinary turns, and never exceed it just
         // because a long-body correction was requested.
@@ -2918,7 +2930,9 @@ function prepareReplyCorrection({
     };
 }
 
-async function parseCandidate(Mvu, oldData, output) {
+async function parseCandidate(Mvu, oldData, output, {
+    automaticallyComputedPaths = [],
+} = {}) {
     let correction = extractHardContractCorrection(output);
     const correctionWarning = correction?.error
         || (
@@ -2938,7 +2952,23 @@ async function parseCandidate(Mvu, oldData, output) {
             correctionWarning,
         };
     }
-    const prepared = preparePatch(extracted.block, oldData);
+    const stripped = stripAutomaticallyComputedOps(
+        extracted.block,
+        automaticallyComputedPaths,
+    );
+    if (stripped.error) {
+        return {
+            status: 'failed',
+            retryable: true,
+            failureKind: 'invalid-patch',
+            reason: stripped.error,
+            output,
+            block: extracted.block,
+            recoveredOutput: extracted.recovered,
+            correctionWarning,
+        };
+    }
+    const prepared = preparePatch(stripped.block, oldData);
     if (prepared.error) {
         return {
             status: 'failed',
@@ -2951,6 +2981,8 @@ async function parseCandidate(Mvu, oldData, output) {
             correctionWarning,
         };
     }
+    prepared.automaticallyComputedPaths = [...automaticallyComputedPaths];
+    prepared.ignoredAutomaticallyComputedPaths = stripped.ignoredPaths;
     if (!prepared.ops.length) {
         return {
             status: 'nochange',
@@ -2958,6 +2990,7 @@ async function parseCandidate(Mvu, oldData, output) {
             block: prepared.block,
             output,
             correction,
+            ignoredAutomaticallyComputedPaths: stripped.ignoredPaths,
             recoveredOutput: extracted.recovered,
             correctionWarning,
         };
@@ -2998,6 +3031,7 @@ async function parseCandidate(Mvu, oldData, output) {
         prepared,
         newData: parsed,
         correction,
+        ignoredAutomaticallyComputedPaths: stripped.ignoredPaths,
         recoveredOutput: extracted.recovered,
         correctionWarning,
     };
@@ -3616,7 +3650,11 @@ async function runTarget(targetId, {
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         updateTaskProgress(progressId, '本地解析与安全校验', attempt + 1);
-        if (output !== undefined) candidate = await parseCandidate(Mvu, currentData, output);
+        if (output !== undefined) {
+            candidate = await parseCandidate(Mvu, currentData, output, {
+                automaticallyComputedPaths: built.automaticallyComputedPaths,
+            });
+        }
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         candidate.attempts = attempt + 1;
@@ -7357,6 +7395,14 @@ function bindEvents() {
                 }
                 const hardErrors = (effectiveHardAudit?.issues || [])
                     .filter((issue) => issue?.severity === 'error');
+                // Length is a presentation-quality contract. Keep reporting
+                // and correcting it, but do not disable the independent world
+                // ledger when the accepted reply is merely shorter than the
+                // requested target. State, dice, time and structure errors
+                // remain blocking.
+                const blockingHardErrors = hardErrors.filter(
+                    (issue) => issue?.code !== 'content-under-budget',
+                );
                 let blockedReason = '';
                 if (['stale', 'busy'].includes(repairResult?.status)) {
                     blockedReason = repairResult.reason || '变量审计未完成';
@@ -7370,8 +7416,8 @@ function bindEvents() {
                     blockedReason = repairResult.reason || '变量模型连接失败';
                 } else if (effectiveHardAudit?.status === 'failed') {
                     blockedReason = effectiveHardAudit.reason || '硬合同检查失败';
-                } else if (hardErrors.length) {
-                    blockedReason = `正文硬合同仍有 ${hardErrors.length} 个错误`;
+                } else if (blockingHardErrors.length) {
+                    blockedReason = `正文硬合同仍有 ${blockingHardErrors.length} 个阻断性错误`;
                 }
                 if (blockedReason) {
                     setContinuityStatus(

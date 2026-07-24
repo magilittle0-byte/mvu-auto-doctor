@@ -88,6 +88,7 @@ let throwNextReplace = false;
 let throwRollbackAfterCorruption = false;
 let normalizeReplacements = false;
 let normalizationVersion = 0;
+let recomputeDerivedFields = false;
 const chat = [
   { is_user: false, is_system: false, mes: '开场', swipe_id: 0, extra: {} },
   { is_user: true, is_system: false, mes: '继续观察港口', swipe_id: 0, extra: {} },
@@ -167,6 +168,16 @@ window.Mvu = {
         let parent = data.stat_data;
         for (const part of parts.slice(0, -1)) parent = parent[part];
         parent[parts.at(-1)] = op.value;
+      }
+    }
+    if (recomputeDerivedFields) {
+      const base = data.stat_data?.角色?.属性?.基础;
+      const actual = data.stat_data?.角色?.属性?.实际;
+      const derived = data.stat_data?.角色?.衍生;
+      if (base && actual && derived) {
+        actual.STR = base.STR;
+        derived.MP_最大 = base.STR * 10;
+        derived.闪避值 = base.STR + 5;
       }
     }
     return data;
@@ -303,6 +314,15 @@ window.StoryOracleAPI = {
         + '<JSONPatch>[{"op":"delta","path":"/账户/代币","value":3}]</JSONPatch>'
         + '</UpdateVariable>';
     }
+    if (mode === 'derived-card') {
+      return '<UpdateVariable><Analysis>修正可写基础值；派生值交由前端自动计算。</Analysis>'
+        + '<JSONPatch>'
+        + '[{"op":"replace","path":"/角色/属性/基础/STR","value":10},'
+        + '{"op":"replace","path":"/角色/属性/实际/STR","value":10},'
+        + '{"op":"replace","path":"/角色/衍生/MP_最大","value":100},'
+        + '{"op":"replace","path":"/角色/衍生/闪避值","value":15}]'
+        + '</JSONPatch></UpdateVariable>';
+    }
     if (mode === 'incomplete-then-valid' && modeRuns[mode] === 1) {
       return '<UpdateVariable><Analysis>第一次输出被截断</Analysis><JSONPatch>'
         + '[{"op":"delta","path":"/账户/代币","value":';
@@ -341,6 +361,7 @@ window.__TEST__ = {
   setMvuBusy(value) { mvuAlwaysBusy = !!value; },
   setMessageScopedMvuUnavailable(value) { messageScopedMvuUnavailable = !!value; },
   setNormalizeReplacements(value) { normalizeReplacements = !!value; },
+  setRecomputeDerivedFields(value) { recomputeDerivedFields = !!value; },
   armCorruptReplace() { corruptNextReplace = true; },
   armCorruptThenThrowRollback() {
     corruptNextReplace = true;
@@ -497,7 +518,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.2');
+    assert.equal(continuity.version, '1.8.3');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         32768,
@@ -987,7 +1008,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.2');
+    assert.equal(lifecycle.version, '1.8.3');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1340,9 +1361,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await hardContractGatePage.waitForFunction(() => (
-        /已跳过本回合/u.test(
-            document.querySelector('.mvuad-continuity-status')?.textContent || '',
-        )
+        window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length === 1
     ), null, { timeout: 30000 });
     const hardContractGate = await hardContractGatePage.evaluate(() => ({
         calls: structuredClone(window.__TEST__.calls),
@@ -1350,10 +1369,10 @@ try {
     }));
     assert.equal(
         hardContractGate.calls.model.filter((kind) => kind === 'continuity').length,
-        0,
-        '正文硬合同仍有错误时不得调用活世界模型或把坏回复写入账本',
+        1,
+        '仅正文长度不足时仍应调用独立的活世界模型，不能让第一回合整条链路停摆',
     );
-    assert.match(hardContractGate.status, /正文硬合同仍有 1 个错误/u);
+    assert.doesNotMatch(hardContractGate.status, /已跳过本回合/u);
     assert.match(
         hardContractGate.calls.repairSystem,
         /content-under-budget[\s\S]*CorrectedContent>不是可选项/u,
@@ -1380,9 +1399,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await partialCorrectionGatePage.waitForFunction(() => (
-        /已跳过本回合/u.test(
-            document.querySelector('.mvuad-continuity-status')?.textContent || '',
-        )
+        window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length === 1
     ), null, { timeout: 30000 });
     const partialCorrectionGate = await partialCorrectionGatePage.evaluate(() => ({
         continuityCalls: window.__TEST__.calls.model.filter(
@@ -1409,11 +1426,11 @@ try {
     );
     assert.equal(
         partialCorrectionGate.continuityCalls,
-        0,
-        '部分修正版仍有正文硬错误时不得调用活世界模型',
+        1,
+        '部分修正版只剩长度问题时仍应推进活世界账本',
     );
-    assert.equal(partialCorrectionGate.continuityTurn, 0);
-    assert.match(partialCorrectionGate.continuityStatus, /正文硬合同仍有 1 个错误/u);
+    assert.equal(partialCorrectionGate.continuityTurn, 1);
+    assert.doesNotMatch(partialCorrectionGate.continuityStatus, /已跳过本回合/u);
     await partialCorrectionGatePage.close();
 
     const undoGuardPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -2002,6 +2019,63 @@ try {
     );
     assert.equal(ruleBackedResult.audit.correction.evidence.ok, true);
     await ruleBackedPage.close();
+
+    const derivedCardPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await derivedCardPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await derivedCardPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const derivedCardResult = await derivedCardPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.characters[0].data.extensions.tavern_helper.scripts = [{
+            name: '变量结构',
+            enabled: true,
+            content: [
+                'registerMvuSchema(z.object({角色:z.object({',
+                '属性:z.object({基础:z.object({STR:z.number()}),',
+                '实际:z.object({STR:z.number()})}).transform(data => ({',
+                '...data, 实际: { STR: data.基础.STR }',
+                '})),',
+                '衍生:z.object({MP_最大:z.number(),闪避值:z.number()})',
+                '})}))',
+            ].join(''),
+        }];
+        t.context.characters[0].data.character_book.entries[0].content = [
+            '属性实际值由前端自动合成，AI无需写入。',
+            'MP_最大、闪避值均由前端自动计算；AI禁止直接修改。',
+        ].join('\n');
+        t.setLatestData({
+            stat_data: {
+                角色: {
+                    属性: { 基础: { STR: 5 }, 实际: { STR: 5 } },
+                    衍生: { MP_最大: 50, 闪避值: 10 },
+                },
+            },
+            display_data: {},
+        });
+        t.setRecomputeDerivedFields(true);
+        t.setMode('derived-card');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+            prompt: t.calls.repairUser,
+        };
+    });
+    assert.equal(derivedCardResult.result.status, 'applied');
+    assert.equal(derivedCardResult.calls, 1);
+    assert.equal(derivedCardResult.data.stat_data.角色.属性.基础.STR, 10);
+    assert.equal(derivedCardResult.data.stat_data.角色.属性.实际.STR, 10);
+    assert.equal(derivedCardResult.data.stat_data.角色.衍生.MP_最大, 100);
+    assert.equal(derivedCardResult.data.stat_data.角色.衍生.闪避值, 15);
+    assert.match(derivedCardResult.prompt, /\/角色\/属性\/实际\/STR/u);
+    assert.match(derivedCardResult.prompt, /\/角色\/衍生\/MP_最大/u);
+    assert.doesNotMatch(
+        derivedCardResult.result.block,
+        /\/角色\/属性\/实际\/STR|\/角色\/衍生\/MP_最大|\/角色\/衍生\/闪避值/u,
+        '模型直写的自动派生字段必须剥离，只保留可写输入补丁',
+    );
+    await derivedCardPage.close();
 
     const analysisRetryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await analysisRetryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
