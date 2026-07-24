@@ -31,6 +31,46 @@ assert.match(
     simulateOps({ value: 1 }, [{ op: 'remove', path: '/missing' }]).error,
     /目标不存在/u,
 );
+const encodedRemove = preparePatch(
+    '<UpdateVariable><Analysis>清理退场敌人</Analysis><JSONPatch>'
+    + '[{"op":"remove","path":"/%E5%A5%91%E7%BA%A6%E8%80%85/%E5%BD%93%E5%89%8D%E6%95%8C%E4%BA%BA/%E7%BA%A2%E9%AC%BC%E5%8D%AB%E5%85%B5A"}]'
+    + '</JSONPatch></UpdateVariable>',
+    {
+        stat_data: {
+            契约者: {
+                当前敌人: {
+                    红鬼卫兵A: { HP: 0 },
+                },
+            },
+        },
+    },
+);
+assert.equal(encodedRemove.error, undefined);
+assert.equal(encodedRemove.normalizedEncodedPaths, true);
+assert.deepEqual(encodedRemove.touched, ['/契约者/当前敌人/红鬼卫兵A']);
+assert.match(encodedRemove.block, /"path": "\/契约者\/当前敌人\/红鬼卫兵A"/u);
+assert.deepEqual(encodedRemove.expectedStat, { 契约者: { 当前敌人: {} } });
+
+const literalPercentKey = preparePatch(
+    '<UpdateVariable><Analysis></Analysis><JSONPatch>'
+    + '[{"op":"remove","path":"/%E5%A5%91"}]'
+    + '</JSONPatch></UpdateVariable>',
+    { stat_data: { '%E5%A5%91': 'literal', 契: 'decoded' } },
+);
+assert.equal(literalPercentKey.error, undefined);
+assert.equal(literalPercentKey.normalizedEncodedPaths, undefined);
+assert.deepEqual(literalPercentKey.expectedStat, { 契: 'decoded' });
+
+assert.match(
+    preparePatch(
+        '<UpdateVariable><Analysis></Analysis><JSONPatch>'
+        + '[{"op":"remove","path":"/%E5%A5%91%E7%BA%A6/%ZZ"}]'
+        + '</JSONPatch></UpdateVariable>',
+        { stat_data: { 契约: {} } },
+    ).error,
+    /目标不存在|父路径不存在/u,
+    'Malformed URI sequences must not be guessed or partially decoded',
+);
 assert.match(
     preparePatch('<UpdateVariable><Analysis></Analysis><JSONPatch>[{"op":"replace","path":"/safe/_private","value":2}]</JSONPatch></UpdateVariable>', {
         stat_data: { safe: { _private: 1 } },

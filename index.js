@@ -52,11 +52,15 @@ import {
     normalizeForumState,
 } from './forum-core.mjs';
 import {
+    applyHardContractCorrection,
+    auditCorrectionAgencyGuard,
     auditHardContracts,
+    extractHardContractCorrection,
+    verifyHardContractEvidence,
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -75,6 +79,7 @@ const DEFAULTS = Object.freeze({
     mvuIdleTimeoutMs: 120000,
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
+    hardContractCorrectionEnabled: true,
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
@@ -525,7 +530,7 @@ async function collectMvuRules(context, character) {
 }
 
 function hardContractRelevant(text) {
-    return /正文\s*\d{2,5}\s*(?:~|～|—|–|-|至)\s*\d{2,5}\s*(?:个?汉字|字)|<content\b|<options\b|结尾四项候选|(?:四|4)(?:个|项)?[^\n]{0,12}选项|骰前锁|骰后锁|唯一骰源|<UpdateVariable\b|<JSONPatch\b|可装备槽位|装备位置|完整装备字段/iu.test(
+    return /正文\s*\d{2,5}\s*(?:~|～|—|–|-|至)\s*\d{2,5}\s*(?:个?汉字|字)|<content\b|<options\b|结尾四项候选|(?:四|4)(?:个|项)?[^\n]{0,12}选项|骰前锁|骰后锁|唯一骰源|<UpdateVariable\b|<JSONPatch\b|可装备槽位|装备位置|完整装备字段|(?:技能|法术)[^\n]{0,80}(?:消耗|MP|耐力|体力)|(?:掉落|战利品|奖励|收获)[^\n]{0,100}(?:公式|计算|数量|品质|格式)|(?:背包|物品)[^\n]{0,100}(?:描述|数量|格式|字段)/iu.test(
         String(text || ''),
     );
 }
@@ -1095,10 +1100,12 @@ async function runHardContractAudit(targetId, {
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
 
     let currentData = null;
+    let previousData = null;
     try {
         const Mvu = await getMvu();
         if (Mvu && typeof Mvu.getMvuData === 'function') {
             currentData = await mvuDataAt(Mvu, resolved);
+            previousData = await previousMvuData(Mvu, context, resolved);
         }
     } catch (error) {
         console.warn('[MVU Auto Doctor] 硬合同检查读取 MVU 失败，将只检查正文：', error);
@@ -1111,6 +1118,7 @@ async function runHardContractAudit(targetId, {
         previousUserText: previousUserMessageText(context, resolved),
         contractTexts,
         statData: statDataOf(currentData) || {},
+        previousStatData: statDataOf(previousData),
         schemaTexts: schemaScripts.map((script) => script.content),
         ruleTexts,
     });
@@ -1131,13 +1139,17 @@ async function runHardContractAudit(targetId, {
         setHardContractStatus('硬合同：正文与装备结构未发现确定性问题', 'ok');
     } else {
         setHardContractStatus(
-            `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒（只报告，不改写剧情）`,
+            settings.hardContractCorrectionEnabled
+                ? `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒；硬错误将并入同一次变量诊断`
+                : `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒（自动修正版已关闭）`,
             errorCount ? 'error' : '',
         );
         if (manual || errorCount) {
             toast(
                 errorCount ? 'warning' : 'info',
-                `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。不会评价或改写 GM 的合理发挥。`,
+                settings.hardContractCorrectionEnabled
+                    ? `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。可验证硬错误会复用变量诊断生成修正版；GM合理发挥不改。`
+                    : `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。自动修正版已关闭。`,
             );
         }
     }
@@ -1150,7 +1162,9 @@ function enqueueHardContractAudit(targetId, options = {}) {
     const latest = latestAiMessage(context);
     const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
     const queuedTarget = options.queuedTarget || captureTarget(context, resolved);
-    const key = automatic ? capturedTargetKey(queuedTarget) : '';
+    const key = automatic && queuedTarget
+        ? `${capturedTargetKey(queuedTarget)}:${queuedTarget.epoch}`
+        : '';
     if (
         key
         && (hardContractPendingKeys.has(key) || hardContractCompletedKeys.has(key))
@@ -1532,6 +1546,15 @@ function scheduleOpeningResourceSync(delayMs = 700) {
     }, Math.max(100, Number(delayMs) || 700));
 }
 
+function scheduleLatestHardContractAudit() {
+    const context = getContext();
+    const latest = latestAiMessage(context);
+    if (latest.index < 0) return;
+    const captured = captureTarget(context, latest.index);
+    if (!captured) return;
+    enqueueHardContractAudit(latest.index, { queuedTarget: captured });
+}
+
 async function buildAuditMessages({
     context,
     character,
@@ -1543,10 +1566,13 @@ async function buildAuditMessages({
     const settings = getSettings();
     const message = context.chat[targetIndex];
     const originalBlock = extractLastUpdateBlock(message.mes);
-    const schemas = extractSchemaScripts(character)
+    const schemaScripts = extractSchemaScripts(character);
+    const schemas = schemaScripts
         .map((script) => `【${script.name}】\n${script.content}`)
         .join('\n\n');
-    const rules = (await collectMvuRules(context, character)).join('\n\n');
+    const ruleTexts = await collectMvuRules(context, character);
+    const rules = ruleTexts.join('\n\n');
+    const contractTexts = await collectHardContractTexts(context, character);
     const transcript = recentTranscript(
         context,
         targetIndex,
@@ -1558,6 +1584,21 @@ async function buildAuditMessages({
         rules,
         lifecycleTranscriptEntries(context, targetIndex),
     );
+    const hardAudit = auditHardContracts({
+        replyText: message.mes,
+        previousUserText: previousUserMessageText(context, targetIndex),
+        contractTexts,
+        statData: currentStat || {},
+        previousStatData: statDataOf(previousData),
+        schemaTexts: schemaScripts.map((script) => script.content),
+        ruleTexts,
+    });
+    const hardErrors = hardAudit.issues.filter((issue) => issue.severity === 'error');
+    const hardIssueText = hardAudit.issues.length
+        ? hardAudit.issues.map((issue) => (
+            `[${issue.severity}/${issue.code}]${issue.path ? ` ${issue.path}` : ''}：${issue.message}`
+        )).join('\n')
+        : '本地确定性检查未发现硬合同问题。';
 
     const system = [
         '你是一个通用、保守、可验证的 MVU 状态审计与修复引擎。',
@@ -1593,7 +1634,27 @@ async function buildAuditMessages({
         '- 路径使用 JSON Pointer，键名中的 ~ 和 / 必须分别写成 ~0 和 ~1。',
         '- 不要修改任何路径段以“_”开头的只读字段。',
         '',
-        '【唯一允许的输出】',
+        '【正文硬合同校正】',
+        '- 本地确定性检查列出的error，以及Schema/规则能够唯一证明的技能资源消耗、物品结构、掉落数量、奖励结算和骰子矛盾，属于可校正硬错误。',
+        '- 复用本次审计完成正文校正，不得要求第二次模型调用。若没有可唯一证明的硬错误，禁止输出HardContractCorrection。',
+        '- 每份校正都必须在Evidence逐字引用当前Schema、世界书规则或预设合同中的短依据。尤其是掉落公式、奖励数量和物品格式，不得只凭常识或自行概括；无可逐字核验证据就只修变量中其他确定错误，不改正文。',
+        '- 校正必须是最小必要改动：保留原叙事事实、文风、人物语气、玩家已声明行动、骰值与成功等级；禁止为了配合剧情规划改骰、补骰、替玩家追加行动或把未发生分支写成事实。',
+        '- 玩家本轮只授权原回复中的行动A。任何补字都不得新增、完成或暗示玩家接着执行B/C/D；不得新增玩家对白、移动、目标、路线、工具、选择、技能、资源消费或检定。',
+        '- 正文字数低于明确硬下限时，只能补足A的既有过程与已锁定结果，以及NPC、敌人、同伴基于自身动机和有限信息的独立行动/对白/反应，或环境、空间、时间、关系、威胁后果；不得靠重复、总结或选项凑字。',
+        '- NPC可以主动制造局势并向玩家施压；一旦下一步需要玩家选择新目标、路线、工具、对白或检定，正文必须停下，把决定留给options和下一回合。',
+        '- 原A、已消费骰面、成功等级、S1/骰后锁与JSONPatch语义必须保持；严禁借扩写重判。',
+        '- CorrectedContent只写原<content>标签内部的新正文，不得包含content标签本身、UpdateVariable、状态栏、思维链或其他机制区块。',
+        '- CorrectedOptions仅在选项硬合同有错时输出其内部完整内容，不得包含options标签本身；每个选项只提出下一步，不得视为已执行。',
+        '',
+        '【唯一允许的输出结构】',
+        '若需要正文硬校正，先输出：',
+        '<HardContractCorrection>',
+        '<Reason>不超过120字，列出被修正的硬规则</Reason>',
+        '<Evidence>逐字复制当前Schema、世界书规则或预设合同中的一小段依据；不得概括或自造</Evidence>',
+        '<CorrectedContent>仅在正文需要改动时输出完整的新content内部正文</CorrectedContent>',
+        '<CorrectedOptions>仅在选项需要改动时输出完整的新options内部文本</CorrectedOptions>',
+        '</HardContractCorrection>',
+        '随后始终输出：',
         '<UpdateVariable>',
         '<Analysis>不超过80字，禁止在这里写任何机制标签字面量</Analysis>',
         '<JSONPatch>',
@@ -1609,6 +1670,15 @@ async function buildAuditMessages({
         '',
         '=== 当前启用的 MVU 更新规则 ===',
         cropText(rules || '未找到 [mvu_update] 规则；只能依据 Schema 与当前状态保守处理。', 70000, '规则'),
+        '',
+        '=== 当前启用的正文/骰子/物品硬合同 ===',
+        cropText(contractTexts.join('\n\n') || '未找到额外硬合同。', 52000, '硬合同'),
+        '',
+        '=== 本地确定性硬合同检查 ===',
+        cropText(hardIssueText, 16000, '硬合同问题'),
+        hardErrors.length
+            ? '存在error：必须在同一次输出中修正能够唯一确定的正文/选项错误，并同步修正相应MVU。'
+            : '没有本地error：只有Schema或规则能唯一证明的数值/格式矛盾才允许生成正文校正。',
         '',
         '=== 当前 stat_data（原更新应用之后）===',
         stateForPrompt(currentStat),
@@ -1653,6 +1723,20 @@ async function buildAuditMessages({
             { role: 'user', content: user },
         ],
         originalBlock,
+        hardAudit,
+        contractTexts,
+        schemaTexts: schemaScripts.map((script) => script.content),
+        ruleTexts,
+        previousUserText: previousUserMessageText(context, targetIndex),
+        maxTokens: hardErrors.some((issue) => issue.code === 'content-under-budget')
+            ? Math.min(
+                8192,
+                Math.max(
+                    Number(settings.maxTokens) || 4096,
+                    (Number(hardAudit.reply?.budget?.min) || 1800) * 2 + 1200,
+                ),
+            )
+            : Number(settings.maxTokens) || 4096,
     };
 }
 
@@ -1672,6 +1756,15 @@ async function withTimeout(promise, milliseconds, label) {
     } finally {
         clearTimeout(timer);
     }
+}
+
+function isRateLimitError(error) {
+    const text = String(error?.message || error || '');
+    return error?.status === 429
+        || error?.statusCode === 429
+        || error?.code === 429
+        || error?.code === '429'
+        || /\b429\b|rate[\s_-]*limit|too many requests|engine[_\s-]*overloaded|请求过于频繁|限流/iu.test(text);
 }
 
 async function callModel(messages, options = {}) {
@@ -1694,6 +1787,12 @@ async function callModel(messages, options = {}) {
                 );
                 if (String(output || '').trim()) return String(output);
             } catch (error) {
+                if (isRateLimitError(error)) {
+                    // Story Oracle and the Tavern profile commonly point to the
+                    // same public endpoint. Falling through on 429 immediately
+                    // spends another RPM slot and makes the overload worse.
+                    throw error;
+                }
                 console.warn('[MVU Auto Doctor] 故事神谕连接调用失败，改用酒馆当前连接。', error);
             }
         }
@@ -1715,7 +1814,127 @@ async function callModel(messages, options = {}) {
     );
 }
 
+function skillNamesFromState(statData) {
+    const names = new Set();
+    const visit = (value, depth = 0) => {
+        if (!value || typeof value !== 'object' || depth > 12) return;
+        for (const [key, item] of Object.entries(value)) {
+            if (
+                isPlainObject(item)
+                && typeof item.消耗 === 'string'
+                && item.消耗.trim()
+            ) names.add(String(key));
+            if (item && typeof item === 'object') visit(item, depth + 1);
+        }
+    };
+    visit(statData);
+    return [...names];
+}
+
+function prepareReplyCorrection({
+    replyText,
+    correction,
+    built,
+    previousData,
+    currentData,
+    correctedData,
+} = {}) {
+    if (!correction) return { status: 'none' };
+    const spliced = applyHardContractCorrection(replyText, correction);
+    if (spliced.error) return { status: 'rejected', reason: spliced.error };
+    const agency = auditCorrectionAgencyGuard(replyText, spliced.text, {
+        skillNames: skillNamesFromState(statDataOf(correctedData)),
+    });
+    if (!agency.ok) {
+        return {
+            status: 'rejected',
+            reason: agency.violations.map((item) => item.message).join('；'),
+            agency,
+        };
+    }
+    const correctedAudit = auditHardContracts({
+        replyText: spliced.text,
+        previousUserText: built.previousUserText || '',
+        contractTexts: built.contractTexts || [],
+        statData: statDataOf(correctedData) || {},
+        previousStatData: statDataOf(previousData),
+        schemaTexts: built.schemaTexts || [],
+        ruleTexts: built.ruleTexts || [],
+    });
+    const beforeErrors = (built.hardAudit?.issues || [])
+        .filter((issue) => issue.severity === 'error');
+    const afterErrors = correctedAudit.issues
+        .filter((issue) => issue.severity === 'error');
+    const introducedErrors = afterErrors.filter((issue) => !beforeErrors.some(
+        (before) => before.code === issue.code && before.path === issue.path,
+    ));
+    const locallyImproved = (
+        afterErrors.length < beforeErrors.length
+        && introducedErrors.length === 0
+    );
+    const evidence = verifyHardContractEvidence(
+        correction.evidence,
+        [
+            ...(built.contractTexts || []),
+            ...(built.schemaTexts || []),
+            ...(built.ruleTexts || []),
+        ],
+    );
+    const variableChanged = fingerprint(safeJson(statDataOf(currentData) || {}))
+        !== fingerprint(safeJson(statDataOf(correctedData) || {}));
+    const ruleBackedCategory = /技能|消耗|MP|HP|耐力|体力|物品|背包|掉落|战利品|奖励|数量|品质|格式|字段|装备|骰|检定|时间/iu.test(
+        `${correction.reason || ''}\n${correction.evidence || ''}`,
+    );
+    const ruleBackedImprovement = (
+        !locallyImproved
+        && variableChanged
+        && evidence.ok
+        && ruleBackedCategory
+        && introducedErrors.length === 0
+        && afterErrors.length <= beforeErrors.length
+    );
+    if (!locallyImproved && !ruleBackedImprovement) {
+        return {
+            status: 'rejected',
+            reason: beforeErrors.length
+                ? introducedErrors.length
+                    ? `修正版引入了新的硬错误：${introducedErrors.map((issue) => issue.code).join('、')}`
+                    : `修正版未减少硬错误（修正前 ${beforeErrors.length}，修正后 ${afterErrors.length}）`
+                : !variableChanged
+                    ? '本地检查没有硬错误，且变量补丁未提供与正文改写对应的确定变化'
+                    : evidence.reason,
+            audit: correctedAudit,
+            agency,
+            evidence,
+        };
+    }
+    const locallyFixedCodes = beforeErrors
+        .map((issue) => issue.code)
+        .filter((code) => !afterErrors.some((issue) => issue.code === code));
+    return {
+        status: 'ready',
+        correction,
+        previewText: spliced.text,
+        audit: correctedAudit,
+        agency,
+        evidence,
+        verification: locallyImproved ? 'local-deterministic' : 'rule-evidence-and-state',
+        fixedCodes: locallyFixedCodes.length
+            ? locallyFixedCodes
+            : ['rule-backed-hard-error'],
+    };
+}
+
 async function parseCandidate(Mvu, oldData, output) {
+    const correction = extractHardContractCorrection(output);
+    if (correction?.error) {
+        return {
+            status: 'failed',
+            retryable: true,
+            reason: correction.error,
+            output,
+        };
+    }
     const block = extractLastUpdateBlock(output);
     if (!block) {
         return {
@@ -1741,6 +1960,7 @@ async function parseCandidate(Mvu, oldData, output) {
             retryable: false,
             block: prepared.block,
             output,
+            correction,
         };
     }
 
@@ -1774,6 +1994,7 @@ async function parseCandidate(Mvu, oldData, output) {
         block: prepared.block,
         prepared,
         newData: parsed,
+        correction,
     };
 }
 
@@ -1856,6 +2077,143 @@ async function refreshMessage(
         console.warn('[MVU Auto Doctor] 触发前端刷新失败：', error);
     }
     return true;
+}
+
+function addSwipeToMessage(message, text, info) {
+    if (!message || typeof message !== 'object') return -1;
+    if (!Array.isArray(message.swipes) || !message.swipes.length) {
+        message.swipes = [typeof message.mes === 'string' ? message.mes : ''];
+        message.swipe_info = [
+            Array.isArray(message.swipe_info) && message.swipe_info[0]
+                ? message.swipe_info[0]
+                : {},
+        ];
+        message.swipe_id = 0;
+    }
+    if (!Array.isArray(message.swipe_info)) {
+        message.swipe_info = message.swipes.map(() => ({}));
+    }
+    message.swipes.push(String(text || ''));
+    message.swipe_info.push(info || {});
+    message.swipe_id = message.swipes.length - 1;
+    message.mes = message.swipes[message.swipe_id];
+    if (message.extra && typeof message.extra === 'object') {
+        delete message.extra.display_text;
+    }
+    return message.swipe_id;
+}
+
+async function applyCorrectionAsSwipe({
+    index,
+    correction,
+    Mvu,
+    expectedFingerprint,
+    reason = '',
+    fixedCodes = [],
+    evidence = null,
+    verification = '',
+} = {}) {
+    const context = getContext();
+    const message = context?.chat?.[index];
+    if (
+        !message
+        || typeof message.mes !== 'string'
+        || (expectedFingerprint && fingerprint(message.mes) !== expectedFingerprint)
+    ) {
+        return { status: 'stale', reason: '正文校正应用前目标回复已经变化' };
+    }
+    const spliced = applyHardContractCorrection(message.mes, correction);
+    if (spliced.error) return { status: 'failed', reason: spliced.error };
+
+    let mvuSnapshot = null;
+    try {
+        mvuSnapshot = await mvuDataAt(Mvu, index);
+    } catch (error) {
+        return { status: 'failed', reason: `无法读取修正版 swipe 的 MVU 快照：${error.message || error}` };
+    }
+    if (expectedFingerprint && fingerprint(message.mes) !== expectedFingerprint) {
+        return { status: 'stale', reason: '读取 MVU 快照期间目标回复已经变化' };
+    }
+    const agency = auditCorrectionAgencyGuard(message.mes, spliced.text, {
+        skillNames: skillNamesFromState(statDataOf(mvuSnapshot)),
+    });
+    if (!agency.ok) {
+        return {
+            status: 'failed',
+            reason: agency.violations.map((item) => item.message).join('；'),
+            agency,
+        };
+    }
+
+    const backup = {
+        mes: message.mes,
+        swipes: deepClone(message.swipes),
+        swipeInfo: deepClone(message.swipe_info),
+        swipeId: message.swipe_id,
+        extra: deepClone(message.extra),
+    };
+    const now = new Date().toISOString();
+    const swipeId = addSwipeToMessage(message, spliced.text, {
+        send_date: now,
+        gen_started: null,
+        gen_finished: now,
+        extra: {
+            mvu_auto_doctor_correction: true,
+            version: VERSION,
+            reason: String(reason || '').slice(0, 500),
+            fixedCodes: deepClone(fixedCodes),
+            evidence: evidence?.ok ? String(evidence.evidence || '').slice(0, 500) : '',
+            verification: String(verification || '').slice(0, 80),
+        },
+    });
+    if (swipeId < 0) return { status: 'failed', reason: '无法创建修正版 swipe' };
+
+    try {
+        await context.saveChat?.();
+    } catch (error) {
+        message.mes = backup.mes;
+        message.swipes = backup.swipes;
+        message.swipe_info = backup.swipeInfo;
+        message.swipe_id = backup.swipeId;
+        message.extra = backup.extra;
+        return { status: 'failed', reason: `保存修正版 swipe 失败：${error.message || error}` };
+    }
+    try {
+        if (mvuSnapshot && typeof Mvu?.replaceMvuData === 'function') {
+            await Mvu.replaceMvuData(
+                deepClone(mvuSnapshot),
+                { type: 'message', message_id: index },
+            );
+        }
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 修正版 swipe 的 MVU 快照复制失败：', error);
+    }
+    try {
+        context.updateMessageBlock?.(index, message);
+        const refreshSwipe = context.swipe?.refresh || context.refreshSwipeButtons;
+        if (typeof refreshSwipe === 'function') refreshSwipe(true);
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 修正版 swipe 重绘失败：', error);
+    }
+    try {
+        const types = context.eventTypes || context.event_types || {};
+        await Promise.resolve(
+            context.eventSource?.emit?.(types.MESSAGE_SWIPED || 'message_swiped', index),
+        );
+        await Promise.resolve(
+            context.eventSource?.emit?.(types.MESSAGE_UPDATED || 'message_updated', index),
+        );
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 修正版 swipe 刷新事件发送失败：', error);
+    }
+    return {
+        status: 'applied',
+        swipeId,
+        target: captureTarget(getContext(), index),
+        agency,
+        evidence,
+        verification,
+    };
 }
 
 async function persistRepairRecord(record, expectedChatId, { durable = false } = {}) {
@@ -2108,7 +2466,11 @@ async function ensureExistingFrontend(index, originalBlock, captured, token) {
     await refreshMessage(index, '', false, '', captured, token);
 }
 
-async function runTarget(targetId, { manual = false, queuedTarget = null } = {}) {
+async function runTarget(targetId, {
+    manual = false,
+    queuedTarget = null,
+    skipDelay = false,
+} = {}) {
     const settings = getSettings();
     if (!manual && !settings.enabled) return { status: 'disabled' };
     if (!disableStoryOracleAutoIfNeeded()) {
@@ -2142,7 +2504,9 @@ async function runTarget(targetId, { manual = false, queuedTarget = null } = {})
         return result;
     }
 
-    if (!manual) await sleep(Math.max(300, Number(settings.delayMs) || 1600));
+    if (!manual && !skipDelay) {
+        await sleep(Math.max(300, Number(settings.delayMs) || 1600));
+    }
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     const idle = await waitMvuIdle(
@@ -2195,6 +2559,7 @@ async function runTarget(targetId, { manual = false, queuedTarget = null } = {})
     let retry = null;
     let candidate = null;
     let originalBlock = '';
+    let finalBuilt = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) {
@@ -2209,17 +2574,18 @@ async function runTarget(targetId, { manual = false, queuedTarget = null } = {})
             previousData,
             retry,
         });
+        finalBuilt = built;
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
         originalBlock = built.originalBlock;
 
         let output;
         try {
-            output = await callModel(built.messages);
+            output = await callModel(built.messages, { maxTokens: built.maxTokens });
         } catch (error) {
             candidate = {
                 status: 'failed',
-                retryable: attempt === 0,
+                retryable: attempt === 0 && !isRateLimitError(error),
                 reason: `模型调用失败：${error.message || error}`,
                 output: '',
             };
@@ -2234,11 +2600,68 @@ async function runTarget(targetId, { manual = false, queuedTarget = null } = {})
         setStatus('首个补丁未通过校验，正在自动重试…', 'busy');
     }
 
+    const correctionPlan = settings.hardContractCorrectionEnabled && candidate?.correction
+        ? prepareReplyCorrection({
+            replyText: context.chat[resolved]?.mes || '',
+            correction: candidate.correction,
+            built: finalBuilt || {},
+            previousData,
+            currentData,
+            correctedData: candidate.status === 'ready' ? candidate.newData : currentData,
+        })
+        : { status: 'none' };
+    if (correctionPlan.status === 'rejected') {
+        console.warn('[MVU Auto Doctor] 正文硬合同修正版被本地守卫拒绝：', correctionPlan.reason);
+        setHardContractStatus(`硬合同：修正版已拦截：${correctionPlan.reason}`, 'error');
+    }
+
     if (candidate?.status === 'nochange') {
         await ensureExistingFrontend(resolved, originalBlock, captured, token);
-        setStatus('已检查：本回合变量无需修正', 'ok');
-        if (manual || settings.notifyNoChange) toast('info', '已检查，本回合变量无需修正。');
-        return candidate;
+        let correctionResult = null;
+        if (correctionPlan.status === 'ready') {
+            correctionResult = await applyCorrectionAsSwipe({
+                index: resolved,
+                correction: correctionPlan.correction,
+                Mvu,
+                expectedFingerprint: fingerprint(context.chat[resolved]?.mes || ''),
+                reason: correctionPlan.correction.reason,
+                fixedCodes: correctionPlan.fixedCodes,
+                evidence: correctionPlan.evidence,
+                verification: correctionPlan.verification,
+            });
+        }
+        if (correctionResult?.status === 'applied') {
+            latestHardContractAudit = {
+                ...correctionPlan.audit,
+                checkedAt: new Date().toISOString(),
+                targetIndex: resolved,
+                messageId: correctionResult.target?.messageId,
+                swipeId: correctionResult.swipeId,
+                correction: {
+                    applied: true,
+                    reason: correctionPlan.correction.reason,
+                    fixedCodes: correctionPlan.fixedCodes,
+                    agencyGuard: correctionResult.agency,
+                    evidence: correctionResult.evidence,
+                    verification: correctionResult.verification,
+                },
+            };
+            renderHardContractAudit();
+            setHardContractStatus(
+                `硬合同：已生成可左滑撤回的修正版（${correctionPlan.fixedCodes.join('、') || '硬错误'}）`,
+                'ok',
+            );
+            setStatus('变量无需修正；正文硬合同已生成修正版 swipe', 'ok');
+            toast('success', '已在同一次诊断中生成正文修正版；原回复仍可左滑恢复。');
+        } else {
+            setStatus('已检查：本回合变量无需修正', 'ok');
+            if (manual || settings.notifyNoChange) toast('info', '已检查，本回合变量无需修正。');
+        }
+        return {
+            ...candidate,
+            correction: correctionResult || correctionPlan,
+            correctedTarget: correctionResult?.target || null,
+        };
     }
     if (candidate?.status !== 'ready') {
         const reason = candidate?.reason || '没有得到可安全应用的补丁';
@@ -2255,12 +2678,64 @@ async function runTarget(targetId, { manual = false, queuedTarget = null } = {})
     }
 
     if (result.status === 'applied') {
+        let correctionResult = null;
+        if (correctionPlan.status === 'ready') {
+            correctionResult = await applyCorrectionAsSwipe({
+                index: resolved,
+                correction: correctionPlan.correction,
+                Mvu,
+                expectedFingerprint: fingerprint(getContext()?.chat?.[resolved]?.mes || ''),
+                reason: correctionPlan.correction.reason,
+                fixedCodes: correctionPlan.fixedCodes,
+                evidence: correctionPlan.evidence,
+                verification: correctionPlan.verification,
+            });
+            result = {
+                ...result,
+                correction: correctionResult,
+                correctedTarget: correctionResult?.target || null,
+            };
+            if (correctionResult?.status === 'applied') {
+                latestHardContractAudit = {
+                    ...correctionPlan.audit,
+                    checkedAt: new Date().toISOString(),
+                    targetIndex: resolved,
+                    messageId: correctionResult.target?.messageId,
+                    swipeId: correctionResult.swipeId,
+                    correction: {
+                        applied: true,
+                        reason: correctionPlan.correction.reason,
+                        fixedCodes: correctionPlan.fixedCodes,
+                        agencyGuard: correctionResult.agency,
+                        evidence: correctionResult.evidence,
+                        verification: correctionResult.verification,
+                    },
+                };
+                renderHardContractAudit();
+                setHardContractStatus(
+                    `硬合同：变量与正文已同步修正，可左滑回原文（${correctionPlan.fixedCodes.join('、') || '硬错误'}）`,
+                    'ok',
+                );
+            } else if (correctionResult && correctionResult.status !== 'stale') {
+                setHardContractStatus(`硬合同：变量已修，正文修正版未应用：${correctionResult.reason}`, 'error');
+            }
+        }
         if (result.frontendSynced === false) {
             setStatus(result.reason || '变量已修正，但正文刷新未完成', 'error');
             toast('warning', result.reason || '变量已修正，但正文刷新未完成；修复记录仍可撤销。');
         } else {
-            setStatus('已修正变量并刷新正文状态栏', 'ok');
-            toast('success', '已根据最新回复补齐/修正 MVU 变量，并刷新正文状态栏。');
+            setStatus(
+                correctionResult?.status === 'applied'
+                    ? '已同步修正变量与正文，并刷新状态栏'
+                    : '已修正变量并刷新正文状态栏',
+                'ok',
+            );
+            toast(
+                'success',
+                correctionResult?.status === 'applied'
+                    ? '已同步修正 MVU 与正文硬错误；原回复可左滑恢复。'
+                    : '已根据最新回复补齐/修正 MVU 变量，并刷新正文状态栏。',
+            );
         }
     } else if (result.status === 'nochange') {
         setStatus('提交前复核：变量已无需修正', 'ok');
@@ -2319,6 +2794,11 @@ function enqueue(targetId, options = {}) {
 
     runChain = runChain
         .catch(() => undefined)
+        .then(() => (
+            queuedOptions.after?.catch?.(() => undefined)
+            ?? queuedOptions.after
+            ?? undefined
+        ))
         .then(() => runTarget(targetId, queuedOptions))
         .then((result) => {
             if (
@@ -2697,6 +3177,7 @@ function preserveMissingThreadClockFields(previous, next, rawThreads) {
         'consecutiveFails',
         'stalled',
         'outcome',
+        'lastAdvancedTurn',
     ];
     next.threads = (next.threads || []).map((thread) => {
         const old = oldById.get(thread.id);
@@ -2711,6 +3192,24 @@ function preserveMissingThreadClockFields(previous, next, rawThreads) {
         return merged;
     });
     return next;
+}
+
+function continuityTicksDue(context, base, captured) {
+    const lastIndex = Number(base?.lastSource?.index);
+    const start = Number.isInteger(lastIndex) && lastIndex >= 0 ? lastIndex + 1 : 1;
+    const count = (context?.chat || [])
+        .slice(start, captured.index + 1)
+        .filter((message) => (
+            message
+            && !message.is_user
+            && !message.is_system
+            && typeof message.mes === 'string'
+            && message.mes.trim()
+        ))
+        .length;
+    // Rerolls and legacy ledgers may already point at this floor. They still
+    // need exactly one recomputation from the branch checkpoint.
+    return Math.max(1, count);
 }
 
 function buildContinuityMessages({
@@ -2743,6 +3242,26 @@ function buildContinuityMessages({
             heat: post.heat,
         }));
     const bridgeOnly = director !== 'standalone';
+    const autonomousOrigins = new Set(['setting_linked', 'setting_independent', 'ambient']);
+    const autonomousThreads = (base.threads || []).filter((thread) => (
+        autonomousOrigins.has(thread.origin)
+        && thread.stage !== 'resolved'
+    ));
+    const cadence = settings.continuityAutonomy === 'expansive' ? 2 : 3;
+    const autonomousLimit = settings.continuityAutonomy === 'expansive' ? 4 : 3;
+    const latestAutonomousCreation = (base.threads || [])
+        .filter((thread) => autonomousOrigins.has(thread.origin))
+        .reduce((latest, thread) => Math.max(latest, Number(thread.createdTurn) || 0), 0);
+    const autonomousSlotReady = settings.continuityAutonomy !== 'conservative'
+        && worldContext.hasSetting
+        && autonomousThreads.length < autonomousLimit
+        && (
+            latestAutonomousCreation === 0
+            || base.turn - latestAutonomousCreation >= cadence
+        );
+    const autonomousSlotDirective = autonomousSlotReady
+        ? '本轮自主事件创建槽=到期：若本轮没有更明确的正文衍生事件，必须从取材池建立恰好1条setting_linked、setting_independent或ambient事件；它可以完全与主线无关、保持hidden并在幕后自行结束。不得返回空账本。'
+        : `本轮自主事件创建槽=未到期或已满（当前未结自主事件${autonomousThreads.length}/${autonomousLimit}）；优先推进、休眠或收束旧事件，不为凑数新建。`;
     const autonomyRule = settings.continuityAutonomy === 'conservative'
         ? '保守：只能登记正文/预设/缝合怪已经提出的未决因果，不得新建世界自主事件。'
         : settings.continuityAutonomy === 'expansive'
@@ -2779,6 +3298,7 @@ function buildContinuityMessages({
         '【主线关系 relation】linked / latent / independent / converging。origin记录最初来源，不因后续汇流而改写。',
         '- 可按世界设定创建尚未登场的普通NPC、小组织、地方事务和日常关系；不得无依据发明核心宇宙法则、改写重要角色过去或凭空制造只为震惊玩家的幕后黑手。',
         `【自主度】${autonomyRule}`,
+        `【本轮自主事件槽】${autonomousSlotDirective}`,
         bridgeOnly
             ? '- 已检测到预设平行事件、缝合怪或世界引擎：外部系统保留可见剧情/世界推演提案权；你只维护连续性与缺失因果。外部未来安排必须保留为成功/失败等条件分支，不得成为裁决目标；先按骰子前端规定的固定位置或顺序消费唯一骰值并结算DC/成功等级，再选匹配分支，禁止从骰池挑成功数字或先写结果后补检定。若外部系统提出相同因果，合并进原稳定ID，只落地一次。'
             : '- 未检测到外部剧情推进器：你负责低频维护世界事件，但仍不得要求主回复展示每一条幕后变化。',
@@ -2815,6 +3335,7 @@ function buildContinuityMessages({
     const user = [
         `当前导演模式：${director}`,
         `当前自主度：${settings.continuityAutonomy}`,
+        autonomousSlotDirective,
         retryReason ? `上一次账本候选无实质推进，必须纠正：${retryReason}` : '',
         `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
         '',
@@ -2920,17 +3441,35 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     }
     const director = detectContinuityDirector(context, messageText, markers);
     setContinuityStatus('世界连续性：正在整理因果…', 'busy');
-    const clockPlan = advanceContinuityClocks(base, {
-        chatId: captured.chatId,
-        maxThreads: settings.continuityMaxThreads,
-    });
-    const scheduledBase = clockPlan.state;
+    const ticksDue = continuityTicksDue(context, base, captured);
+    if (ticksDue > 1) {
+        setContinuityStatus(`世界连续性：正在补记 ${ticksDue} 个尚未落账的 AI 回合…`, 'busy');
+    }
+    let scheduledBase = base;
+    const changedClockThreads = new Set();
+    for (let tick = 1; tick <= ticksDue; tick += 1) {
+        const tickPlan = advanceContinuityClocks(scheduledBase, {
+            chatId: captured.chatId,
+            maxThreads: settings.continuityMaxThreads,
+        });
+        scheduledBase = tickPlan.state;
+        scheduledBase.turn = base.turn + tick;
+        for (const id of tickPlan.changedThreadIds) changedClockThreads.add(id);
+    }
+    const clockPlan = {
+        state: scheduledBase,
+        changedThreadIds: [...changedClockThreads],
+    };
+    const tickTurn = base.turn + ticksDue;
     const worldClockChanged = continuityWorldDigest(base)
         !== continuityWorldDigest(scheduledBase);
 
-    let next = base;
+    const localProgressed = clockPlan.changedThreadIds.length > 0 || worldClockChanged;
+    let next = localProgressed ? scheduledBase : base;
     let retryReason = '';
     let progressed = false;
+    let modelValidated = false;
+    let modelFailure = '';
     for (let attempt = 0; attempt < 2; attempt += 1) {
         const messages = buildContinuityMessages({
             context,
@@ -2947,24 +3486,45 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         try {
             output = await callModel(messages, { maxTokens: settings.continuityMaxTokens });
         } catch (error) {
+            modelFailure = String(error.message || error);
+            retryReason = `世界模型调用失败：${modelFailure}`;
             console.warn('[MVU Auto Doctor] 世界连续性模型调用失败：', error);
         }
         guard = targetIsCurrent(captured, token);
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
 
         let candidate = scheduledBase;
+        let explicitHeldTick = null;
         if (output) {
             const parsed = parseContinuityOutput(output, {
                 chatId: captured.chatId,
                 maxThreads: settings.continuityMaxThreads,
             });
             if (parsed.state) {
+                const rawTick = parsed.raw?.lastTick;
+                const heldThread = scheduledBase.threads.find(
+                    (thread) => thread.id === rawTick?.threadId,
+                );
+                if (
+                    rawTick?.action === 'held'
+                    && String(rawTick.reason || '').trim().length >= 8
+                    && heldThread
+                    && heldThread.stage !== 'resolved'
+                ) {
+                    explicitHeldTick = {
+                        turn: tickTurn,
+                        action: 'held',
+                        threadId: heldThread.id,
+                        reason: String(rawTick.reason).trim(),
+                    };
+                }
                 candidate = parsed.state;
                 candidate.world = applyWorldUpdate(
                     scheduledBase.world,
                     parsed.raw?.world,
-                    { turn: base.turn + 1 },
+                    { turn: tickTurn },
                 );
+                candidate.turn = Math.max(tickTurn, Number(candidate.turn) || 0);
                 candidate = preserveMissingThreadClockFields(
                     scheduledBase,
                     candidate,
@@ -2977,26 +3537,52 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             retryReason = '模型没有返回账本JSON';
         }
         candidate = preserveMissingThreads(scheduledBase, candidate);
-        candidate = enforceContinuityPolicy(scheduledBase, candidate, {
+        // `enforceContinuityPolicy` stamps accepted changes at
+        // `previous.turn + 1`. The deterministic scheduler has already moved
+        // `scheduledBase.turn` to the current tick, so expose the immediately
+        // preceding turn as the policy baseline. Otherwise every lastTick is
+        // written one turn into the future and a later valid held tick can be
+        // mistaken for stale data.
+        const policyBase = {
+            ...scheduledBase,
+            turn: Math.max(0, tickTurn - 1),
+        };
+        candidate = enforceContinuityPolicy(policyBase, candidate, {
             autonomy: settings.continuityAutonomy,
             allowAutonomous: worldContext.hasSetting,
             maxThreads: settings.continuityMaxThreads,
         });
+        // The deterministic clock may update hidden progress fields even when
+        // the model correctly says that the narrative trigger is not mature.
+        // Keep those local clock changes, but preserve the explicit held
+        // scheduler result instead of relabelling it as an advanced beat.
+        if (explicitHeldTick) candidate.lastTick = explicitHeldTick;
         const lifecycle = continuityLifecycleStats(scheduledBase, candidate);
         const worldChanged = continuityWorldDigest(scheduledBase)
             !== continuityWorldDigest(candidate);
-        progressed = validOutput && (
-            clockPlan.changedThreadIds.length > 0
-            || worldClockChanged
+        const modelProgressed = validOutput && (
+            localProgressed
             || worldChanged
             || lifecycle.changedExisting > 0
             || lifecycle.added > 0
             || (lifecycle.schedulerAdvanced && lifecycle.tickAction === 'held')
         );
-        if (progressed) {
+        if (modelProgressed) {
             next = candidate;
+            progressed = true;
+            modelValidated = true;
             break;
         }
+        if (localProgressed) {
+            // The deterministic clocks are authoritative enough to keep the
+            // living-world ledger moving. A 429, timeout, empty response, or
+            // malformed JSON may postpone narrative enrichment, but must never
+            // discard already computed event/world clock changes.
+            next = scheduledBase;
+            progressed = true;
+            break;
+        }
+        if (modelFailure && isRateLimitError(modelFailure)) break;
         retryReason ||= lifecycle.activeBefore > 0
             ? '已有未结事件，但既没有实质变化，也没有给出指向具体事件与未满足条件的held调度记录'
             : '没有新建事件，也没有产生有依据的分类世界变化';
@@ -3013,31 +3599,37 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             (thread) => thread.id === clockPlan.changedThreadIds[0],
         );
         next.lastTick = {
-            turn: base.turn + 1,
+            turn: tickTurn,
             action: clockThread?.stage === 'resolved'
                 ? 'resolved'
                 : clockThread?.stage === 'manifested'
                     ? 'manifested'
                     : 'advanced',
             threadId: clockThread?.id || clockPlan.changedThreadIds[0],
-            reason: clockThread?.evolveResult === 'success'
-                ? '本地事件时钟成功推进，模型已完成因果复核'
-                : clockThread?.evolveResult === 'setback'
-                    ? '本地事件时钟受挫回退，模型已完成因果复核'
-                : '本地事件时钟本轮保持，模型已完成因果复核',
+            reason: modelValidated
+                ? clockThread?.evolveResult === 'success'
+                    ? '本地事件时钟成功推进，模型已完成因果复核'
+                    : clockThread?.evolveResult === 'setback'
+                        ? '本地事件时钟受挫回退，模型已完成因果复核'
+                        : '本地事件时钟本轮保持，模型已完成因果复核'
+                : clockThread?.evolveResult === 'success'
+                    ? '模型暂不可用；本地事件时钟已成功推进，叙事后果待后续轮次补全'
+                    : clockThread?.evolveResult === 'setback'
+                        ? '模型暂不可用；本地事件时钟已记录受挫，叙事后果待后续轮次补全'
+                        : '模型暂不可用；本地事件时钟已保留本轮结果，待后续轮次补全',
         };
     } else if (
         next.lastTick?.turn <= (base.lastTick?.turn || 0)
         && continuityWorldDigest(base) !== continuityWorldDigest(next)
     ) {
         next.lastTick = {
-            turn: base.turn + 1,
+            turn: tickTurn,
             action: 'advanced',
             threadId: 'WORLD',
             reason: '分类世界状态或本地传播时钟发生变化，模型已完成因果复核',
         };
     }
-    next.turn = Math.max(base.turn + 1, Number(next.turn) || 0);
+    next.turn = Math.max(tickTurn, Number(next.turn) || 0);
     next.updatedAt = Date.now();
     next = attachChangedSourceRefs(base, next, sourceRefOf(captured));
     next.lastSource = sourceRefOf(captured);
@@ -3077,13 +3669,27 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     applyContinuityInjection();
     const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
     const held = next.lastTick?.action === 'held';
-    setContinuityStatus(
-        held
-            ? `世界连续性：已审计 ${active} 条未结事件，本轮条件未成熟`
-            : `世界连续性：已记录 ${active} 条未结事件`,
-        'ok',
-    );
-    return { status: 'applied', active, director, held };
+    if (!modelValidated && localProgressed) {
+        setContinuityStatus(
+            `世界连续性：模型暂不可用，本地时钟已推进 ${clockPlan.changedThreadIds.length || 1} 项；不会丢账`,
+            '',
+        );
+    } else {
+        setContinuityStatus(
+            held
+                ? `世界连续性：已审计 ${active} 条未结事件，本轮条件未成熟`
+                : `世界连续性：已记录 ${active} 条未结事件`,
+            'ok',
+        );
+    }
+    return {
+        status: 'applied',
+        active,
+        director,
+        held,
+        degraded: !modelValidated && localProgressed,
+        reason: modelFailure || undefined,
+    };
 }
 
 function sameTargetExceptContent(left, right) {
@@ -3402,14 +4008,17 @@ async function runForumTarget(captured, {
             retryReason,
         });
         let output = '';
+        let rateLimited = false;
         try {
             output = await callModel(messages, { maxTokens: settings.forumMaxTokens });
         } catch (error) {
             retryReason = `模型调用失败：${error.message || error}`;
+            rateLimited = isRateLimitError(error);
             console.warn('[MVU Auto Doctor] 内置论坛模型调用失败：', error);
         }
         guard = targetIsCurrent(captured, token);
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
+        if (rateLimited) break;
         const parsed = extractForumUpdate(output);
         if (!parsed.update) {
             retryReason = parsed.error;
@@ -4962,8 +5571,9 @@ function buildSettingsPanel() {
                     <div class="mvuad-status" role="status"></div>
                     <div class="mvuad-section-title">正文与装备硬合同</div>
                     <div class="mvuad-description">
-                        本地检查字数、结构标签、四选项、骰后改判、场景时间和装备字段合同；
-                        只报告可程序验证的问题，不评价剧情、额外战利品、NPC反应或文风，也不自动重写正文。
+                        本地检查字数、结构标签、四选项、骰后改判、场景时间、技能资源、背包与装备字段合同。
+                        自动修正版复用变量诊断的同一次模型请求，并作为新 swipe 写入；原文可左滑恢复。
+                        玩家新增行动/对白/技能/检定会被本地守卫拦截。
                     </div>
                     <div class="mvuad-protocol-options"></div>
                     <div class="mvuad-actions">
@@ -5075,6 +5685,7 @@ function buildSettingsPanel() {
     );
     wrapper.querySelector('.mvuad-protocol-options').append(
         makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
+        makeCheckbox('硬错误时用同一次变量诊断生成可撤回修正版', 'hardContractCorrectionEnabled'),
     );
     const delay = wrapper.querySelector('.mvuad-number input');
     delay.value = String(getSettings().delayMs);
@@ -5251,16 +5862,30 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
-            enqueueHardContractAudit(resolved, { queuedTarget: captured });
-            const repair = enqueue(resolved, { queuedTarget: captured });
-            const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
-            const continuity = enqueueContinuity(resolved, {
-                after: openingSync,
-                expectedTarget: captured,
+            const hardAudit = enqueueHardContractAudit(resolved, { queuedTarget: captured });
+            const repair = enqueue(resolved, {
+                queuedTarget: captured,
+                after: hardAudit,
+                skipDelay: true,
             });
-            enqueueForum(resolved, {
-                after: continuity,
-                expectedTarget: captured,
+            const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
+            const continuity = repair.then((repairResult) => {
+                const expectedTarget = repairResult?.correctedTarget
+                    || captureTarget(getContext(), resolved)
+                    || captured;
+                return enqueueContinuity(resolved, {
+                    after: openingSync,
+                    expectedTarget,
+                });
+            });
+            repair.then((repairResult) => {
+                const expectedTarget = repairResult?.correctedTarget
+                    || captureTarget(getContext(), resolved)
+                    || captured;
+                return enqueueForum(resolved, {
+                    after: continuity,
+                    expectedTarget,
+                });
             });
         },
     );
@@ -5294,6 +5919,7 @@ function bindEvents() {
             renderForum();
             disableStoryOracleAutoIfNeeded();
             scheduleOpeningResourceSync();
+            scheduleLatestHardContractAudit();
         };
     const chatEvents = new Set([
         types.CHAT_CHANGED || 'chat_changed',
@@ -5316,6 +5942,7 @@ function initialize() {
     lastUndo = latestUndoRecord(readChatNamespace());
     applyContinuityInjection();
     scheduleOpeningResourceSync();
+    scheduleLatestHardContractAudit();
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,

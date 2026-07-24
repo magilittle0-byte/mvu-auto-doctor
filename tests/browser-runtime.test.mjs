@@ -6,9 +6,31 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.dirname(here);
+const bundledNodeModules = path.join(
+    process.env.USERPROFILE || '',
+    '.cache',
+    'codex-runtimes',
+    'codex-primary-runtime',
+    'dependencies',
+    'node',
+    'node_modules',
+    '.pnpm',
+);
+const bundledPlaywright = fs.existsSync(bundledNodeModules)
+    ? fs.readdirSync(bundledNodeModules)
+        .filter((name) => /^playwright@/u.test(name))
+        .map((name) => path.join(
+            bundledNodeModules,
+            name,
+            'node_modules',
+            'playwright',
+            'index.mjs',
+        ))
+        .find((candidate) => fs.existsSync(candidate))
+    : '';
 const playwrightCandidates = [
     process.env.PLAYWRIGHT_PATH,
-    'C:/Users/lenovo/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/index.mjs',
+    bundledPlaywright,
 ].filter(Boolean);
 const playwrightPath = playwrightCandidates.find((candidate) => fs.existsSync(candidate));
 if (!playwrightPath) {
@@ -45,7 +67,7 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], raw: 0, replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -113,7 +135,7 @@ const context = {
       for (const fn of listeners[name] || []) await fn(...args);
     },
   },
-  async generateRaw() { throw new Error('Story Oracle should be used'); },
+  async generateRaw() { calls.raw += 1; throw new Error('Story Oracle should be used'); },
 };
 window.SillyTavern = { getContext: () => context };
 window.TavernHelper = { waitGlobalInitialized: async () => window.Mvu };
@@ -181,6 +203,11 @@ window.StoryOracleAPI = {
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
     calls.model.push(isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
+    if (mode === 'rate-limit') {
+      const error = new Error('HTTP 429: rate limit exceeded');
+      error.status = 429;
+      throw error;
+    }
     if (!isContinuity && !isForum) {
       calls.repairSystem = messages[0].content;
       calls.repairUser = messages[1].content;
@@ -228,6 +255,21 @@ window.StoryOracleAPI = {
       if (calls.continuityRuns === 2) return '<ContinuityState>{"turn":2,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"advancing","summary":"巡检员找到上一班抄录员并确认缺页被人为撕走。","offscreenBeat":"两人比对墨迹，锁定缺页发生在昨夜换班。","nextBeat":"他们会查问昨夜进入钟楼的人。","trigger":"巡检制度自行推进，无需玩家触发。","intersection":"只有主线涉及钟楼、报时记录或城防调查时才可能汇流。","seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2}]}</ContinuityState>';
       if (calls.continuityRuns === 3) return '<ContinuityState>{"turn":3,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","kind":"parallel","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden","urgency":1},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"seeded","summary":"玩家烧毁异常货单后，仓主开始追查接触过货单的人。","nextBeat":"仓主会先核对仓库值班表。","trigger":"本轮正文已经造成持续追查。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
       return '<ContinuityState>{"turn":4,"threads":[{"id":"WE-港城-钟楼-01","title":"钟楼巡检的缺页交接册","origin":"ambient","relation":"independent","stage":"resolved","summary":"巡检员确认缺页被城防书记带走归档。","resolution":"书记承认临时取走记录并补办了归档手续。","effects":["钟楼开始执行双人签字的交接制度"],"rumors":["巡检员之间流传城防正在秘密复核夜间报时"],"seedBasis":"世界书：港城 / 钟楼巡检制度","knowledge":"hidden"},{"id":"PE-货单-追查-01","title":"烧毁货单后的泄密追查","kind":"enemy","origin":"main_derivative","relation":"linked","stage":"advancing","summary":"仓主从值班表锁定了两名可能接触货单的人。","offscreenBeat":"仓主派人分别试探两名值班人。","nextBeat":"其中一人会试图向外求助。","trigger":"追查持续进行。","intersection":"追查接触玩家或其同伴时进入主线。","seedBasis":"本轮正文：玩家烧毁异常货单并惊动仓主","causedBy":["ACTION-烧毁货单"],"knowledge":"hidden","urgency":2},{"id":"WE-钟楼-双签-01","title":"钟楼双签制度的磨合","kind":"personal","origin":"setting_linked","relation":"latent","stage":"seeded","summary":"新双签制度令夜班交接变慢。","nextBeat":"夜班人员会要求调整排班。","trigger":"双签制度持续执行。","intersection":"主线需要夜间报时或城防通行时才可能汇流。","seedBasis":"钟楼缺页事件结束后建立双人签字制度","causedBy":["WE-港城-钟楼-01"],"effects":["夜班交接延长"],"knowledge":"hidden","urgency":1}]}</ContinuityState>';
+    }
+    if (mode === 'hard-correction') {
+      return '<HardContractCorrection><Reason>正文低于100字硬下限，仅补足既有观察结果与NPC反应。</Reason><CorrectedContent>'
+        + '甲'.repeat(120)
+        + '</CorrectedContent></HardContractCorrection>'
+        + '<UpdateVariable><Analysis>变量无需修改</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>';
+    }
+    if (mode === 'rule-backed-correction') {
+      return '<HardContractCorrection><Reason>奖励数量与世界书硬规则不符。</Reason>'
+        + '<Evidence>完成测试奖励时固定获得三枚代币</Evidence>'
+        + '<CorrectedContent>你完成测试，按规则获得三枚代币。</CorrectedContent>'
+        + '</HardContractCorrection>'
+        + '<UpdateVariable><Analysis>补足奖励数量</Analysis>'
+        + '<JSONPatch>[{"op":"delta","path":"/账户/代币","value":3}]</JSONPatch>'
+        + '</UpdateVariable>';
     }
     if (mode === 'defer') {
       return await new Promise((resolve) => { deferredResolve = resolve; });
@@ -395,7 +437,7 @@ try {
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.6.0');
+    assert.equal(continuity.version, '1.7.0');
     assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
     assert.match(continuity.hardStatus, /硬合同/u);
     assert.match(continuity.hardDetails, /未发现可由程序确定/u);
@@ -853,7 +895,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.6.0');
+    assert.equal(lifecycle.version, '1.7.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1289,7 +1331,17 @@ try {
     });
     await externalForumPage.waitForFunction(() => (
         window.MvuAutoDoctorAPI.getContinuityState().turn === 2
-    ), null, { timeout: 30000 });
+    ), null, { timeout: 30000 }).catch(async (error) => {
+        console.error('external forum continuity timeout diagnostics', await externalForumPage.evaluate(() => ({
+            metadata: window.__TEST__.context.chatMetadata,
+            calls: window.__TEST__.calls,
+            continuity: window.MvuAutoDoctorAPI.getContinuityState(),
+            repairStatus: document.querySelector('.mvuad-status')?.textContent || '',
+            continuityStatus: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+            hardStatus: document.querySelector('.mvuad-protocol-status')?.textContent || '',
+        })));
+        throw error;
+    });
     const externalForumSelected = await externalForumPage.evaluate(() => ({
         forum: window.MvuAutoDoctorAPI.getForumState(),
         calls: structuredClone(window.__TEST__.calls),
@@ -1532,6 +1584,86 @@ try {
     )));
     await rollbackFailurePage.close();
 
+    const correctionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await correctionPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await correctionPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const correctionResult = await correctionPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const original = `<thinking>行动A与骰面已锁定。</thinking>
+<content>你观察门边的守卫。</content>
+<options>
+>选项一：[继续观察]
+>选项二：[等待变化]
+>选项三：[保持警戒]
+>选项四：[结束回合]
+</options>
+<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>`;
+        t.context.characters[0].data.system_prompt = '正文100~200汉字；结尾四项候选。';
+        t.context.chat[2].mes = original;
+        t.context.chat[2].swipe_id = 0;
+        delete t.context.chat[2].swipes;
+        delete t.context.chat[2].swipe_info;
+        t.setMode('hard-correction');
+        const modelCallsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        const message = t.context.chat[2];
+        return {
+            result,
+            message: structuredClone(message),
+            modelCalls: t.calls.model.length - modelCallsBefore,
+            replaceCalls: t.calls.replace.length,
+            audit: window.MvuAutoDoctorAPI.getHardContractAudit(),
+        };
+    });
+    assert.equal(correctionResult.result.status, 'nochange');
+    assert.equal(correctionResult.result.correction.status, 'applied');
+    assert.equal(correctionResult.modelCalls, 1, '正文修正版必须复用变量诊断，不得增加第二次模型调用');
+    assert.equal(correctionResult.message.swipes.length, 2);
+    assert.match(correctionResult.message.swipes[0], /你观察门边的守卫/u);
+    assert.match(correctionResult.message.swipes[1], new RegExp('甲{120}', 'u'));
+    assert.match(correctionResult.message.swipes[1], /行动A与骰面已锁定/u);
+    assert.match(correctionResult.message.swipes[1], /<JSONPatch>\[\]<\/JSONPatch>/u);
+    assert.equal(
+        correctionResult.message.swipe_info[1].extra.mvu_auto_doctor_correction,
+        true,
+    );
+    assert.equal(correctionResult.replaceCalls, 1, '新 swipe 只复制一次既有 MVU 快照，不得重放 delta');
+    assert.equal(correctionResult.audit.correction.agencyGuard.ok, true);
+    await correctionPage.close();
+
+    const ruleBackedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await ruleBackedPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await ruleBackedPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const ruleBackedResult = await ruleBackedPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.characters[0].data.character_book.entries[0].content =
+            '完成测试奖励时固定获得三枚代币。';
+        t.context.chat[2].mes =
+            '<content>你完成测试，获得了一枚代币。</content>'
+            + '<UpdateVariable><Analysis>奖励</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>';
+        t.setMode('rule-backed-correction');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            message: structuredClone(t.context.chat[2]),
+            modelCalls: t.calls.model.length - callsBefore,
+            audit: window.MvuAutoDoctorAPI.getHardContractAudit(),
+        };
+    });
+    assert.equal(ruleBackedResult.result.status, 'applied');
+    assert.equal(ruleBackedResult.result.correction.status, 'applied');
+    assert.equal(ruleBackedResult.modelCalls, 1);
+    assert.equal(ruleBackedResult.data.stat_data.账户.代币, 5);
+    assert.match(ruleBackedResult.message.mes, /三枚代币/u);
+    assert.equal(
+        ruleBackedResult.message.swipe_info[1].extra.verification,
+        'rule-evidence-and-state',
+    );
+    assert.equal(ruleBackedResult.audit.correction.evidence.ok, true);
+    await ruleBackedPage.close();
+
     const busyPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await busyPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await busyPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -1550,6 +1682,79 @@ try {
     assert.equal(busy.calls.replace.length, 0);
     assert.equal(busy.calls.model.length, 0, 'MVU 持续繁忙时必须在调用模型前安全终止');
     await busyPage.close();
+
+    const rateLimitPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await rateLimitPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await rateLimitPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const rateLimitResult = await rateLimitPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('rate-limit');
+        const repair = await window.MvuAutoDoctorAPI.runLatest();
+        t.context.chatMetadata.mvu_auto_doctor = {
+            version: 5,
+            rev: 1,
+            chatId: 'chat-a',
+            continuity: {
+                version: 3,
+                chatId: 'chat-a',
+                turn: 5,
+                lastSource: {
+                    chatId: 'chat-a',
+                    messageId: 'opening',
+                    index: 0,
+                    swipeId: 0,
+                    hash: 'opening',
+                },
+                threads: [{
+                    id: 'WE-RATE-01',
+                    title: '限流期间仍在推进的事件',
+                    kind: 'parallel',
+                    eventType: 'progress',
+                    level: 2,
+                    origin: 'setting_independent',
+                    relation: 'independent',
+                    stage: 'advancing',
+                    stageProgress: 2,
+                    evolveResult: '',
+                    summary: 'NPC正在独立完成一项事务。',
+                    nextBeat: '事务按自身条件继续。',
+                    trigger: 'NPC自身日程。',
+                    seedBasis: '世界书测试设定',
+                    knowledge: 'hidden',
+                    createdTurn: 2,
+                    lastAdvancedTurn: 4,
+                }],
+            },
+        };
+        const world = await window.MvuAutoDoctorAPI.runContinuity();
+        const forum = await window.MvuAutoDoctorAPI.runForum();
+        return {
+            repair,
+            world,
+            forum,
+            calls: structuredClone(t.calls),
+            state: window.MvuAutoDoctorAPI.getContinuityState(),
+            status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        };
+    });
+    assert.equal(rateLimitResult.repair.status, 'failed');
+    assert.equal(
+        rateLimitResult.calls.model.filter((kind) => kind === 'repair').length,
+        1,
+        '429 不得立即重试变量模型',
+    );
+    assert.equal(rateLimitResult.calls.raw, 0, '故事神谕429后不得立刻用同一公益站配置回退再撞一次');
+    assert.equal(
+        rateLimitResult.calls.model.filter((kind) => kind === 'forum').length,
+        1,
+        '论坛遇到429不得立刻重试',
+    );
+    assert.equal(rateLimitResult.forum.status, 'stalled');
+    assert.equal(rateLimitResult.world.status, 'applied');
+    assert.equal(rateLimitResult.world.degraded, true);
+    assert.ok(rateLimitResult.state.turn > 5, '模型限流时本地世界时钟仍须落账');
+    assert.match(rateLimitResult.status, /本地时钟已推进/u);
+    await rateLimitPage.close();
 
     const deletionRacePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await deletionRacePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

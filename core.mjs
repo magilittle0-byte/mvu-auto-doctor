@@ -35,6 +35,28 @@ export function pointerPath(parts) {
         .join('/');
 }
 
+function decodeUriEncodedPointer(path) {
+    if (
+        typeof path !== 'string'
+        || !path.startsWith('/')
+        || !/%[0-9a-f]{2}/iu.test(path)
+    ) return path;
+    const decoded = [];
+    let changed = false;
+    for (const rawPart of path.slice(1).split('/')) {
+        let part = rawPart;
+        try {
+            part = decodeURIComponent(rawPart);
+        } catch {
+            return path;
+        }
+        if (part !== rawPart) changed = true;
+        if (/~(?![01])/u.test(part)) return path;
+        decoded.push(part.replace(/~1/gu, '/').replace(/~0/gu, '~'));
+    }
+    return changed ? pointerPath(decoded) : path;
+}
+
 export function pointerGet(root, path) {
     if (path === '') return { found: true, value: root };
     const parts = pointerSegments(path);
@@ -168,7 +190,12 @@ export function parsePatchBlock(patchBlock) {
     });
     if (errors.length) return { error: [...new Set(errors)].join('；') };
 
-    const analysisMatch = original.match(/<Analysis>([\s\S]*?)<\/Analysis>/iu);
+    const block = renderPatchBlock(original, ops);
+    return { block, ops };
+}
+
+function renderPatchBlock(original, ops) {
+    const analysisMatch = String(original || '').match(/<Analysis>([\s\S]*?)<\/Analysis>/iu);
     const safeAnalysis = (analysisMatch ? analysisMatch[1] : '')
         .replace(
             /<\/?(?:UpdateVariable|JSONPatch)>/giu,
@@ -185,7 +212,7 @@ export function parsePatchBlock(patchBlock) {
         '</JSONPatch>',
         '</UpdateVariable>',
     ].join('\n');
-    return { block, ops };
+    return block;
 }
 
 function insertAt(parent, key, value) {
@@ -304,15 +331,64 @@ export function simulateOps(oldStat, ops) {
     return { expected, touched: paths };
 }
 
+export function normalizeEncodedPointerOps(oldStat, ops) {
+    let working = deepClone(oldStat);
+    const normalized = [];
+    let changed = false;
+
+    for (const rawOp of ops || []) {
+        const original = deepClone(rawOp);
+        const decoded = deepClone(rawOp);
+        if (decoded.op === 'move') {
+            decoded.from = decodeUriEncodedPointer(decoded.from);
+            decoded.to = decodeUriEncodedPointer(decoded.to);
+        } else {
+            decoded.path = decodeUriEncodedPointer(decoded.path);
+        }
+
+        const differs = JSON.stringify(decoded) !== JSON.stringify(original);
+        const originalResult = simulateOps(working, [original]);
+        let chosen = original;
+        let chosenResult = originalResult;
+
+        // A literal percent sign is legal in a JSON Pointer key. Therefore URI
+        // decoding is only a recovery path: keep the original whenever it
+        // already targets the real state, and decode only when that turns a
+        // locally invalid operation into a valid one.
+        if (differs && originalResult.error) {
+            const decodedResult = simulateOps(working, [decoded]);
+            if (!decodedResult.error) {
+                chosen = decoded;
+                chosenResult = decodedResult;
+                changed = true;
+            }
+        }
+
+        normalized.push(chosen);
+        if (!chosenResult.error) working = chosenResult.expected;
+    }
+
+    return { ops: normalized, changed };
+}
+
 export function preparePatch(patchBlock, oldData) {
     const parsed = parsePatchBlock(patchBlock);
     if (parsed.error) return parsed;
     const oldStat = statDataOf(oldData);
     if (!oldStat) return { error: '当前 MVU 数据中没有可验证的 stat_data' };
-    const simulated = simulateOps(oldStat, parsed.ops);
-    if (simulated.error) return { ...parsed, error: simulated.error };
+    const normalized = normalizeEncodedPointerOps(oldStat, parsed.ops);
+    const normalizedParsed = normalized.changed
+        ? {
+            ...parsed,
+            ops: normalized.ops,
+            block: renderPatchBlock(parsed.block, normalized.ops),
+            normalizedEncodedPaths: true,
+        }
+        : parsed;
+    const simulated = simulateOps(oldStat, normalizedParsed.ops);
+    if (simulated.error) return { ...normalizedParsed, error: simulated.error };
     return {
-        ...parsed,
+        ...normalizedParsed,
         expectedStat: simulated.expected,
         touched: simulated.touched,
     };
