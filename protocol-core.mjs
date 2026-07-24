@@ -79,6 +79,170 @@ function extractBlocks(text, tag) {
     return [...asText(text).matchAll(pattern)].map((match) => match[1]);
 }
 
+function extractSingleTaggedValue(text, tag) {
+    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matches = [...asText(text).matchAll(
+        new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}>`, 'giu'),
+    )];
+    return matches.length === 1 ? matches[0][1].trim() : null;
+}
+
+export function extractHardContractCorrection(output) {
+    const block = extractSingleTaggedValue(output, 'HardContractCorrection');
+    if (block == null) return null;
+    const reason = extractSingleTaggedValue(block, 'Reason') || '';
+    const evidence = extractSingleTaggedValue(block, 'Evidence') || '';
+    const content = extractSingleTaggedValue(block, 'CorrectedContent');
+    const options = extractSingleTaggedValue(block, 'CorrectedOptions');
+    if (content == null && options == null) {
+        return { error: 'HardContractCorrection 没有 CorrectedContent 或 CorrectedOptions' };
+    }
+    const mechanismPattern = /<\/?(?:UpdateVariable|JSONPatch|StatusPlaceHolderImpl|HardContractCorrection|Reason|Evidence|CorrectedContent|CorrectedOptions)\b/iu;
+    if (
+        (content != null && mechanismPattern.test(content))
+        || (options != null && mechanismPattern.test(options))
+    ) {
+        return { error: '正文校正稿混入了变量、状态栏或校正控制标签' };
+    }
+    return {
+        reason: reason.slice(0, 500),
+        evidence: evidence.slice(0, 500),
+        content,
+        options,
+    };
+}
+
+function normalizedEvidence(value) {
+    return asText(value)
+        .replace(/\s+/gu, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+export function verifyHardContractEvidence(evidence, sources = []) {
+    const needle = normalizedEvidence(evidence);
+    if (needle.length < 6) {
+        return { ok: false, reason: '规则证据少于6个字符，无法核验' };
+    }
+    const sourceIndex = sources.findIndex((source) => (
+        normalizedEvidence(source).includes(needle)
+    ));
+    if (sourceIndex < 0) {
+        return { ok: false, reason: '规则证据无法在当前 Schema、世界书或预设合同中逐字找到' };
+    }
+    return { ok: true, sourceIndex, evidence: asText(evidence).trim() };
+}
+
+function replaceSingleTagInner(text, tag, replacement) {
+    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(
+        `(<${escaped}\\b[^>]*>)[\\s\\S]*?(<\\/${escaped}>)`,
+        'giu',
+    );
+    const matches = [...asText(text).matchAll(pattern)];
+    if (matches.length !== 1) return null;
+    return asText(text).replace(
+        pattern,
+        (_whole, open, close) => `${open}${replacement}${close}`,
+    );
+}
+
+export function applyHardContractCorrection(replyText, correction) {
+    if (!correction || correction.error) {
+        return { error: correction?.error || '没有可应用的正文校正' };
+    }
+    let text = asText(replyText);
+    if (correction.content != null) {
+        const replaced = replaceSingleTagInner(text, 'content', correction.content);
+        if (replaced == null) {
+            return { error: '原回复没有恰好一组可安全替换的 <content>' };
+        }
+        text = replaced;
+    }
+    if (correction.options != null) {
+        const optionsOpen = countTag(text, 'options');
+        const optionsClose = countTag(text, 'options', true);
+        if (optionsOpen === 1 && optionsClose === 1) {
+            const replaced = replaceSingleTagInner(text, 'options', correction.options);
+            if (replaced == null) {
+                return { error: '原回复的 <options> 结构无法安全替换' };
+            }
+            text = replaced;
+        } else if (optionsOpen === 0 && optionsClose === 0) {
+            const contentClose = /<\/content>/iu;
+            if (contentClose.test(text)) {
+                text = text.replace(
+                    contentClose,
+                    (tag) => `${tag}\n\n<options>\n${correction.options}\n</options>`,
+                );
+            } else {
+                const mechanismStart = text.search(/<UpdateVariable\b/iu);
+                const block = `<options>\n${correction.options}\n</options>\n\n`;
+                text = mechanismStart >= 0
+                    ? `${text.slice(0, mechanismStart)}${block}${text.slice(mechanismStart)}`
+                    : `${text.trimEnd()}\n\n${block.trimEnd()}`;
+            }
+        } else {
+            return { error: '原回复的 <options> 标签不平衡，无法自动插入校正稿' };
+        }
+    }
+    return { text };
+}
+
+function normalizeAgencyText(text) {
+    return stripTags(text)
+        .replace(/[\s\p{P}\p{S}]+/gu, '')
+        .toLowerCase();
+}
+
+function agencyClauses(text) {
+    const prose = contentProse(text);
+    const clauses = prose
+        .split(/[。！？!?；;\n]/u)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const decisiveAction = /你[^。！？\n]{0,18}(?:决定|选择|改为|转而|前往|进入|离开|撤退|追击|接受|拒绝|答应|购买|拾取|搜索|调查|休息|治疗|打开|关闭|拿出|换上|装备|使用|发动|施展|激活|启动)/u;
+    const dialogue = /你[^。！？\n]{0,12}(?:说|问|回答|答道|喊|叫|命令|承诺|解释|撒谎|表示)[：:，“"]/u;
+    const check = /你[^。！？\n]{0,24}(?:检定|掷骰|投骰|重掷|补投|DC\s*\d+|\bd20\b)/iu;
+    return clauses.filter((clause) => (
+        decisiveAction.test(clause)
+        || dialogue.test(clause)
+        || check.test(clause)
+    ));
+}
+
+export function auditCorrectionAgencyGuard(originalReply, correctedReply, {
+    skillNames = [],
+} = {}) {
+    const original = normalizeAgencyText(originalReply);
+    const violations = [];
+    for (const clause of agencyClauses(correctedReply)) {
+        const normalized = normalizeAgencyText(clause);
+        if (normalized && !original.includes(normalized)) {
+            violations.push({
+                code: 'new-player-agency-clause',
+                message: `修正版新增了可能需要玩家授权的行动、对白或检定：${clause.slice(0, 120)}`,
+            });
+        }
+    }
+    const originalContent = contentProse(originalReply);
+    const correctedContent = contentProse(correctedReply);
+    for (const rawName of skillNames) {
+        const name = asText(rawName).trim();
+        if (!name || originalContent.includes(name) || !correctedContent.includes(name)) continue;
+        violations.push({
+            code: 'new-player-skill',
+            message: `修正版新增了原回复未使用的玩家技能“${name}”。`,
+        });
+    }
+    const unique = violations.filter((violation, index, all) => (
+        all.findIndex((item) => (
+            item.code === violation.code && item.message === violation.message
+        )) === index
+    ));
+    return { ok: unique.length === 0, violations: unique };
+}
+
 function stripTags(text) {
     return asText(text)
         .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, '')
@@ -172,10 +336,11 @@ function sceneClock(previousUserText) {
 }
 
 function planningStartClock(replyText) {
-    const match = asText(replyText).match(
-        /【A[·・]S0】[^\n]*(?:时间地点|时间)\s*[:：=]\s*[^\n;；]{0,40}?(\d{1,2}:\d{2})/iu,
+    const line = asText(replyText).match(/【A[·・](?:S0|边界)】([^\n]*)/iu)?.[1] || '';
+    const anchored = line.match(
+        /(?:S0\s*)?时间(?:地点|\s*[/／]\s*地点)?[\s\S]{0,160}?(\d{1,2}:\d{2})/iu,
     );
-    return match?.[1] || '';
+    return anchored?.[1] || '';
 }
 
 export function auditReplyProtocol(replyText, {
@@ -200,6 +365,8 @@ export function auditReplyProtocol(replyText, {
         }
     }
 
+    const contractBudgets = findWordBudgets(contractTexts);
+    const replyBudgets = findWordBudgets([text]);
     const budgets = findWordBudgets(sources);
     if (budgets.length > 1) {
         pushUniqueIssue(issues, {
@@ -209,7 +376,10 @@ export function auditReplyProtocol(replyText, {
             message: `检测到互相冲突的正文预算：${budgets.map((item) => `${item.min}~${item.max}`).join('、')} 汉字。`,
         });
     }
-    const budget = budgets[0] || null;
+    // Active preset prompts are collected after card/world-book contracts.
+    // Prefer their latest explicit range; only fall back to a range echoed in
+    // the reply when no authoritative contract exposed one.
+    const budget = contractBudgets.at(-1) || replyBudgets.at(-1) || null;
     const hanCharacters = contentBlocks.length === 1
         ? countHanCharacters(contentBlocks[0])
         : 0;
@@ -221,14 +391,9 @@ export function auditReplyProtocol(replyText, {
             message: `正文约 ${hanCharacters} 个汉字，低于硬下限 ${budget.min}。`,
         });
     }
-    if (budget && contentBlocks.length === 1 && hanCharacters > budget.max) {
-        pushUniqueIssue(issues, {
-            code: 'content-over-budget',
-            severity: 'error',
-            scope: 'length',
-            message: `正文约 ${hanCharacters} 个汉字，超过硬上限 ${budget.max}。`,
-        });
-    }
+    // The right side is the normal writing target, not a hard ceiling. Natural
+    // paragraph endings and completed causal waves may exceed it; only the left
+    // side is an acceptance gate and may trigger automatic correction.
 
     const optionsOpen = countTag(text, 'options');
     const optionsClose = countTag(text, 'options', true);
@@ -314,6 +479,195 @@ function walkObjects(root, visitor, path = '', depth = 0, seen = new Set()) {
         if (!isPlainObject(value)) continue;
         walkObjects(value, visitor, path ? `${path}.${key}` : key, depth + 1, seen);
     }
+}
+
+function contentProse(replyText) {
+    const blocks = extractBlocks(replyText, 'content');
+    return blocks.length === 1 ? stripTags(blocks[0]) : stripTags(replyText);
+}
+
+function collectNumericLeaves(root, path = '', result = [], depth = 0) {
+    if (depth > 12 || root == null) return result;
+    if (typeof root === 'number' && Number.isFinite(root)) {
+        result.push({ path, value: root });
+        return result;
+    }
+    if (!isPlainObject(root) && !Array.isArray(root)) return result;
+    for (const [key, value] of Object.entries(root)) {
+        collectNumericLeaves(value, path ? `${path}.${key}` : key, result, depth + 1);
+    }
+    return result;
+}
+
+function resourceNamePattern(resource) {
+    const escaped = resource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (/^(?:MP|法力|魔力)$/iu.test(resource)) return /(?:MP|法力|魔力)/iu;
+    if (/^(?:HP|生命)$/iu.test(resource)) return /(?:HP|生命)/iu;
+    if (/^(?:耐力|体力)$/u.test(resource)) return /(?:耐力|体力)/u;
+    return new RegExp(escaped, 'iu');
+}
+
+function currentResourceLeaf(leaves, resource) {
+    const resourcePattern = resourceNamePattern(resource);
+    return leaves.find((leaf) => (
+        resourcePattern.test(leaf.path)
+        && /(?:当前|现有|current|cur)(?:值)?$/iu.test(leaf.path.split('.').at(-1))
+    )) || leaves.find((leaf) => (
+        resourcePattern.test(leaf.path)
+        && /(?:当前|现有|current|cur)/iu.test(leaf.path)
+        && !/(?:最大|上限|max)/iu.test(leaf.path)
+    ));
+}
+
+function parseSkillCosts(value) {
+    const costs = [];
+    for (const match of asText(value).matchAll(
+        /(\d+(?:\.\d+)?)\s*(MP|HP|耐力|体力|法力|魔力|能量)/giu,
+    )) {
+        const amount = Number(match[1]);
+        if (!Number.isFinite(amount) || amount <= 0) continue;
+        costs.push({ amount, resource: match[2] });
+    }
+    return costs;
+}
+
+function skillWasUsed(prose, skillName) {
+    const escaped = skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return asText(prose)
+        .split(/[。！？\n]/u)
+        .filter((sentence) => new RegExp(escaped, 'iu').test(sentence))
+        .some((sentence) => {
+            const modal = new RegExp(
+                `(?:可以|可选择|建议|尝试|准备|打算|计划|若要|能够)[^，；]{0,12}`
+                + `(?:使用|发动|施展|激活|启动|释放|施放|运用|催动)[^，；]{0,24}${escaped}`,
+                'iu',
+            );
+            if (modal.test(sentence)) return false;
+            return new RegExp(
+                `(?:使用|发动|施展|激活|启动|释放|施放|运用|催动)[^，；]{0,32}${escaped}`
+                + `|${escaped}[^，；]{0,32}(?:发动|生效|启动|释放|施放|命中|接管|侵入|完成)`,
+                'iu',
+            ).test(sentence);
+        });
+}
+
+export function auditSkillResourceCosts(replyText, previousStatData, currentStatData) {
+    const issues = [];
+    if (!isPlainObject(previousStatData) || !isPlainObject(currentStatData)) {
+        return { issues, metrics: { checkedSkills: 0, checkedResources: 0 } };
+    }
+    const prose = contentProse(replyText);
+    const costs = [];
+    walkObjects(currentStatData, (node, path) => {
+        if (typeof node.消耗 !== 'string' || !node.消耗.trim()) return;
+        const name = path.split('.').at(-1) || asText(node.名称).trim();
+        if (!name || !prose.includes(name) || !skillWasUsed(prose, name)) return;
+        for (const cost of parseSkillCosts(node.消耗)) {
+            costs.push({ ...cost, skill: name, skillPath: path });
+        }
+    });
+    const expectedByResource = new Map();
+    for (const cost of costs) {
+        const key = /^(?:MP|法力|魔力)$/iu.test(cost.resource)
+            ? 'MP'
+            : /^(?:HP|生命)$/iu.test(cost.resource)
+                ? 'HP'
+                : /^(?:耐力|体力)$/u.test(cost.resource)
+                    ? '耐力'
+                    : cost.resource;
+        const entry = expectedByResource.get(key) || { amount: 0, skills: [] };
+        entry.amount += cost.amount;
+        entry.skills.push(cost.skill);
+        expectedByResource.set(key, entry);
+    }
+
+    const previousLeaves = collectNumericLeaves(previousStatData);
+    const currentLeaves = collectNumericLeaves(currentStatData);
+    let checkedResources = 0;
+    for (const [resource, expected] of expectedByResource) {
+        const before = currentResourceLeaf(previousLeaves, resource);
+        const after = currentResourceLeaf(currentLeaves, resource);
+        if (!before || !after || before.path !== after.path) continue;
+        checkedResources += 1;
+        const spent = before.value - after.value;
+        if (spent + 1e-9 >= expected.amount) continue;
+        pushUniqueIssue(issues, {
+            code: 'skill-resource-cost-missing',
+            severity: 'error',
+            scope: 'resource',
+            path: after.path,
+            message: `正文明确发动“${[...new Set(expected.skills)].join('、')}”，规则合计消耗 ${expected.amount} ${resource}，但该资源本回合只减少 ${Math.max(0, spent)}。`,
+        });
+    }
+    return {
+        issues,
+        metrics: {
+            checkedSkills: new Set(costs.map((cost) => cost.skill)).size,
+            checkedResources,
+        },
+    };
+}
+
+function inventoryContractRequiresFields(text) {
+    return /背包[\s\S]{0,260}(?:描述[\s\S]{0,80}数量|数量[\s\S]{0,80}描述)/u.test(text);
+}
+
+export function auditInventoryContracts(statData, {
+    schemaTexts = [],
+    ruleTexts = [],
+} = {}) {
+    const issues = [];
+    const contractText = [...schemaTexts, ...ruleTexts].map(asText).join('\n');
+    const requiresFields = inventoryContractRequiresFields(contractText);
+    let bagCount = 0;
+    let itemCount = 0;
+    walkObjects(statData, (node, path) => {
+        if (!isPlainObject(node.背包)) return;
+        bagCount += 1;
+        for (const [name, item] of Object.entries(node.背包)) {
+            itemCount += 1;
+            const itemPath = `${path ? `${path}.` : ''}背包.${name}`;
+            if (!isPlainObject(item)) {
+                pushUniqueIssue(issues, {
+                    code: 'inventory-item-not-object',
+                    severity: 'error',
+                    scope: 'inventory',
+                    path: itemPath,
+                    message: `${name} 不是物品对象，无法满足背包格式。`,
+                });
+                continue;
+            }
+            if (requiresFields) {
+                const missing = ['描述', '数量'].filter((field) => !(field in item));
+                if (missing.length) {
+                    pushUniqueIssue(issues, {
+                        code: 'inventory-item-fields-incomplete',
+                        severity: 'error',
+                        scope: 'inventory',
+                        path: itemPath,
+                        message: `${name} 缺少背包硬合同字段：${missing.join('、')}。`,
+                    });
+                }
+            }
+            if (
+                Object.prototype.hasOwnProperty.call(item, '数量')
+                && (
+                    typeof item.数量 !== 'number'
+                    || !Number.isFinite(item.数量)
+                    || item.数量 < 0
+                )
+            ) {
+                pushUniqueIssue(issues, {
+                    code: 'inventory-quantity-invalid',
+                    severity: 'error',
+                    scope: 'inventory',
+                    path: `${itemPath}.数量`,
+                    message: `${name} 的数量必须是非负有限数字。`,
+                });
+            }
+        }
+    });
+    return { issues, metrics: { bagCount, itemCount, requiresFields } };
 }
 
 function nonEmptyEquipment(item) {
@@ -475,6 +829,7 @@ export function auditHardContracts({
     previousUserText = '',
     contractTexts = [],
     statData = {},
+    previousStatData = null,
     schemaTexts = [],
     ruleTexts = [],
 } = {}) {
@@ -486,9 +841,25 @@ export function auditHardContracts({
         schemaTexts,
         ruleTexts,
     });
+    const resources = auditSkillResourceCosts(
+        replyText,
+        previousStatData,
+        statData,
+    );
+    const inventory = auditInventoryContracts(statData, {
+        schemaTexts,
+        ruleTexts,
+    });
     return {
-        issues: [...reply.issues, ...equipment.issues],
+        issues: [
+            ...reply.issues,
+            ...resources.issues,
+            ...inventory.issues,
+            ...equipment.issues,
+        ],
         reply: reply.metrics,
+        resources: resources.metrics,
+        inventory: inventory.metrics,
         equipment: equipment.metrics,
     };
 }
