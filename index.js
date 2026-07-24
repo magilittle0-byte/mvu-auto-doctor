@@ -4,6 +4,7 @@ import {
     buildLifecycleHistoryHints,
     diffStates,
     extractLastUpdateBlock,
+    extractUpdateBlockCandidate,
     extractSchemaScripts,
     findOpeningResourceMismatches,
     findMvuRuleEntries,
@@ -60,7 +61,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -74,7 +75,10 @@ const DEFAULTS = Object.freeze({
     notifyNoChange: false,
     delayMs: 1600,
     contextMessages: 8,
-    maxTokens: 4096,
+    maxTokens: 32768,
+    variableRetryLimit: 3,
+    variablePromptAddon: '',
+    variableAuditSettingsVersion: 1,
     modelTimeoutMs: 120000,
     mvuIdleTimeoutMs: 120000,
     mvuStableTimeoutMs: 8000,
@@ -142,6 +146,7 @@ function getSettings() {
     const root = context.extensionSettings || {};
     if (!isPlainObject(root[PLUGIN_ID])) root[PLUGIN_ID] = {};
     const settings = root[PLUGIN_ID];
+    const previousVariableAuditSettingsVersion = Number(settings.variableAuditSettingsVersion) || 0;
     const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
     const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
     let changed = false;
@@ -180,6 +185,19 @@ function getSettings() {
         if (Number(settings.forumMaxTokens) === 2600) settings.forumMaxTokens = 3600;
         changed = true;
     }
+    if (previousVariableAuditSettingsVersion < 1) {
+        // v1.7.0 and earlier forced every variable audit into 4096 output
+        // tokens. Reasoning models can spend most of that budget before the
+        // JSON patch, so migrate only the old implicit default.
+        if (Number(settings.maxTokens) === 4096) settings.maxTokens = DEFAULTS.maxTokens;
+        settings.variableRetryLimit = 3;
+        settings.variableAuditSettingsVersion = 1;
+        changed = true;
+    }
+    settings.variableRetryLimit = Math.min(
+        3,
+        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
+    );
     if (previousForumSettingsVersion < 3) {
         settings.forumRefreshMode = 'manual';
         settings.forumAutoRefresh = false;
@@ -608,6 +626,91 @@ async function collectHardContractTexts(context, character) {
         // Some backends do not expose OpenAI-compatible preset modules.
     }
     return texts;
+}
+
+function hardContractEvidenceForPrompt(contractTexts, schemaTexts = [], ruleTexts = []) {
+    const authoritative = [...schemaTexts, ...ruleTexts]
+        .map((text) => String(text || '').trim())
+        .filter(Boolean);
+    const windows = [];
+    const seen = new Set();
+
+    for (const source of contractTexts || []) {
+        const lines = String(source || '').split(/\r?\n/u);
+        if (!lines.length) continue;
+        const selected = new Set([0]);
+        for (let index = 1; index < lines.length; index += 1) {
+            if (!hardContractRelevant(lines[index])) continue;
+            for (
+                let nearby = Math.max(1, index - 2);
+                nearby <= Math.min(lines.length - 1, index + 3);
+                nearby += 1
+            ) selected.add(nearby);
+        }
+        if (selected.size <= 1) continue;
+
+        const excerpt = [...selected]
+            .sort((left, right) => left - right)
+            .map((index, position, picked) => {
+                const previous = picked[position - 1];
+                return previous !== undefined && index > previous + 1
+                    ? `……（省略 ${index - previous - 1} 行无关内容）……\n${lines[index]}`
+                    : lines[index];
+            })
+            .join('\n')
+            .trim();
+        if (!excerpt) continue;
+        const body = excerpt.replace(/^【[^\n]+】\s*/u, '').trim();
+        if (authoritative.some((text) => text === body)) continue;
+        const key = fingerprint(excerpt);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        windows.push(excerpt);
+    }
+    return windows.join('\n\n');
+}
+
+function characterAuditContext(character, context) {
+    const roots = [
+        character?.data,
+        character,
+        character?.json_data?.data,
+        character?.json_data,
+    ].filter((value) => value && typeof value === 'object');
+    const fields = [
+        ['角色/世界名', 'name'],
+        ['角色设定', 'description'],
+        ['性格与身份', 'personality'],
+        ['当前场景', 'scenario'],
+    ];
+    const blocks = [];
+    const seen = new Set();
+    for (const [label, key] of fields) {
+        for (const root of roots) {
+            let value = String(root?.[key] || '').trim();
+            if (!value) continue;
+            try {
+                value = context?.substituteParams?.(value) ?? value;
+            } catch {
+                // Raw character text is still useful when macro substitution is unavailable.
+            }
+            const fingerprintValue = fingerprint(value);
+            if (seen.has(fingerprintValue)) break;
+            seen.add(fingerprintValue);
+            blocks.push(`【${label}】\n${value}`);
+            break;
+        }
+    }
+    return blocks.join('\n\n');
+}
+
+function variableAuditMode(context, targetIndex, previousData) {
+    const priorAiCount = (context?.chat || [])
+        .slice(0, targetIndex + 1)
+        .filter((message) => message && !message.is_user && !message.is_system)
+        .length;
+    if (priorAiCount <= 2 || !hasUsableStatData(previousData)) return 'opening';
+    return 'turn';
 }
 
 function initializationEntriesOf(book) {
@@ -1318,6 +1421,15 @@ async function mvuDataAt(Mvu, messageId) {
     }
 }
 
+async function mvuDataAtLatestTarget(Mvu, messageId) {
+    const exact = await mvuDataAt(Mvu, messageId);
+    if (hasUsableStatData(exact)) return exact;
+    const latest = latestAiMessage(getContext());
+    if (messageId !== 'latest' && Number(messageId) !== latest.index) return exact;
+    const fallback = await mvuDataAt(Mvu, 'latest');
+    return hasUsableStatData(fallback) ? fallback : exact;
+}
+
 async function waitMvuStable(Mvu, capMs = 8000, intervalMs = 250, stableReads = 3) {
     const started = Date.now();
     let previous = '';
@@ -1433,7 +1545,7 @@ async function runOpeningResourceSync(targetId, { manual = false } = {}) {
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
 
     const freshContext = getContext();
-    const currentData = await mvuDataAt(Mvu, resolved);
+    const currentData = await mvuDataAtLatestTarget(Mvu, resolved);
     const previousData = await previousMvuData(Mvu, freshContext, resolved);
     const initialStates = await collectInitializationStates(
         freshContext,
@@ -1599,6 +1711,17 @@ async function buildAuditMessages({
             `[${issue.severity}/${issue.code}]${issue.path ? ` ${issue.path}` : ''}：${issue.message}`
         )).join('\n')
         : '本地确定性检查未发现硬合同问题。';
+    const auditMode = variableAuditMode(context, targetIndex, previousData);
+    const initializationStates = auditMode === 'opening'
+        ? await collectInitializationStates(context, character)
+        : [];
+    const characterContext = characterAuditContext(character, context);
+    const promptContractEvidence = hardContractEvidenceForPrompt(
+        contractTexts,
+        schemaScripts.map((script) => script.content),
+        ruleTexts,
+    );
+    const promptAddon = String(settings.variablePromptAddon || '').trim();
 
     const system = [
         '你是一个通用、保守、可验证的 MVU 状态审计与修复引擎。',
@@ -1634,6 +1757,10 @@ async function buildAuditMessages({
         '- 路径使用 JSON Pointer，键名中的 ~ 和 / 必须分别写成 ~0 和 ~1。',
         '- 不要修改任何路径段以“_”开头的只读字段。',
         '',
+        '【开局与人物创建】',
+        '- 若这是人物创建或开局楼层，要完整核对玩家已经确认的属性分配、未分配点数、派生上限、当前资源、已获得物品、装备槽位与任务奖励；不能因为原更新很长、字段很多或没有上一楼状态就跳过。',
+        '- 初始化声明是开局基线，最新正文是本轮已确认选择；当前 stat_data 是原更新应用后的结果。三者闭合核对，只补遗漏或纠正错更，不重复已经落地的变化。',
+        '',
         '【正文硬合同校正】',
         '- 本地确定性检查列出的error，以及Schema/规则能够唯一证明的技能资源消耗、物品结构、掉落数量、奖励结算和骰子矛盾，属于可校正硬错误。',
         '- 复用本次审计完成正文校正，不得要求第二次模型调用。若没有可唯一证明的硬错误，禁止输出HardContractCorrection。',
@@ -1646,23 +1773,26 @@ async function buildAuditMessages({
         '- CorrectedContent只写原<content>标签内部的新正文，不得包含content标签本身、UpdateVariable、状态栏、思维链或其他机制区块。',
         '- CorrectedOptions仅在选项硬合同有错时输出其内部完整内容，不得包含options标签本身；每个选项只提出下一步，不得视为已执行。',
         '',
+        promptAddon
+            ? `【用户自定义模型适配/破限提示】\n${promptAddon}\n这段只调整模型服从与表达方式，不改变上方审计职责、证据标准、玩家控制权或下方机器输出协议。`
+            : '',
         '【唯一允许的输出结构】',
-        '若需要正文硬校正，先输出：',
-        '<HardContractCorrection>',
-        '<Reason>不超过120字，列出被修正的硬规则</Reason>',
-        '<Evidence>逐字复制当前Schema、世界书规则或预设合同中的一小段依据；不得概括或自造</Evidence>',
-        '<CorrectedContent>仅在正文需要改动时输出完整的新content内部正文</CorrectedContent>',
-        '<CorrectedOptions>仅在选项需要改动时输出完整的新options内部文本</CorrectedOptions>',
-        '</HardContractCorrection>',
-        '随后始终输出：',
+        '第一部分必须最先完整输出；即使还要改正文，也不得在它之前写任何内容：',
         '<UpdateVariable>',
         '<Analysis>不超过80字，禁止在这里写任何机制标签字面量</Analysis>',
         '<JSONPatch>',
         '[合法操作对象；没有需要修复时必须是 []]',
         '</JSONPatch>',
         '</UpdateVariable>',
+        '完成并闭合上面的变量区块后，只有确需正文硬校正时才追加：',
+        '<HardContractCorrection>',
+        '<Reason>不超过120字，列出被修正的硬规则</Reason>',
+        '<Evidence>逐字复制当前Schema、世界书规则或预设合同中的一小段依据；不得概括或自造</Evidence>',
+        '<CorrectedContent>仅在正文需要改动时输出完整的新content内部正文</CorrectedContent>',
+        '<CorrectedOptions>仅在选项需要改动时输出完整的新options内部文本</CorrectedOptions>',
+        '</HardContractCorrection>',
         '不要输出代码围栏、解释、前言或尾注。',
-    ].join('\n');
+    ].filter((line, index, list) => line !== '' || list[index - 1] !== '').join('\n');
 
     const user = [
         '=== 当前角色卡 MVU/Zod Schema ===',
@@ -1671,8 +1801,11 @@ async function buildAuditMessages({
         '=== 当前启用的 MVU 更新规则 ===',
         cropText(rules || '未找到 [mvu_update] 规则；只能依据 Schema 与当前状态保守处理。', 70000, '规则'),
         '',
-        '=== 当前启用的正文/骰子/物品硬合同 ===',
-        cropText(contractTexts.join('\n\n') || '未找到额外硬合同。', 52000, '硬合同'),
+        '=== 当前角色与场景（只读设定）===',
+        cropText(characterContext || '角色卡未提供额外角色/场景文本。', 20000, '角色设定'),
+        '',
+        '=== 当前启用的正文/骰子/物品硬合同证据摘录 ===',
+        cropText(promptContractEvidence || '未找到额外硬合同。', 32000, '硬合同证据'),
         '',
         '=== 本地确定性硬合同检查 ===',
         cropText(hardIssueText, 16000, '硬合同问题'),
@@ -1683,6 +1816,19 @@ async function buildAuditMessages({
         '=== 当前 stat_data（原更新应用之后）===',
         stateForPrompt(currentStat),
         '',
+        auditMode === 'opening'
+            ? '=== 开局初始化声明（只读基线；可能有多份候选，需与Schema/正文交叉核对）==='
+            : '',
+        auditMode === 'opening'
+            ? cropText(
+                initializationStates.length
+                    ? safeJson(initializationStates.map((state) => statDataOf(state) || state))
+                    : '没有读取到独立 initvar；仍须依据 Schema、更新规则、人物创建正文和当前状态完成开局审计。',
+                70000,
+                '初始化声明',
+            )
+            : '',
+        auditMode === 'opening' ? '' : '',
         '=== 本回合已观察到的状态差异（上一 AI 楼层 -> 当前）===',
         observedDiff(previousData, currentData),
         '',
@@ -1704,7 +1850,7 @@ async function buildAuditMessages({
         '',
         retry
             ? [
-                '=== 上一次候选补丁被本地校验拒绝 ===',
+                `=== 第 ${Number(retry.attempt) || 1} 次分析失败；当前状态未应用失败结果 ===`,
                 `失败原因：${retry.reason}`,
                 retry.details?.length
                     ? `未落地明细：${cropText(safeJson(retry.details), 12000, '拒绝明细')}`
@@ -1712,10 +1858,12 @@ async function buildAuditMessages({
                 retry.output
                     ? `上一次模型输出：\n${cropText(retry.output, 18000, '上次输出')}`
                     : '',
-                '当前真实状态没有保留这次失败候选的任何修改。请重新核对路径、操作类型、Schema 字段和枚举，只返回修正后的区块。',
+                '请针对失败原因重新分析。变量区块必须最先完整闭合；若上次 JSON 或路径错误，重新生成合法的最小补丁，不要复制坏格式。',
             ].filter(Boolean).join('\n')
-            : '请审计错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。',
-    ].join('\n');
+            : auditMode === 'opening'
+                ? '这是开局/人物创建审计。请审计全部已确认创建选择、资源、装备、物品、奖励、派生值的错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。'
+                : '请审计错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。',
+    ].filter((line, index, list) => line !== '' || list[index - 1] !== '').join('\n');
 
     return {
         messages: [
@@ -1728,15 +1876,15 @@ async function buildAuditMessages({
         schemaTexts: schemaScripts.map((script) => script.content),
         ruleTexts,
         previousUserText: previousUserMessageText(context, targetIndex),
-        maxTokens: hardErrors.some((issue) => issue.code === 'content-under-budget')
-            ? Math.min(
-                8192,
-                Math.max(
-                    Number(settings.maxTokens) || 4096,
-                    (Number(hardAudit.reply?.budget?.min) || 1800) * 2 + 1200,
-                ),
-            )
-            : Number(settings.maxTokens) || 4096,
+        auditMode,
+        initializationStates,
+        // This value is the provider/model ceiling configured by the user.
+        // Never silently lower it for ordinary turns, and never exceed it just
+        // because a long-body correction was requested.
+        maxTokens: Math.max(
+            4096,
+            Number(settings.maxTokens) || DEFAULTS.maxTokens,
+        ),
     };
 }
 
@@ -1772,7 +1920,7 @@ async function callModel(messages, options = {}) {
     disableStoryOracleAutoIfNeeded();
     const maxTokens = Math.max(
         1024,
-        Number(options.maxTokens ?? settings.maxTokens) || 4096,
+        Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
     );
     const timeoutMs = Math.max(10000, Number(settings.modelTimeoutMs) || 120000);
 
@@ -1785,15 +1933,13 @@ async function callModel(messages, options = {}) {
                     timeoutMs,
                     '故事神谕连接',
                 );
-                if (String(output || '').trim()) return String(output);
+                return String(output || '');
             } catch (error) {
-                if (isRateLimitError(error)) {
-                    // Story Oracle and the Tavern profile commonly point to the
-                    // same public endpoint. Falling through on 429 immediately
-                    // spends another RPM slot and makes the overload worse.
-                    throw error;
-                }
-                console.warn('[MVU Auto Doctor] 故事神谕连接调用失败，改用酒馆当前连接。', error);
+                // Do not silently spend a second call through the Tavern
+                // connection after the preferred provider already failed.
+                // Parser/validation failures are retried explicitly by
+                // runTarget; transport/auth/rate failures are surfaced.
+                throw error;
             }
         }
     }
@@ -1926,32 +2072,36 @@ function prepareReplyCorrection({
 }
 
 async function parseCandidate(Mvu, oldData, output) {
-    const correction = extractHardContractCorrection(output);
-    if (correction?.error) {
+    let correction = extractHardContractCorrection(output);
+    const correctionWarning = correction?.error
+        || (
+            !correction && /<HardContractCorrection\b/iu.test(String(output || ''))
+                ? '可选的 HardContractCorrection 不完整，已忽略；变量补丁仍独立校验'
+                : ''
+        );
+    if (correctionWarning) correction = null;
+    const extracted = extractUpdateBlockCandidate(output);
+    if (!extracted.block) {
         return {
             status: 'failed',
             retryable: true,
-            reason: correction.error,
+            failureKind: extracted.incomplete ? 'incomplete-output' : 'missing-output',
+            reason: extracted.reason || '模型没有返回可解析的 <UpdateVariable> 区块',
             output,
+            correctionWarning,
         };
     }
-    const block = extractLastUpdateBlock(output);
-    if (!block) {
-        return {
-            status: 'failed',
-            retryable: true,
-            reason: '模型没有返回完整的 <UpdateVariable> 区块',
-            output,
-        };
-    }
-    const prepared = preparePatch(block, oldData);
+    const prepared = preparePatch(extracted.block, oldData);
     if (prepared.error) {
         return {
             status: 'failed',
             retryable: true,
+            failureKind: 'invalid-patch',
             reason: prepared.error,
             output,
-            block,
+            block: extracted.block,
+            recoveredOutput: extracted.recovered,
+            correctionWarning,
         };
     }
     if (!prepared.ops.length) {
@@ -1961,6 +2111,8 @@ async function parseCandidate(Mvu, oldData, output) {
             block: prepared.block,
             output,
             correction,
+            recoveredOutput: extracted.recovered,
+            correctionWarning,
         };
     }
 
@@ -1971,9 +2123,11 @@ async function parseCandidate(Mvu, oldData, output) {
         return {
             status: 'failed',
             retryable: true,
+            failureKind: 'mvu-parse-failed',
             reason: `MVU 解析候选补丁失败：${error.message || error}`,
             output,
             block: prepared.block,
+            correctionWarning,
         };
     }
     const checked = validatePatchResult(oldData, parsed, prepared);
@@ -1981,10 +2135,12 @@ async function parseCandidate(Mvu, oldData, output) {
         return {
             status: checked.nochange ? 'nochange' : 'failed',
             retryable: !checked.nochange,
+            failureKind: checked.nochange ? '' : 'validation-failed',
             reason: checked.reason,
             details: checked.details,
             output,
             block: prepared.block,
+            correctionWarning,
         };
     }
     return {
@@ -1995,6 +2151,8 @@ async function parseCandidate(Mvu, oldData, output) {
         prepared,
         newData: parsed,
         correction,
+        recoveredOutput: extracted.recovered,
+        correctionWarning,
     };
 }
 
@@ -2127,7 +2285,7 @@ async function applyCorrectionAsSwipe({
 
     let mvuSnapshot = null;
     try {
-        mvuSnapshot = await mvuDataAt(Mvu, index);
+        mvuSnapshot = await mvuDataAtLatestTarget(Mvu, index);
     } catch (error) {
         return { status: 'failed', reason: `无法读取修正版 swipe 的 MVU 快照：${error.message || error}` };
     }
@@ -2281,7 +2439,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
         return { status: 'stale', reason: `${current.reason}，未写入` };
     }
     const options = { type: 'message', message_id: captured.index };
-    const oldData = await mvuDataAt(Mvu, captured.index);
+    const oldData = await mvuDataAtLatestTarget(Mvu, captured.index);
     if (!oldData) return { status: 'failed', reason: '提交前无法读取当前 MVU 状态' };
     current = targetIsCurrent(captured, token);
     if (!current.ok) return { status: 'stale', reason: `${current.reason}，未写入` };
@@ -2360,7 +2518,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
             reason: `${current.reason}；精确楼层写入已经完成，写前快照已保存。未读取或刷新新目标；回到原回复/swipe 后可核验并撤销`,
         };
     }
-    const landed = await mvuDataAt(Mvu, captured.index);
+    const landed = await mvuDataAtLatestTarget(Mvu, captured.index);
     const verified = validatePatchResult(oldData, landed, candidate.prepared);
     if (!verified.ok) {
         record.status = 'applied';
@@ -2382,7 +2540,7 @@ async function commitCandidateUnlocked(Mvu, candidate, captured, token, recordMe
                 );
                 if (!rollbackCandidate) throw new Error('无法构造仅恢复本次触碰路径的回滚状态');
                 await Mvu.replaceMvuData(rollbackCandidate, options);
-                const rollbackLanded = await mvuDataAt(Mvu, captured.index);
+                const rollbackLanded = await mvuDataAtLatestTarget(Mvu, captured.index);
                 rollbackVerified = deepSubset(
                     statDataOf(rollbackCandidate),
                     statDataOf(rollbackLanded),
@@ -2542,10 +2700,14 @@ async function runTarget(targetId, {
     }
 
     const character = currentCharacter(context);
-    const currentData = await mvuDataAt(Mvu, resolved);
+    // Some MVU/TauriTavern builds expose the newest initialized state only
+    // through the symbolic "latest" selector during character creation. The
+    // helper falls back only when the captured floor is still the latest AI
+    // target, so it cannot redirect an older-floor repair.
+    const currentData = await mvuDataAtLatestTarget(Mvu, resolved);
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-    if (!currentData || !statDataOf(currentData)) {
+    if (!hasUsableStatData(currentData)) {
         const result = { status: 'failed', reason: '最新楼层没有可读取的 stat_data' };
         setStatus(result.reason, 'error');
         if (manual) toast('warning', result.reason);
@@ -2560,7 +2722,11 @@ async function runTarget(targetId, {
     let candidate = null;
     let originalBlock = '';
     let finalBuilt = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    const maxAttempts = Math.min(
+        3,
+        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
+    );
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) {
             return { status: 'stale', reason: targetCheck.reason };
@@ -2585,7 +2751,8 @@ async function runTarget(targetId, {
         } catch (error) {
             candidate = {
                 status: 'failed',
-                retryable: attempt === 0 && !isRateLimitError(error),
+                retryable: false,
+                failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
                 reason: `模型调用失败：${error.message || error}`,
                 output: '',
             };
@@ -2595,9 +2762,17 @@ async function runTarget(targetId, {
         if (output !== undefined) candidate = await parseCandidate(Mvu, currentData, output);
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-        if (candidate.status !== 'failed' || !candidate.retryable || attempt === 1) break;
-        retry = candidate;
-        setStatus('首个补丁未通过校验，正在自动重试…', 'busy');
+        candidate.attempts = attempt + 1;
+        if (
+            candidate.status !== 'failed'
+            || !candidate.retryable
+            || attempt + 1 >= maxAttempts
+        ) break;
+        retry = { ...candidate, attempt: attempt + 1 };
+        setStatus(
+            `第 ${attempt + 1} 次分析未得到可用补丁，正在进行第 ${attempt + 2}/${maxAttempts} 次定向重试…`,
+            'busy',
+        );
     }
 
     const correctionPlan = settings.hardContractCorrectionEnabled && candidate?.correction
@@ -2673,8 +2848,18 @@ async function runTarget(targetId, {
     let result;
     try {
         result = await commitCandidate(Mvu, candidate, captured, token);
+        result = {
+            ...result,
+            attempts: candidate.attempts,
+            recoveredOutput: candidate.recoveredOutput,
+            correctionWarning: candidate.correctionWarning,
+        };
     } catch (error) {
-        result = { status: 'failed', reason: `提交补丁失败：${error.message || error}` };
+        result = {
+            status: 'failed',
+            attempts: candidate.attempts,
+            reason: `提交补丁失败：${error.message || error}`,
+        };
     }
 
     if (result.status === 'applied') {
@@ -5560,9 +5745,39 @@ function buildSettingsPanel() {
                         只在补丁完整通过路径检查、MVU/Zod 解析和写后回读时提交。
                     </div>
                     <div class="mvuad-options"></div>
+                    <details class="mvuad-settings-fold mvuad-variable-prompt-settings">
+                        <summary>变量诊断模型适配与输出空间</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                医生会自动提供完整的 Schema、规则、状态、正文和补丁协议。
+                                下框只用于粘贴你自己的破限/模型适配语句；正常成功只调用一次，
+                                仅分析结果损坏时最多三次尝试。
+                            </div>
+                            <label class="mvuad-number">
+                                <span>单次分析 max_tokens</span>
+                                <input class="text_pole mvuad-variable-max-tokens" type="number" min="4096" step="1024">
+                            </label>
+                            <div class="mvuad-description">
+                                请填所用模型/公益站实际允许的单次输出上限。医生不再把它压到 4096；默认 32768。
+                            </div>
+                            <label class="mvuad-prompt-addon-label" for="mvuad-variable-prompt-addon">
+                                附加破限/模型适配提示词
+                            </label>
+                            <textarea
+                                id="mvuad-variable-prompt-addon"
+                                class="text_pole mvuad-variable-prompt-addon"
+                                rows="6"
+                                placeholder="留空使用内置诊断提示；这里只粘贴你负责的那几句破限提示。"
+                            ></textarea>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-variable-prompt-save" type="button">保存模型适配</button>
+                                <button class="menu_button mvuad-variable-prompt-reset" type="button">清空附加提示</button>
+                            </div>
+                        </div>
+                    </details>
                     <label class="mvuad-number">
                         <span>回复后等待（毫秒）</span>
-                        <input class="text_pole" type="number" min="300" max="10000" step="100">
+                        <input class="text_pole mvuad-delay" type="number" min="300" max="10000" step="100">
                     </label>
                     <div class="mvuad-actions">
                         <button class="menu_button mvuad-run" type="button">检查最新回复</button>
@@ -5687,7 +5902,30 @@ function buildSettingsPanel() {
         makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
         makeCheckbox('硬错误时用同一次变量诊断生成可撤回修正版', 'hardContractCorrectionEnabled'),
     );
-    const delay = wrapper.querySelector('.mvuad-number input');
+    const variableMaxTokens = wrapper.querySelector('.mvuad-variable-max-tokens');
+    variableMaxTokens.value = String(getSettings().maxTokens);
+    variableMaxTokens.addEventListener('change', () => {
+        getSettings().maxTokens = Math.max(
+            4096,
+            Math.round((Number(variableMaxTokens.value) || DEFAULTS.maxTokens) / 1024) * 1024,
+        );
+        variableMaxTokens.value = String(getSettings().maxTokens);
+        saveSettings();
+    });
+    const variablePromptAddon = wrapper.querySelector('.mvuad-variable-prompt-addon');
+    variablePromptAddon.value = String(getSettings().variablePromptAddon || '');
+    wrapper.querySelector('.mvuad-variable-prompt-save').addEventListener('click', () => {
+        getSettings().variablePromptAddon = variablePromptAddon.value.trim();
+        saveSettings();
+        toast('success', '变量诊断附加提示词已保存。');
+    });
+    wrapper.querySelector('.mvuad-variable-prompt-reset').addEventListener('click', () => {
+        variablePromptAddon.value = '';
+        getSettings().variablePromptAddon = '';
+        saveSettings();
+        toast('info', '已清空附加提示，继续使用医生内置完整诊断提示。');
+    });
+    const delay = wrapper.querySelector('.mvuad-delay');
     delay.value = String(getSettings().delayMs);
     delay.addEventListener('change', () => {
         getSettings().delayMs = Math.min(

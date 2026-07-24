@@ -117,6 +117,109 @@ export function extractLastUpdateBlock(text) {
     return source.slice(open, close + '</UpdateVariable>'.length);
 }
 
+function balancedJsonArrayEnd(source, start) {
+    if (start < 0 || source[start] !== '[') return -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index += 1) {
+        const char = source[index];
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+        if (char === '[' || char === '{') depth += 1;
+        if (char === ']' || char === '}') depth -= 1;
+        if (depth === 0) return index + 1;
+        if (depth < 0) return -1;
+    }
+    return -1;
+}
+
+export function extractUpdateBlockCandidate(text) {
+    const source = String(text || '');
+    const complete = extractLastUpdateBlock(source);
+    if (complete) {
+        return { block: complete, recovered: false, incomplete: false };
+    }
+
+    const lower = source.toLowerCase();
+    const updateOpen = lower.lastIndexOf('<updatevariable');
+    if (updateOpen < 0) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: false,
+            reason: '模型没有返回 <UpdateVariable> 区块',
+        };
+    }
+    const updateOpenEnd = source.indexOf('>', updateOpen);
+    const jsonOpen = lower.indexOf('<jsonpatch', updateOpenEnd);
+    if (updateOpenEnd < 0 || jsonOpen < 0) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: true,
+            reason: '模型的 <UpdateVariable> 在 JSONPatch 之前被截断',
+        };
+    }
+    const jsonOpenEnd = source.indexOf('>', jsonOpen);
+    const arrayStart = source.indexOf('[', jsonOpenEnd + 1);
+    if (jsonOpenEnd < 0 || arrayStart < 0) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: true,
+            reason: '模型的 <JSONPatch> 在补丁数组之前被截断',
+        };
+    }
+    const arrayEnd = balancedJsonArrayEnd(source, arrayStart);
+    if (arrayEnd < 0) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: true,
+            reason: '模型输出在 JSONPatch 数组完成前被截断',
+        };
+    }
+    let ops;
+    try {
+        ops = JSON.parse(source.slice(arrayStart, arrayEnd));
+    } catch (error) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: false,
+            reason: `模型返回的 JSONPatch 无法解析：${error.message || error}`,
+        };
+    }
+    if (!Array.isArray(ops)) {
+        return {
+            block: '',
+            recovered: false,
+            incomplete: false,
+            reason: '模型返回的 JSONPatch 不是数组',
+        };
+    }
+    const partial = source.slice(updateOpen, arrayEnd);
+    return {
+        block: renderPatchBlock(partial, ops),
+        recovered: true,
+        incomplete: false,
+        reason: '模型遗漏了闭合标签；已从完整 JSONPatch 数组安全恢复',
+    };
+}
+
 export function parsePatchBlock(patchBlock) {
     const original = String(patchBlock || '');
     const lower = original.toLowerCase();

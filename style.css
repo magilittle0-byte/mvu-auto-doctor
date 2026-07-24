@@ -52,6 +52,22 @@
     min-height: 34px;
 }
 
+#mvu-auto-doctor-settings .mvuad-prompt-addon-label {
+    font-size: 0.86em;
+    font-weight: 650;
+    opacity: 0.86;
+}
+
+#mvu-auto-doctor-settings .mvuad-variable-prompt-addon {
+    display: block;
+    width: 100%;
+    min-height: 128px;
+    padding: 9px 10px;
+    resize: vertical;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
 #mvu-auto-doctor-settings .mvuad-section-title {
     margin-top: 12px;
     padding-top: 12px;

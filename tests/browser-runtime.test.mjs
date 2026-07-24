@@ -67,7 +67,7 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], raw: 0, replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], raw: 0, replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -75,8 +75,10 @@ let replaceDeferredResolve = null;
 let replaceDelayArmed = false;
 let activeReplacements = 0;
 let mode = 'normal';
+const modeRuns = {};
 let metadataSavesBeforeSwipeChange = -1;
 let mvuAlwaysBusy = false;
+let messageScopedMvuUnavailable = false;
 let corruptNextReplace = false;
 let throwNextReplace = false;
 let throwRollbackAfterCorruption = false;
@@ -146,7 +148,11 @@ window.toastr = {
 };
 window.Mvu = {
   isDuringExtraAnalysis: () => mvuAlwaysBusy,
-  getMvuData: () => structuredClone(latestData),
+  getMvuData: (options = {}) => (
+    messageScopedMvuUnavailable && options.message_id !== 'latest'
+      ? null
+      : structuredClone(latestData)
+  ),
   async parseMessage(block, data) {
     const match = block.match(/<JSONPatch>\s*([\s\S]*?)\s*<\/JSONPatch>/i);
     const ops = match ? JSON.parse(match[1]) : [];
@@ -198,7 +204,7 @@ window.Mvu = {
 window.StoryOracleAPI = {
   isCompatible: () => true,
   context: { getSettings: () => ({ autoDiagnoseEnabled: false }) },
-  async run(messages) {
+  async run(messages, options = {}) {
     const system = messages[0].content;
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
@@ -211,6 +217,8 @@ window.StoryOracleAPI = {
     if (!isContinuity && !isForum) {
       calls.repairSystem = messages[0].content;
       calls.repairUser = messages[1].content;
+      calls.repairOptions.push(structuredClone(options));
+      modeRuns[mode] = (modeRuns[mode] || 0) + 1;
     }
     if (isForum) {
       calls.forumRuns += 1;
@@ -271,6 +279,23 @@ window.StoryOracleAPI = {
         + '<JSONPatch>[{"op":"delta","path":"/账户/代币","value":3}]</JSONPatch>'
         + '</UpdateVariable>';
     }
+    if (mode === 'incomplete-then-valid' && modeRuns[mode] === 1) {
+      return '<UpdateVariable><Analysis>第一次输出被截断</Analysis><JSONPatch>'
+        + '[{"op":"delta","path":"/账户/代币","value":';
+    }
+    if (mode === 'missing-always') {
+      return '<Analysis>只有分析，没有机器区块</Analysis>';
+    }
+    if (mode === 'recoverable-tail') {
+      return '<UpdateVariable><Analysis>补丁数组完整但闭合标签丢失</Analysis><JSONPatch>'
+        + '[{"op":"delta","path":"/账户/代币","value":1}]';
+    }
+    if (mode === 'malformed-correction-valid-variable') {
+      return '<UpdateVariable><Analysis>变量区块正确</Analysis><JSONPatch>'
+        + '[{"op":"delta","path":"/账户/代币","value":1}]'
+        + '</JSONPatch></UpdateVariable>'
+        + '<HardContractCorrection><Reason>缺少其余字段与闭合标签';
+    }
     if (mode === 'defer') {
       return await new Promise((resolve) => { deferredResolve = resolve; });
     }
@@ -290,6 +315,7 @@ window.__TEST__ = {
   armSwipeChangeOnMetadataSave(skip = 0) { metadataSavesBeforeSwipeChange = Math.max(0, Number(skip) || 0); },
   setSwipeId(value) { context.chat.at(-1).swipe_id = value; },
   setMvuBusy(value) { mvuAlwaysBusy = !!value; },
+  setMessageScopedMvuUnavailable(value) { messageScopedMvuUnavailable = !!value; },
   setNormalizeReplacements(value) { normalizeReplacements = !!value; },
   armCorruptReplace() { corruptNextReplace = true; },
   armCorruptThenThrowRollback() {
@@ -437,7 +463,18 @@ try {
         cardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card').length,
         openCardCount: document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-thread-card[open]').length,
     }));
-    assert.equal(continuity.version, '1.7.0');
+    assert.equal(continuity.version, '1.7.1');
+    assert.equal(
+        continuity.calls.repairOptions[0]?.maxTokens,
+        32768,
+        '变量诊断默认必须给推理模型足够输出空间，不能沿用旧 4096 上限',
+    );
+    assert.match(
+        continuity.calls.repairSystem,
+        /第一部分必须最先完整输出[\s\S]*<UpdateVariable>[\s\S]*完成并闭合上面的变量区块后[\s\S]*<HardContractCorrection>/u,
+        '机器提示必须要求变量补丁先于可选正文修正版输出',
+    );
+    assert.match(continuity.calls.repairUser, /这是开局\/人物创建审计/u);
     assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
     assert.match(continuity.hardStatus, /硬合同/u);
     assert.match(continuity.hardDetails, /未发现可由程序确定/u);
@@ -895,7 +932,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.7.0');
+    assert.equal(lifecycle.version, '1.7.1');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1663,6 +1700,136 @@ try {
     );
     assert.equal(ruleBackedResult.audit.correction.evidence.ok, true);
     await ruleBackedPage.close();
+
+    const analysisRetryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await analysisRetryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await analysisRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const analysisRetryResult = await analysisRetryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('incomplete-then-valid');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+            retryPrompt: t.calls.repairUser,
+        };
+    });
+    assert.equal(analysisRetryResult.result.status, 'applied');
+    assert.equal(analysisRetryResult.result.attempts, 2);
+    assert.equal(analysisRetryResult.calls, 2, '只有第一次分析结果损坏时才应触发第二次调用');
+    assert.equal(analysisRetryResult.data.stat_data.账户.代币, 3);
+    assert.match(analysisRetryResult.retryPrompt, /第 1 次分析失败/u);
+    assert.match(analysisRetryResult.retryPrompt, /数组完成前被截断/u);
+    await analysisRetryPage.close();
+
+    const maxRetryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await maxRetryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await maxRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const maxRetryResult = await maxRetryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('missing-always');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            calls: t.calls.model.length - callsBefore,
+            replacements: t.calls.replace.length,
+        };
+    });
+    assert.equal(maxRetryResult.result.status, 'failed');
+    assert.equal(maxRetryResult.result.attempts, 3);
+    assert.equal(maxRetryResult.calls, 3, '连续分析失败时整轮最多尝试三次');
+    assert.equal(maxRetryResult.replacements, 0);
+    await maxRetryPage.close();
+
+    const recoveryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await recoveryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await recoveryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const recoveryResult = await recoveryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('recoverable-tail');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(recoveryResult.result.status, 'applied');
+    assert.equal(recoveryResult.result.recoveredOutput, true);
+    assert.equal(recoveryResult.result.attempts, 1);
+    assert.equal(recoveryResult.calls, 1, '完整 JSONPatch 只缺尾标签时应本地恢复，不浪费重试');
+    assert.equal(recoveryResult.data.stat_data.账户.代币, 3);
+    await recoveryPage.close();
+
+    const optionalCorrectionPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await optionalCorrectionPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await optionalCorrectionPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const optionalCorrectionResult = await optionalCorrectionPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('malformed-correction-valid-variable');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            data: t.getLatestData(),
+            calls: t.calls.model.length - callsBefore,
+        };
+    });
+    assert.equal(optionalCorrectionResult.result.status, 'applied');
+    assert.equal(optionalCorrectionResult.result.attempts, 1);
+    assert.equal(optionalCorrectionResult.calls, 1);
+    assert.equal(optionalCorrectionResult.data.stat_data.账户.代币, 3);
+    assert.match(optionalCorrectionResult.result.correctionWarning, /HardContractCorrection/u);
+    await optionalCorrectionPage.close();
+
+    const promptAddonPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await promptAddonPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await promptAddonPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await promptAddonPage.evaluate(() => {
+        const area = document.querySelector('.mvuad-variable-prompt-addon');
+        area.value = 'CUSTOM_MODEL_UNLOCK_LINE';
+        document.querySelector('.mvuad-variable-prompt-save').click();
+    });
+    const promptAddonResult = await promptAddonPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('normal');
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            saved: t.context.extensionSettings.mvu_auto_doctor.variablePromptAddon,
+            system: t.calls.repairSystem,
+            maxTokensInput: document.querySelector('.mvuad-variable-max-tokens')?.value,
+        };
+    });
+    assert.equal(promptAddonResult.saved, 'CUSTOM_MODEL_UNLOCK_LINE');
+    assert.equal(promptAddonResult.maxTokensInput, '32768');
+    assert.match(promptAddonResult.system, /CUSTOM_MODEL_UNLOCK_LINE/u);
+    assert.match(promptAddonResult.system, /当前角色卡的 MVU\/Zod Schema/u);
+    assert.match(promptAddonResult.system, /唯一允许的输出结构/u);
+    await promptAddonPage.close();
+
+    const openingLatestFallbackPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await openingLatestFallbackPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await openingLatestFallbackPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const openingLatestFallback = await openingLatestFallbackPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMessageScopedMvuUnavailable(true);
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            calls: t.calls.model.length - callsBefore,
+            data: t.getLatestData(),
+        };
+    });
+    assert.equal(openingLatestFallback.result.status, 'applied');
+    assert.equal(openingLatestFallback.calls, 1);
+    assert.equal(openingLatestFallback.data.stat_data.账户.代币, 3);
+    await openingLatestFallbackPage.close();
 
     const busyPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await busyPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

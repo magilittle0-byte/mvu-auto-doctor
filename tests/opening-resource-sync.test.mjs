@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+    extractUpdateBlockCandidate,
     findOpeningResourceMismatches,
     parseInitializationText,
     preparePatch,
@@ -7,6 +8,37 @@ import {
     simulateOps,
     validatePatchResult,
 } from '../core.mjs';
+
+const completeCandidate = extractUpdateBlockCandidate(
+    '<UpdateVariable><Analysis>完整</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/账户/代币","value":3}]'
+    + '</JSONPatch></UpdateVariable>',
+);
+assert.equal(completeCandidate.recovered, false);
+assert.match(completeCandidate.block, /<Analysis>完整<\/Analysis>/u);
+
+const safelyRecoveredCandidate = extractUpdateBlockCandidate(
+    '<UpdateVariable><Analysis>闭合标签被中转截掉</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/日志/文本","value":"方括号 ] 与花括号 } 都在字符串里"},'
+    + '{"op":"replace","path":"/账户/代币","value":3}]',
+);
+assert.equal(safelyRecoveredCandidate.recovered, true);
+assert.equal(safelyRecoveredCandidate.incomplete, false);
+assert.match(safelyRecoveredCandidate.block, /<\/JSONPatch>\s*<\/UpdateVariable>/u);
+assert.equal(
+    JSON.parse(
+        safelyRecoveredCandidate.block.match(/<JSONPatch>\s*([\s\S]*?)\s*<\/JSONPatch>/iu)[1],
+    ).length,
+    2,
+);
+
+const truncatedCandidate = extractUpdateBlockCandidate(
+    '<UpdateVariable><Analysis>被截断</Analysis><JSONPatch>'
+    + '[{"op":"replace","path":"/账户/代币","value":',
+);
+assert.equal(truncatedCandidate.block, '');
+assert.equal(truncatedCandidate.incomplete, true);
+assert.match(truncatedCandidate.reason, /数组完成前被截断/u);
 
 assert.deepEqual(
     simulateOps({ source: 1, keep: 2 }, [{ op: 'move', from: '/source', to: '/moved' }]),
