@@ -54,6 +54,57 @@
     justify-content: space-between;
 }
 
+#mvu-auto-doctor-settings .mvuad-provider-card {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: var(--mvuad-control-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
+}
+
+#mvu-auto-doctor-settings .mvuad-provider-field {
+    display: grid;
+    gap: 5px;
+    font-size: 0.86em;
+}
+
+#mvu-auto-doctor-settings .mvuad-provider-field input {
+    width: 100%;
+    min-height: 36px;
+}
+
+#mvu-auto-doctor-settings .mvuad-inline-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+}
+
+#mvu-auto-doctor-settings .mvuad-inline-field > button {
+    min-height: 36px;
+    white-space: nowrap;
+}
+
+#mvu-auto-doctor-settings .mvuad-model-list {
+    width: 100%;
+    min-height: 36px;
+}
+
+#mvu-auto-doctor-settings .mvuad-connection-manager .mvuad-select select {
+    width: min(240px, 54vw);
+}
+
+#mvu-auto-doctor-settings .mvuad-provider-status {
+    min-height: 1.4em;
+    font-size: var(--mvuad-fs-meta);
+    overflow-wrap: anywhere;
+    opacity: 0.82;
+}
+
+#mvu-auto-doctor-settings .mvuad-provider-status[data-kind="busy"] { color: var(--mvuad-warn); }
+#mvu-auto-doctor-settings .mvuad-provider-status[data-kind="ok"] { color: var(--mvuad-ok); }
+#mvu-auto-doctor-settings .mvuad-provider-status[data-kind="error"] { color: var(--mvuad-err); }
+
 #mvu-auto-doctor-settings .mvuad-check {
     min-height: 32px;
     padding: 2px 0;
@@ -502,6 +553,10 @@
 
 @media (max-width: 600px) {
     #mvu-auto-doctor-settings .mvuad-actions {
+        grid-template-columns: 1fr;
+    }
+
+    #mvu-auto-doctor-settings .mvuad-inline-field {
         grid-template-columns: 1fr;
     }
 
