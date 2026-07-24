@@ -42,6 +42,12 @@ if (!playwrightPath) {
     process.exit(0);
 }
 const { chromium } = await import(pathToFileURL(playwrightPath).href);
+const systemBrowser = [
+    process.env.MVUAD_BROWSER_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+].filter(Boolean).find((candidate) => fs.existsSync(candidate));
 
 const harness = String.raw`<!doctype html>
 <html><head><link rel="stylesheet" href="/style.css"><style>
@@ -100,7 +106,13 @@ const context = {
   chat,
   chatId: 'chat-a',
   chatMetadata: {},
-  extensionSettings: {},
+  extensionSettings: {
+    mvu_auto_doctor: {
+      strictModelProvider: 'story-oracle',
+      fastModelProvider: 'story-oracle',
+      modelRoutingSettingsVersion: 2,
+    },
+  },
   characterId: 0,
   groupId: null,
   characters: [{ data: { extensions: { tavern_helper: { scripts: [{
@@ -441,8 +453,8 @@ const server = http.createServer((request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
 const launchOptions = { headless: true };
-if (process.env.MVUAD_BROWSER_EXECUTABLE_PATH) {
-    launchOptions.executablePath = process.env.MVUAD_BROWSER_EXECUTABLE_PATH;
+if (systemBrowser) {
+    launchOptions.executablePath = systemBrowser;
 }
 const browser = await chromium.launch(launchOptions);
 
@@ -468,7 +480,9 @@ try {
         })));
         throw error;
     });
-    await page.waitForTimeout(500);
+    await page.waitForFunction(() => (
+        window.__TEST__.calls.repairOptions.length === 1
+    ), null, { timeout: 20000 });
     const defaultForumMode = await page.evaluate(() => ({
         turn: window.MvuAutoDoctorAPI.getForumState().turn,
         runs: window.__TEST__.calls.forumRuns,
@@ -518,10 +532,10 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.3');
+    assert.equal(continuity.version, '1.8.4');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
-        32768,
+        8192,
         '变量诊断默认必须给推理模型足够输出空间，不能沿用旧 4096 上限',
     );
     assert.match(
@@ -597,6 +611,9 @@ try {
     assert.equal(continuity.hasWorldPanelButton, true);
     assert.equal(continuity.featureFoldsClosed, true, '设置页功能分区应默认收起');
     if (process.env.MVUAD_SETTINGS_SCREENSHOT) {
+        await page.evaluate(() => {
+            document.querySelector('.mvuad-connection-manager').open = true;
+        });
         await page.locator('#mvu-auto-doctor-settings').screenshot({ path: process.env.MVUAD_SETTINGS_SCREENSHOT });
     }
     const orbBeforeOpen = await page.evaluate(() => {
@@ -1008,7 +1025,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.3');
+    assert.equal(lifecycle.version, '1.8.4');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1222,8 +1239,8 @@ try {
     assert.equal(continueInterrupted.replacements, 0, 'continue 开始后，挂起的旧 repair 结果不得写入同一楼层');
     assert.equal(
         continueInterrupted.continuityCalls,
-        0,
-        '变量审计被 continue 作废后，不得绕过上游继续产生活世界费用',
+        1,
+        '低延迟模式下活世界与变量同时启动；continue 只能作废尚未落地的结果，不能假装并发请求从未发出',
     );
     await continueInterruptPage.close();
 
@@ -1363,6 +1380,9 @@ try {
     await hardContractGatePage.waitForFunction(() => (
         window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length === 1
     ), null, { timeout: 30000 });
+    await hardContractGatePage.waitForFunction(() => (
+        window.__TEST__.calls.repairOptions.length === 1
+    ), null, { timeout: 30000 });
     const hardContractGate = await hardContractGatePage.evaluate(() => ({
         calls: structuredClone(window.__TEST__.calls),
         status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
@@ -1375,10 +1395,321 @@ try {
     assert.doesNotMatch(hardContractGate.status, /已跳过本回合/u);
     assert.match(
         hardContractGate.calls.repairSystem,
-        /content-under-budget[\s\S]*CorrectedContent>不是可选项/u,
-        '正文低于硬下限时必须明确要求模型在每次尝试中输出足量修正版',
+        /content-under-budget 只作质量报告[\s\S]*不得仅为了补字/u,
+        '正文低于写作目标时只报告，不得拖慢变量关键路径去重写全文',
     );
     await hardContractGatePage.close();
+
+    const connectionManagerPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await connectionManagerPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await connectionManagerPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const connectionManagerResult = await connectionManagerPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const root = document.querySelector('.mvuad-connection-manager');
+        const endpoint = root.querySelector('.mvuad-connection-endpoint');
+        const apiKey = root.querySelector('.mvuad-connection-key');
+        const model = root.querySelector('.mvuad-connection-model');
+        const presetName = root.querySelector('.mvuad-connection-preset-name');
+        const modelList = root.querySelector('.mvuad-model-list');
+        const strictRoute = root.querySelector('.mvuad-strict-preset');
+        const fastRoute = root.querySelector('.mvuad-fast-preset');
+        const network = [];
+        window.fetch = async (url, options = {}) => {
+            network.push({
+                url: String(url),
+                method: String(options.method || 'GET'),
+                authorization: String(options.headers?.Authorization || ''),
+            });
+            return new Response(JSON.stringify({
+                data: [
+                    { id: 'gemini-3.5-flash' },
+                    { id: 'gemini-3.5-pro' },
+                ],
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        };
+        endpoint.value = 'https://models.example';
+        apiKey.value = 'manager-test-secret';
+        endpoint.dispatchEvent(new Event('change'));
+        apiKey.dispatchEvent(new Event('change'));
+        root.querySelector('.mvuad-model-fetch').click();
+        await new Promise((resolve) => {
+            const poll = () => {
+                if (!modelList.hidden && modelList.options.length === 3) resolve();
+                else setTimeout(poll, 10);
+            };
+            poll();
+        });
+        modelList.value = 'gemini-3.5-pro';
+        modelList.dispatchEvent(new Event('change'));
+        presetName.value = '格式修复 3.5P';
+        root.querySelector('.mvuad-connection-preset-save').click();
+        strictRoute.value = '格式修复 3.5P';
+        strictRoute.dispatchEvent(new Event('change'));
+        fastRoute.value = '格式修复 3.5P';
+        fastRoute.dispatchEvent(new Event('change'));
+        const backendNetwork = [];
+        const backendModelCalls = [];
+        t.context.getRequestHeaders = () => ({
+            'Content-Type': 'application/json',
+            'X-CSRF-Test': 'present',
+        });
+        t.context.ChatCompletionService = {
+            async processRequest(payload, preset, custom, signal) {
+                backendModelCalls.push({
+                    payload: structuredClone(payload),
+                    preset,
+                    custom,
+                    hasSignal: !!signal,
+                });
+                return { content: 'OK' };
+            },
+        };
+        window.fetch = async (url, options = {}) => {
+            backendNetwork.push({
+                url: String(url),
+                method: String(options.method || 'GET'),
+                headers: structuredClone(options.headers || {}),
+                body: JSON.parse(options.body || '{}'),
+            });
+            return new Response(JSON.stringify({
+                data: [{ id: 'backend-3.5-flash' }],
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        };
+        endpoint.value = 'https://backend.example';
+        apiKey.value = 'backend-test-secret';
+        model.value = 'backend-3.5-flash';
+        root.querySelector('.mvuad-connection-backend').checked = true;
+        presetName.value = '后端转发';
+        endpoint.dispatchEvent(new Event('change'));
+        apiKey.dispatchEvent(new Event('change'));
+        model.dispatchEvent(new Event('change'));
+        root.querySelector('.mvuad-connection-backend').dispatchEvent(new Event('change'));
+        root.querySelector('.mvuad-model-fetch').click();
+        await new Promise((resolve) => {
+            const poll = () => {
+                if (backendNetwork.length === 1) resolve();
+                else setTimeout(poll, 10);
+            };
+            poll();
+        });
+        root.querySelector('.mvuad-connection-preset-save').click();
+        strictRoute.value = '后端转发';
+        strictRoute.dispatchEvent(new Event('change'));
+        root.querySelector('.mvuad-test-strict').click();
+        await new Promise((resolve) => {
+            const poll = () => {
+                if (/连接成功/u.test(root.querySelector('.mvuad-strict-provider-status').textContent)) {
+                    resolve();
+                } else {
+                    setTimeout(poll, 10);
+                }
+            };
+            poll();
+        });
+        const settings = window.__TEST__.context.extensionSettings.mvu_auto_doctor;
+        return {
+            network,
+            modelValue: model.value,
+            saved: structuredClone(settings.connectionPresets),
+            strictRoute: settings.strictConnectionPreset,
+            fastRoute: settings.fastConnectionPreset,
+            legacyHidden: document.querySelector('.mvuad-model-routing')?.hidden === true,
+            backendNetwork,
+            backendModelCalls,
+        };
+    });
+    assert.deepEqual(
+        connectionManagerResult.network,
+        [{
+            url: 'https://models.example/v1/models',
+            method: 'GET',
+            authorization: 'Bearer manager-test-secret',
+        }],
+    );
+    assert.equal(connectionManagerResult.modelValue, 'backend-3.5-flash');
+    assert.equal(connectionManagerResult.saved.length, 2);
+    assert.deepEqual(connectionManagerResult.saved[0], {
+        name: '格式修复 3.5P',
+        endpoint: 'https://models.example',
+        apiKey: 'manager-test-secret',
+        model: 'gemini-3.5-pro',
+        viaBackend: false,
+        rawUrl: false,
+    });
+    assert.equal(connectionManagerResult.saved[1].name, '后端转发');
+    assert.equal(connectionManagerResult.saved[1].viaBackend, true);
+    assert.equal(connectionManagerResult.strictRoute, '后端转发');
+    assert.equal(connectionManagerResult.fastRoute, '格式修复 3.5P');
+    assert.equal(connectionManagerResult.legacyHidden, true);
+    assert.equal(connectionManagerResult.backendNetwork.length, 1);
+    assert.equal(
+        connectionManagerResult.backendNetwork[0].url,
+        '/api/backends/chat-completions/status',
+    );
+    assert.equal(
+        connectionManagerResult.backendNetwork[0].body.custom_url,
+        'https://backend.example/v1',
+    );
+    assert.match(
+        connectionManagerResult.backendNetwork[0].body.custom_include_headers,
+        /Bearer backend-test-secret/u,
+    );
+    assert.equal(connectionManagerResult.backendModelCalls.length, 1);
+    assert.equal(
+        connectionManagerResult.backendModelCalls[0].payload.custom_url,
+        'https://backend.example/v1',
+    );
+    assert.equal(
+        connectionManagerResult.backendModelCalls[0].payload.model,
+        'backend-3.5-flash',
+    );
+    assert.equal(connectionManagerResult.backendModelCalls[0].custom, true);
+    await connectionManagerPage.close();
+
+    const directParallelPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await directParallelPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await directParallelPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await directParallelPage.evaluate(async () => {
+        const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            strictModelProvider: 'direct',
+            fastModelProvider: 'direct',
+            connectionPresets: [
+                {
+                    name: 'strict-test',
+                    endpoint: 'https://strict.example/v1',
+                    model: 'strict-3.5f',
+                    apiKey: 'strict-test-secret',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+                {
+                    name: 'fast-test',
+                    endpoint: 'https://api.deepseek.example',
+                    model: 'deepseek-fast',
+                    apiKey: 'fast-test-secret',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+            ],
+            strictConnectionPreset: 'strict-test',
+            fastConnectionPreset: 'fast-test',
+            fastApiJsonMode: true,
+            modelRoutingSettingsVersion: 2,
+            delayMs: 0,
+        });
+        const pending = {};
+        const network = {
+            requests: [],
+            active: 0,
+            maxActive: 0,
+        };
+        window.__DIRECT_PARALLEL__ = {
+            network,
+            resolve(model) {
+                pending[model]?.();
+            },
+        };
+        window.fetch = async (url, options = {}) => {
+            const body = JSON.parse(options.body);
+            network.active += 1;
+            network.maxActive = Math.max(network.maxActive, network.active);
+            network.requests.push({
+                url: String(url),
+                model: body.model,
+                jsonMode: body.response_format?.type || '',
+                authorized: /^Bearer\s+\S+/u.test(options.headers?.Authorization || ''),
+            });
+            const output = body.model === 'strict-3.5f'
+                ? '<UpdateVariable><Analysis>变量无需修改</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>'
+                : JSON.stringify({
+                    turn: 1,
+                    threads: [{
+                        id: 'WE-PAR-01',
+                        title: '并发巡检',
+                        kind: 'parallel',
+                        eventType: 'progress',
+                        level: 1,
+                        origin: 'ambient',
+                        relation: 'independent',
+                        stage: 'seeded',
+                        stageProgress: 1,
+                        summary: '钟楼巡检按固定日程开始。',
+                        nextBeat: '巡检员继续核对交接册。',
+                        trigger: '钟楼固定巡检日程。',
+                        seedBasis: '世界书：钟楼巡检制度',
+                        knowledge: 'hidden',
+                        urgency: 1,
+                    }],
+                });
+            return await new Promise((resolve) => {
+                pending[body.model] = () => {
+                    network.active -= 1;
+                    resolve(new Response(JSON.stringify({
+                        choices: [{ message: { content: output } }],
+                    }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    }));
+                };
+            });
+        };
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await directParallelPage.waitForFunction(() => (
+        window.__DIRECT_PARALLEL__?.network?.requests?.length === 2
+    ), null, { timeout: 30000 });
+    const directParallelStarted = await directParallelPage.evaluate(() => (
+        structuredClone(window.__DIRECT_PARALLEL__.network)
+    ));
+    assert.equal(
+        directParallelStarted.maxActive,
+        2,
+        '变量与活世界必须在同一回合真正并发发出，而不是先后串行',
+    );
+    assert.deepEqual(
+        directParallelStarted.requests.map((request) => request.model).sort(),
+        ['deepseek-fast', 'strict-3.5f'],
+    );
+    assert.ok(directParallelStarted.requests.every((request) => request.authorized));
+    assert.match(
+        directParallelStarted.requests.find((request) => request.model === 'strict-3.5f').url,
+        /strict\.example\/v1\/chat\/completions$/u,
+    );
+    assert.equal(
+        directParallelStarted.requests.find((request) => request.model === 'strict-3.5f').jsonMode,
+        '',
+        '变量通道不得强套 JSON mode，必须保留 UpdateVariable 机器区块协议',
+    );
+    assert.equal(
+        directParallelStarted.requests.find((request) => request.model === 'deepseek-fast').jsonMode,
+        'json_object',
+        'DS 轻量通道必须启用服务端 JSON 输出约束',
+    );
+    await directParallelPage.evaluate(() => {
+        window.__DIRECT_PARALLEL__.resolve('strict-3.5f');
+        window.__DIRECT_PARALLEL__.resolve('deepseek-fast');
+    });
+    await directParallelPage.waitForFunction(() => (
+        window.MvuAutoDoctorAPI.getContinuityState()?.turn === 1
+        && /无需修正/u.test(document.querySelector('.mvuad-status')?.textContent || '')
+    ), null, { timeout: 30000 });
+    const directParallelFinished = await directParallelPage.evaluate(() => ({
+        oracleCalls: window.__TEST__.calls.model.length,
+        tavernCalls: window.__TEST__.calls.raw,
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+    }));
+    assert.equal(directParallelFinished.oracleCalls, 0, '独立通道不得调用故事神谕');
+    assert.equal(directParallelFinished.tavernCalls, 0, '独立通道不得回退酒馆当前3.1P');
+    assert.equal(directParallelFinished.state.threads[0].id, 'WE-PAR-01');
+    await directParallelPage.close();
 
     const partialCorrectionGatePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await partialCorrectionGatePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -1400,7 +1731,17 @@ try {
     });
     await partialCorrectionGatePage.waitForFunction(() => (
         window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length === 1
-    ), null, { timeout: 30000 });
+    ), null, { timeout: 30000 }).catch(async (error) => {
+        console.error('partial correction gate diagnostics', await partialCorrectionGatePage.evaluate(() => ({
+            calls: window.__TEST__.calls,
+            message: window.__TEST__.context.chat[2],
+            audit: window.MvuAutoDoctorAPI.getHardContractAudit(),
+            repairStatus: document.querySelector('.mvuad-status')?.textContent || '',
+            hardStatus: document.querySelector('.mvuad-protocol-status')?.textContent || '',
+            continuityStatus: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        })));
+        throw error;
+    });
     const partialCorrectionGate = await partialCorrectionGatePage.evaluate(() => ({
         continuityCalls: window.__TEST__.calls.model.filter(
             (kind) => kind === 'continuity',
@@ -1962,6 +2303,7 @@ try {
         t.setMode('hard-correction');
         const modelCallsBefore = t.calls.model.length;
         const result = await window.MvuAutoDoctorAPI.runLatest();
+        await window.MvuAutoDoctorAPI.auditHardContracts();
         const message = t.context.chat[2];
         return {
             result,
@@ -1972,19 +2314,15 @@ try {
         };
     });
     assert.equal(correctionResult.result.status, 'nochange');
-    assert.equal(correctionResult.result.correction.status, 'applied');
-    assert.equal(correctionResult.modelCalls, 1, '正文修正版必须复用变量诊断，不得增加第二次模型调用');
-    assert.equal(correctionResult.message.swipes.length, 2);
-    assert.match(correctionResult.message.swipes[0], /你观察门边的守卫/u);
-    assert.match(correctionResult.message.swipes[1], new RegExp('甲{120}', 'u'));
-    assert.match(correctionResult.message.swipes[1], /行动A与骰面已锁定/u);
-    assert.match(correctionResult.message.swipes[1], /<JSONPatch>\[\]<\/JSONPatch>/u);
-    assert.equal(
-        correctionResult.message.swipe_info[1].extra.mvu_auto_doctor_correction,
-        true,
-    );
-    assert.equal(correctionResult.replaceCalls, 1, '新 swipe 只复制一次既有 MVU 快照，不得重放 delta');
-    assert.equal(correctionResult.audit.correction.agencyGuard.ok, true);
+    assert.equal(correctionResult.result.correction.status, 'ignored');
+    assert.equal(correctionResult.modelCalls, 1, '变量诊断仍只允许一次模型调用');
+    assert.equal(correctionResult.message.swipe_id, 0);
+    assert.doesNotMatch(correctionResult.message.mes, new RegExp('甲{120}', 'u'));
+    assert.match(correctionResult.message.mes, /你观察门边的守卫/u);
+    assert.equal(correctionResult.replaceCalls, 0, '仅字数不足不得创建修正版 swipe 或复制 MVU');
+    assert.ok(correctionResult.audit.issues.some(
+        (issue) => issue.code === 'content-under-budget',
+    ));
     await correctionPage.close();
 
     const ruleBackedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -2115,8 +2453,8 @@ try {
         };
     });
     assert.equal(maxRetryResult.result.status, 'failed');
-    assert.equal(maxRetryResult.result.attempts, 3);
-    assert.equal(maxRetryResult.calls, 3, '连续分析失败时整轮最多尝试三次');
+    assert.equal(maxRetryResult.result.attempts, 2);
+    assert.equal(maxRetryResult.calls, 2, '手动连续分析失败时整轮最多尝试两次');
     assert.equal(maxRetryResult.replacements, 0);
     await maxRetryPage.close();
 
@@ -2182,7 +2520,7 @@ try {
         };
     });
     assert.equal(promptAddonResult.saved, 'CUSTOM_MODEL_UNLOCK_LINE');
-    assert.equal(promptAddonResult.maxTokensInput, '32768');
+    assert.equal(promptAddonResult.maxTokensInput, '8192');
     assert.match(promptAddonResult.system, /CUSTOM_MODEL_UNLOCK_LINE/u);
     assert.match(promptAddonResult.system, /当前角色卡的 MVU\/Zod Schema/u);
     assert.match(promptAddonResult.system, /唯一允许的输出结构/u);
@@ -2478,7 +2816,7 @@ try {
             localContinuityRuns += 1;
             t.calls.model.push('continuity');
             t.calls.continuityRuns += 1;
-            if (localContinuityRuns === 1) {
+            if (localContinuityRuns <= 2) {
                 return '<ContinuityState>{"turn":1,"threads":[]}</ContinuityState>';
             }
             return '<ContinuityState>{"turn":1,"threads":[{"id":"WE-重试-街巷-01","title":"街巷水管检修","origin":"ambient","relation":"independent","stage":"seeded","summary":"维修队封闭了一段旧街。","nextBeat":"商户会协商临时进货路线。","trigger":"市政检修按日程推进。","intersection":"玩家进入旧街时才可能观察到。","seedBasis":"世界书：港城街区与市政维护","knowledge":"hidden"}]}</ContinuityState>';
@@ -2487,14 +2825,24 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await retryPage.waitForFunction(() => (
-        window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn === 1
+        window.__TEST__.calls.continuityRuns === 1
     ), null, { timeout: 30000 });
+    await retryPage.waitForTimeout(500);
     const retryResult = await retryPage.evaluate(() => ({
         calls: structuredClone(window.__TEST__.calls),
         state: window.MvuAutoDoctorAPI.getContinuityState(),
+        status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
     }));
-    assert.equal(retryResult.calls.continuityRuns, 2, '无实质世界节拍时必须自动重试一次');
-    assert.equal(retryResult.state.threads[0].id, 'WE-重试-街巷-01');
+    assert.equal(retryResult.calls.continuityRuns, 1, '自动活世界遇到坏账本不得重复调用模型');
+    assert.equal(retryResult.state.threads.length, 0);
+    assert.match(retryResult.status, /未通过账本校验|未产生可用账本|未产生有效世界节拍/u);
+    await retryPage.evaluate(() => window.MvuAutoDoctorAPI.runContinuity());
+    const manualRetryResult = await retryPage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        state: window.MvuAutoDoctorAPI.getContinuityState(),
+    }));
+    assert.equal(manualRetryResult.calls.continuityRuns, 3, '手动整理可在首次坏账本后定向重试一次');
+    assert.equal(manualRetryResult.state.threads[0].id, 'WE-重试-街巷-01');
     await retryPage.close();
 } finally {
     await browser.close();

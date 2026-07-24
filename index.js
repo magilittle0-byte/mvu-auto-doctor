@@ -63,7 +63,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.3';
+const VERSION = '1.8.4';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -73,16 +73,34 @@ const IN_CHAT_DEPTH = 1;
 const DEFAULTS = Object.freeze({
     enabled: true,
     normalizeOpeningResources: true,
-    preferStoryOracle: true,
+    preferStoryOracle: false,
+    strictModelProvider: 'direct',
+    strictApiBaseUrl: '',
+    strictApiModel: '',
+    strictApiKey: '',
+    fastModelProvider: 'direct',
+    fastApiBaseUrl: '',
+    fastApiModel: '',
+    fastApiKey: '',
+    fastApiJsonMode: true,
+    connectionEndpoint: '',
+    connectionApiKey: '',
+    connectionModel: '',
+    connectionViaBackend: false,
+    connectionRawUrl: false,
+    connectionPresets: [],
+    strictConnectionPreset: '__current__',
+    fastConnectionPreset: '__current__',
+    modelRoutingSettingsVersion: 2,
     preventDoubleWrite: true,
     notifyNoChange: false,
     notificationLevel: 'all',
     delayMs: 1600,
     contextMessages: 8,
-    maxTokens: 32768,
-    variableRetryLimit: 3,
+    maxTokens: 8192,
+    variableRetryLimit: 2,
     variablePromptAddon: '',
-    variableAuditSettingsVersion: 1,
+    variableAuditSettingsVersion: 2,
     modelTimeoutMs: 120000,
     mvuIdleTimeoutMs: 120000,
     mvuStableTimeoutMs: 8000,
@@ -190,6 +208,7 @@ function getSettings() {
     const previousVariableAuditSettingsVersion = Number(settings.variableAuditSettingsVersion) || 0;
     const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
     const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
+    const previousModelRoutingSettingsVersion = Number(settings.modelRoutingSettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -208,6 +227,60 @@ function getSettings() {
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
         settings.notificationLevel = 'all';
         changed = true;
+    }
+    if (!['tavern', 'direct', 'story-oracle'].includes(settings.strictModelProvider)) {
+        settings.strictModelProvider = 'direct';
+        changed = true;
+    }
+    if (!['tavern', 'direct', 'story-oracle'].includes(settings.fastModelProvider)) {
+        settings.fastModelProvider = 'direct';
+        changed = true;
+    }
+    if (previousModelRoutingSettingsVersion < 1) {
+        // v1.8.3 and earlier implicitly sent every task through Story Oracle
+        // when it was installed. New installs and migrated installs require
+        // independent OpenAI-compatible profiles. Missing credentials fail
+        // closed instead of silently spending the Tavern's current model.
+        settings.preferStoryOracle = false;
+        settings.strictModelProvider = 'direct';
+        settings.fastModelProvider = 'direct';
+        settings.modelRoutingSettingsVersion = 1;
+        changed = true;
+    }
+    if (previousModelRoutingSettingsVersion < 2) {
+        // v1.8.4 owns its connection manager: no provider is prefilled and no
+        // task silently falls back to the Tavern or Story Oracle. The current
+        // editor connection can be saved into named presets, then strict and
+        // lightweight tasks may select different presets.
+        settings.connectionEndpoint = '';
+        settings.connectionApiKey = '';
+        settings.connectionModel = '';
+        settings.connectionViaBackend = false;
+        settings.connectionRawUrl = false;
+        settings.connectionPresets = [];
+        settings.strictConnectionPreset = '__current__';
+        settings.fastConnectionPreset = '__current__';
+        settings.strictModelProvider = 'direct';
+        settings.fastModelProvider = 'direct';
+        settings.modelRoutingSettingsVersion = 2;
+        changed = true;
+    }
+    if (!Array.isArray(settings.connectionPresets)) {
+        settings.connectionPresets = [];
+        changed = true;
+    }
+    const normalizedPresets = normalizeConnectionPresets(settings.connectionPresets);
+    if (JSON.stringify(settings.connectionPresets) !== JSON.stringify(normalizedPresets)) {
+        settings.connectionPresets = normalizedPresets;
+        changed = true;
+    }
+    const presetNames = new Set(normalizedPresets.map((item) => item.name));
+    for (const key of ['strictConnectionPreset', 'fastConnectionPreset']) {
+        const route = String(settings[key] || '__current__');
+        if (route !== '__current__' && !presetNames.has(route)) {
+            settings[key] = '__current__';
+            changed = true;
+        }
     }
     if (previousContinuitySettingsVersion < 2) {
         // v1.2.x had no UI for this value, so 4 can only be the old default.
@@ -235,12 +308,24 @@ function getSettings() {
         // tokens. Reasoning models can spend most of that budget before the
         // JSON patch, so migrate only the old implicit default.
         if (Number(settings.maxTokens) === 4096) settings.maxTokens = DEFAULTS.maxTokens;
-        settings.variableRetryLimit = 3;
+        settings.variableRetryLimit = 2;
         settings.variableAuditSettingsVersion = 1;
         changed = true;
     }
+    if (previousVariableAuditSettingsVersion < 2) {
+        // v1.8.3 used a 32768-token default and up to three automatic
+        // attempts. That turned one malformed response into multi-minute
+        // blocking work. Preserve intentional custom values, but migrate the
+        // exact old defaults to the lower-latency profile.
+        if (Number(settings.maxTokens) === 32768) settings.maxTokens = DEFAULTS.maxTokens;
+        if (Number(settings.variableRetryLimit) === 3) {
+            settings.variableRetryLimit = DEFAULTS.variableRetryLimit;
+        }
+        settings.variableAuditSettingsVersion = 2;
+        changed = true;
+    }
     settings.variableRetryLimit = Math.min(
-        3,
+        2,
         Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
     );
     if (previousForumSettingsVersion < 3) {
@@ -819,12 +904,39 @@ async function inspectEnvironment({ waitForMvu = false } = {}) {
         injectionInspectionText(),
     ));
 
-    checks.push(
-        typeof context?.generateRaw === 'function'
-        || (oracle?.isCompatible?.(1) && typeof oracle.run === 'function')
-            ? environmentCheck('ok', '模型连接', '至少一个变量诊断通道可用')
-            : environmentCheck('error', '模型连接', '故事神谕 Hook 与酒馆 generateRaw 均不可用'),
-    );
+    const settings = getSettings();
+    for (const [channel, label] of [['strict', '严格模型通道'], ['fast', '轻量模型通道']]) {
+        const profile = directProfile(settings, channel);
+        const directReady = !!(
+            openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl)
+            && profile.model
+            && profile.apiKey
+        );
+        const available = profile.provider === 'direct'
+            ? directReady
+            : profile.provider === 'story-oracle'
+                ? !!(oracle?.isCompatible?.(1) && typeof oracle.run === 'function')
+                : typeof context?.generateRaw === 'function';
+        checks.push(available
+            ? environmentCheck(
+                'ok',
+                label,
+                profile.provider === 'direct'
+                    ? `独立兼容 API 已配置（${profile.name} / ${profile.model}）`
+                    : profile.provider === 'story-oracle'
+                        ? '兼容旧版故事神谕连接'
+                        : '使用酒馆当前连接，不经过故事神谕',
+            )
+            : environmentCheck(
+                'error',
+                label,
+                profile.provider === 'direct'
+                    ? '独立 API 的地址、模型或密钥尚未填完整'
+                    : profile.provider === 'story-oracle'
+                        ? '故事神谕兼容接口不可用'
+                        : '酒馆 generateRaw 不可用',
+            ));
+    }
 
     lastEnvironmentReport = {
         checkedAt: Date.now(),
@@ -1478,7 +1590,7 @@ function continuityCharacterSetting(character, context) {
             }
             if (!value || seen.has(value)) continue;
             seen.add(value);
-            blocks.push(`【${label}】\n${cropText(value, 7000, label)}`);
+            blocks.push(`【${label}】\n${cropText(value, 2500, label)}`);
             break;
         }
     }
@@ -1503,7 +1615,7 @@ function usableContinuityWorldEntry(entry) {
         world: String(entry.world || '').trim(),
         keys,
         constant: entry.constant === true,
-        content: cropText(content, 2600, title),
+        content: cropText(content, 1400, title),
     };
 }
 
@@ -1587,11 +1699,11 @@ async function collectContinuityWorldContext(context, character) {
         ].filter(Boolean).join('\n'));
         const forumBlock = usableForumWorldEntry(entry);
         if (forumBlock) forumWorldBlocks.push(forumBlock);
-        if (worldBlocks.length >= 24) break;
+        if (worldBlocks.length >= 12) break;
     }
     const text = cropText(
         [...characterBlocks, ...worldBlocks].join('\n\n'),
-        42000,
+        18000,
         '活世界设定取材池',
     );
     return {
@@ -2476,6 +2588,9 @@ async function buildAuditMessages({
         ruleTexts,
     });
     const hardErrors = hardAudit.issues.filter((issue) => issue.severity === 'error');
+    const correctableHardErrors = hardErrors.filter(
+        (issue) => issue.code !== 'content-under-budget',
+    );
     const hardIssueText = hardAudit.issues.length
         ? hardAudit.issues.map((issue) => (
             `[${issue.severity}/${issue.code}]${issue.path ? ` ${issue.path}` : ''}：${issue.message}`
@@ -2537,9 +2652,7 @@ async function buildAuditMessages({
         '- 每份校正都必须在Evidence逐字引用当前Schema、世界书规则或预设合同中的短依据。尤其是掉落公式、奖励数量和物品格式，不得只凭常识或自行概括；无可逐字核验证据就只修变量中其他确定错误，不改正文。',
         '- 校正必须是最小必要改动：保留原叙事事实、文风、人物语气、玩家已声明行动、骰值与成功等级；禁止为了配合剧情规划改骰、补骰、替玩家追加行动或把未发生分支写成事实。',
         '- 玩家本轮只授权原回复中的行动A。任何补字都不得新增、完成或暗示玩家接着执行B/C/D；不得新增玩家对白、移动、目标、路线、工具、选择、技能、资源消费或检定。',
-        '- 正文字数低于明确硬下限时，只能补足A的既有过程与已锁定结果，以及NPC、敌人、同伴基于自身动机和有限信息的独立行动/对白/反应，或环境、空间、时间、关系、威胁后果；不得靠重复、总结或选项凑字。',
-        '- 本地error若包含 content-under-budget，<CorrectedContent>不是可选项：本次以及每次定向重试都必须输出完整修正版，并确保纯正文汉字数达到证据给出的最低值。不得用“保留玩家控制权”“变量已修好”或其他理由省略该区块。',
-        '- 输出前必须在内部复核修正版的纯汉字数；长度合同按<content>内部叙事文字计算，HTML状态栏、思维链、options、UpdateVariable和标签都不计入。建议超过最低值至少100汉字，避免边界计数差异。',
+        '- content-under-budget 只作质量报告，不进入变量修复关键路径。不得仅为了补字生成 HardContractCorrection，也不得在本次变量审计里重写整段正文。',
         '- NPC可以主动制造局势并向玩家施压；一旦下一步需要玩家选择新目标、路线、工具、对白或检定，正文必须停下，把决定留给options和下一回合。',
         '- 原A、已消费骰面、成功等级、S1/骰后锁与JSONPatch语义必须保持；严禁借扩写重判。',
         '- CorrectedContent只写原<content>标签内部的新正文，不得包含content标签本身、UpdateVariable、状态栏、思维链或其他机制区块。',
@@ -2569,22 +2682,24 @@ async function buildAuditMessages({
 
     const user = [
         '=== 当前角色卡 MVU/Zod Schema ===',
-        cropText(schemas || '角色卡未暴露 Schema；只能依据规则与当前状态保守处理。', 70000, 'Schema'),
+        cropText(schemas || '角色卡未暴露 Schema；只能依据规则与当前状态保守处理。', 30000, 'Schema'),
         '',
         '=== 当前启用的 MVU 更新规则 ===',
-        cropText(rules || '未找到 [mvu_update] 规则；只能依据 Schema 与当前状态保守处理。', 70000, '规则'),
+        cropText(rules || '未找到 [mvu_update] 规则；只能依据 Schema 与当前状态保守处理。', 30000, '规则'),
         '',
         '=== 当前角色与场景（只读设定）===',
-        cropText(characterContext || '角色卡未提供额外角色/场景文本。', 20000, '角色设定'),
+        cropText(characterContext || '角色卡未提供额外角色/场景文本。', 8000, '角色设定'),
         '',
         '=== 当前启用的正文/骰子/物品硬合同证据摘录 ===',
-        cropText(promptContractEvidence || '未找到额外硬合同。', 32000, '硬合同证据'),
+        cropText(promptContractEvidence || '未找到额外硬合同。', 12000, '硬合同证据'),
         '',
         '=== 本地确定性硬合同检查 ===',
         cropText(hardIssueText, 16000, '硬合同问题'),
-        hardErrors.length
+        correctableHardErrors.length
             ? '存在error：必须在同一次输出中修正能够唯一确定的正文/选项错误，并同步修正相应MVU。'
-            : '没有本地error：只有Schema或规则能唯一证明的数值/格式矛盾才允许生成正文校正。',
+            : hardErrors.length
+                ? '只有 content-under-budget：保留质量报告，不生成正文修正版；专注完成变量审计。'
+                : '没有本地error：只有Schema或规则能唯一证明的数值/格式矛盾才允许生成正文校正。',
         '',
         '=== 当前 stat_data（原更新应用之后）===',
         stateForPrompt(currentStat),
@@ -2602,7 +2717,7 @@ async function buildAuditMessages({
                 initializationStates.length
                     ? safeJson(initializationStates.map((state) => statDataOf(state) || state))
                     : '没有读取到独立 initvar；仍须依据 Schema、更新规则、人物创建正文和当前状态完成开局审计。',
-                70000,
+                25000,
                 '初始化声明',
             )
             : '',
@@ -2613,18 +2728,18 @@ async function buildAuditMessages({
         '=== 动态集合生命周期历史线索（不可信只读引用；缺席不是删除证据）===',
         cropText(
             lifecycleHints || '当前规则与状态中未识别到需要定向回查的动态集合。',
-            24000,
+            12000,
             '生命周期历史线索',
         ),
         '',
         '=== 最近剧情上下文（只读）===',
-        cropText(transcript || '无', 36000, '剧情上下文'),
+        cropText(transcript || '无', 16000, '剧情上下文'),
         '',
         '=== 本轮要审计的最新 AI 回复正文 ===',
-        cropText(stripMechanism(message.mes), 60000, '最新回复'),
+        cropText(stripMechanism(message.mes), 30000, '最新回复'),
         '',
         '=== 该回复原有的变量更新区块 ===',
-        cropText(originalBlock || '（没有；需要依据正文补出遗漏更新）', 36000, '原更新区块'),
+        cropText(originalBlock || '（没有；需要依据正文补出遗漏更新）', 18000, '原更新区块'),
         '',
         retry
             ? [
@@ -2634,13 +2749,11 @@ async function buildAuditMessages({
                     ? `未落地明细：${cropText(safeJson(retry.details), 12000, '拒绝明细')}`
                     : '',
                 retry.output
-                    ? `上一次模型输出：\n${cropText(retry.output, 18000, '上次输出')}`
+                    ? `上一次模型输出：\n${cropText(retry.output, 8000, '上次输出')}`
                     : '',
                 '请针对失败原因重新分析。变量区块必须最先完整闭合；若上次 JSON 或路径错误，重新生成合法的最小补丁，不要复制坏格式。',
                 '若失败原因是 insert 目标已存在：先查看上方当前 stat_data；当前路径已有值且确需改变时使用 replace，已有值已经正确时删除该操作，绝不能再次对同一路径使用 insert。',
-                hardErrors.some((issue) => issue.code === 'content-under-budget')
-                    ? 'content-under-budget 仍然存在：本次重试也必须在变量区块之后输出达到最低汉字数的完整 <CorrectedContent>，不得因为正在重试 JSONPatch 而省略。'
-                    : '',
+                'content-under-budget 始终只报告；重试也不得为补字重写正文。',
             ].filter(Boolean).join('\n')
             : auditMode === 'opening'
                 ? '这是开局/人物创建审计。请审计全部已确认创建选择、资源、装备、物品、奖励、派生值的错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。'
@@ -2654,6 +2767,7 @@ async function buildAuditMessages({
         ],
         originalBlock,
         hardAudit,
+        correctableHardErrors,
         contractTexts,
         schemaTexts: schemaScripts.map((script) => script.content),
         ruleTexts,
@@ -2722,6 +2836,241 @@ function isRateLimitError(error) {
         || /\b429\b|rate[\s_-]*limit|too many requests|engine[_\s-]*overloaded|请求过于频繁|限流/iu.test(text);
 }
 
+function normalizeConnectionPreset(item) {
+    if (!isPlainObject(item)) return null;
+    const name = String(item.name || '').trim().slice(0, 80);
+    if (!name) return null;
+    return {
+        name,
+        endpoint: String(item.endpoint || '').trim(),
+        apiKey: String(item.apiKey || '').trim(),
+        model: String(item.model || '').trim(),
+        viaBackend: item.viaBackend === true,
+        rawUrl: item.rawUrl === true,
+    };
+}
+
+function normalizeConnectionPresets(value) {
+    if (!Array.isArray(value)) return [];
+    const byName = new Map();
+    for (const item of value) {
+        const preset = normalizeConnectionPreset(item);
+        if (!preset) continue;
+        byName.set(preset.name, preset);
+    }
+    return [...byName.values()].slice(0, 50);
+}
+
+function currentConnectionDraft(settings = getSettings()) {
+    return {
+        name: '当前编辑连接',
+        endpoint: String(settings.connectionEndpoint || '').trim(),
+        apiKey: String(settings.connectionApiKey || '').trim(),
+        model: String(settings.connectionModel || '').trim(),
+        viaBackend: settings.connectionViaBackend === true,
+        rawUrl: settings.connectionRawUrl === true,
+    };
+}
+
+function directProfile(settings, channel = 'strict') {
+    const fast = channel === 'fast';
+    const route = String(
+        fast ? settings.fastConnectionPreset : settings.strictConnectionPreset,
+    ) || '__current__';
+    const preset = route === '__current__'
+        ? null
+        : (settings.connectionPresets || []).find((item) => (
+            item && String(item.name || '') === route
+        ));
+    return {
+        provider: String(
+            fast ? settings.fastModelProvider : settings.strictModelProvider,
+        ),
+        route,
+        name: preset?.name || '当前编辑连接',
+        baseUrl: String(preset?.endpoint ?? settings.connectionEndpoint ?? '').trim(),
+        model: String(preset?.model ?? settings.connectionModel ?? '').trim(),
+        apiKey: String(preset?.apiKey ?? settings.connectionApiKey ?? '').trim(),
+        viaBackend: preset?.viaBackend ?? settings.connectionViaBackend ?? false,
+        rawUrl: preset?.rawUrl ?? settings.connectionRawUrl ?? false,
+        jsonMode: fast && settings.fastApiJsonMode !== false,
+    };
+}
+
+function openAiChatCompletionsUrl(baseUrl, rawUrl = false) {
+    const trimmed = String(baseUrl || '').trim().replace(/\/+$/u, '');
+    if (!trimmed) return '';
+    if (/\/chat\/completions$/iu.test(trimmed)) return trimmed;
+    if (/\/v\d+$/iu.test(trimmed)) return `${trimmed}/chat/completions`;
+    return rawUrl
+        ? `${trimmed}/chat/completions`
+        : `${trimmed}/v1/chat/completions`;
+}
+
+function openAiModelsUrl(baseUrl, rawUrl = false) {
+    const trimmed = String(baseUrl || '').trim().replace(/\/+$/u, '');
+    if (!trimmed) return '';
+    if (/\/chat\/completions$/iu.test(trimmed)) {
+        return trimmed.replace(/\/chat\/completions$/iu, '/models');
+    }
+    if (/\/models$/iu.test(trimmed)) return trimmed;
+    if (/\/v\d+$/iu.test(trimmed)) return `${trimmed}/models`;
+    return rawUrl ? `${trimmed}/models` : `${trimmed}/v1/models`;
+}
+
+function modelIdsFromPayload(payload) {
+    const candidates = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.data)
+            ? payload.data
+            : Array.isArray(payload?.models)
+                ? payload.models
+                : [];
+    const ids = candidates
+        .map((item) => (
+            typeof item === 'string'
+                ? item
+                : item?.id ?? item?.name ?? item?.model ?? ''
+        ))
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+    return [...new Set(ids)].sort((left, right) => left.localeCompare(right));
+}
+
+async function fetchConnectionModels(draft, { signal = null } = {}) {
+    const url = openAiModelsUrl(draft?.endpoint, draft?.rawUrl);
+    if (!url || !String(draft?.apiKey || '').trim()) {
+        throw new Error('请先填写端点 URL 和 API 密钥');
+    }
+    let response;
+    if (draft?.viaBackend) {
+        const context = getContext();
+        if (typeof context?.getRequestHeaders !== 'function') {
+            throw new Error('当前酒馆缺少后端请求头接口，请关闭“经酒馆后端转发”后重试');
+        }
+        response = await fetch('/api/backends/chat-completions/status', {
+            method: 'POST',
+            headers: context.getRequestHeaders(),
+            body: JSON.stringify({
+                chat_completion_source: 'custom',
+                custom_url: url.replace(/\/models\/?$/iu, ''),
+                custom_include_headers: JSON.stringify({
+                    Authorization: `Bearer ${String(draft.apiKey).trim()}`,
+                }),
+            }),
+            signal,
+        });
+    } else {
+        response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${String(draft.apiKey).trim()}`,
+            },
+            signal,
+        });
+    }
+    if (!response.ok) {
+        const error = new Error(`获取模型失败：HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+    }
+    const ids = modelIdsFromPayload(await response.json());
+    if (!ids.length) throw new Error('端点返回成功，但没有识别到模型列表');
+    return ids;
+}
+
+function directResponseText(payload) {
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => typeof part === 'string' ? part : part?.text || '')
+            .join('');
+    }
+    return '';
+}
+
+async function callDirectModel(messages, {
+    channel = 'strict',
+    maxTokens = 4096,
+    signal = null,
+    jsonMode = false,
+} = {}) {
+    const profile = directProfile(getSettings(), channel);
+    const url = openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl);
+    if (!url || !profile.model || !profile.apiKey) {
+        throw new Error(
+            `${channel === 'fast' ? '轻量' : '严格'}独立 API 尚未填完整地址、模型和密钥`,
+        );
+    }
+    const body = {
+        model: profile.model,
+        messages,
+        stream: false,
+        max_tokens: maxTokens,
+    };
+    if (jsonMode && profile.jsonMode) {
+        body.response_format = { type: 'json_object' };
+    }
+    if (profile.viaBackend) {
+        const context = getContext();
+        if (typeof context?.ChatCompletionService?.processRequest !== 'function') {
+            throw new Error('当前酒馆缺少后端转发接口；请关闭“经酒馆后端转发”后重试');
+        }
+        const customUrl = url.replace(/\/chat\/completions\/?$/iu, '');
+        const explicitHeaders = profile.apiKey
+            ? { Authorization: `Bearer ${profile.apiKey}` }
+            : {};
+        const {
+            model,
+            messages: requestMessages,
+            max_tokens: requestMaxTokens,
+            stream: _stream,
+            ...rest
+        } = body;
+        const payload = {
+            chat_completion_source: 'custom',
+            custom_url: customUrl,
+            custom_include_headers: JSON.stringify(explicitHeaders),
+            model,
+            messages: requestMessages,
+            max_tokens: requestMaxTokens,
+            stream: false,
+            ...rest,
+        };
+        const result = await context.ChatCompletionService.processRequest(
+            payload,
+            { presetName: undefined },
+            true,
+            signal,
+        );
+        const output = String(result?.content || '');
+        if (!output.trim()) throw new Error('酒馆后端转发成功，但模型正文为空');
+        return output;
+    }
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${profile.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+    });
+    if (!response.ok) {
+        // Provider bodies can echo request fragments or credentials. Keep
+        // status/timeline/diagnostic output strictly free of arbitrary remote
+        // text and report only the HTTP status.
+        const error = new Error(`独立 API HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+    }
+    const payload = await response.json();
+    const output = directResponseText(payload);
+    if (!output.trim()) throw new Error('独立 API 返回成功，但正文为空');
+    return output;
+}
+
 async function callModel(messages, options = {}) {
     const settings = getSettings();
     disableStoryOracleAutoIfNeeded();
@@ -2749,7 +3098,27 @@ async function callModel(messages, options = {}) {
     recordModelCall(task, 'started');
 
     try {
-        if (settings.preferStoryOracle) {
+        const channel = options.channel === 'fast' ? 'fast' : 'strict';
+        const profile = directProfile(settings, channel);
+        if (profile.provider === 'direct') {
+            const output = await withTimeout(
+                callDirectModel(messages, {
+                    channel,
+                    maxTokens,
+                    signal: controller.signal,
+                    jsonMode: options.jsonMode === true,
+                }),
+                timeoutMs,
+                `${channel === 'fast' ? '轻量' : '严格'}独立 API`,
+                {
+                    signal: controller.signal,
+                    onTimeout: () => controller.abort('模型请求超时'),
+                },
+            );
+            recordModelCall(task, 'succeeded');
+            return output;
+        }
+        if (profile.provider === 'story-oracle') {
             const api = window.StoryOracleAPI;
             if (api?.isCompatible?.(1) && typeof api.run === 'function') {
                 try {
@@ -2779,11 +3148,12 @@ async function callModel(messages, options = {}) {
                     throw error;
                 }
             }
+            throw new Error('所选故事神谕兼容通道不可用');
         }
 
         const context = getContext();
         if (typeof context?.generateRaw !== 'function') {
-            throw new Error('故事神谕连接和酒馆当前连接都不可用');
+            throw new Error('酒馆当前模型连接不可用');
         }
         const rawOptions = {
                 systemPrompt: messages[0].content,
@@ -2928,6 +3298,18 @@ function prepareReplyCorrection({
             ? locallyFixedCodes
             : ['rule-backed-hard-error'],
     };
+}
+
+function correctionOnlyExpandsReportedLength(correction, built) {
+    if (!correction?.content || correction?.options) return false;
+    const localErrors = (built?.hardAudit?.issues || [])
+        .filter((issue) => issue?.severity === 'error');
+    if (
+        !localErrors.length
+        || localErrors.some((issue) => issue?.code !== 'content-under-budget')
+    ) return false;
+    const explanation = `${correction.reason || ''}\n${correction.evidence || ''}`;
+    return /content-under-budget|字数|汉字|篇幅|长度|下限|补字|扩写/iu.test(explanation);
 }
 
 async function parseCandidate(Mvu, oldData, output, {
@@ -3527,10 +3909,12 @@ async function runTarget(targetId, {
     const captured = queuedTarget || captureTarget(initialContext, initialResolved);
     if (!captured) return { status: 'stale', reason: '目标回复不可用' };
     const token = operationToken(captured);
-    const maxAttempts = Math.min(
-        3,
-        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
-    );
+    const maxAttempts = manual
+        ? Math.min(
+            2,
+            Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
+        )
+        : 1;
     const progressId = beginTaskProgress('变量审计', maxAttempts);
     try {
     updateTaskProgress(progressId, '读取 MVU 与目标楼层');
@@ -3670,7 +4054,13 @@ async function runTarget(targetId, {
         );
     }
 
-    const correctionPlan = settings.hardContractCorrectionEnabled && candidate?.correction
+    const ignoredLengthCorrection = correctionOnlyExpandsReportedLength(
+        candidate?.correction,
+        finalBuilt,
+    );
+    const correctionPlan = settings.hardContractCorrectionEnabled
+        && candidate?.correction
+        && !ignoredLengthCorrection
         ? prepareReplyCorrection({
             replyText: context.chat[resolved]?.mes || '',
             correction: candidate.correction,
@@ -3679,7 +4069,9 @@ async function runTarget(targetId, {
             currentData,
             correctedData: candidate.status === 'ready' ? candidate.newData : currentData,
         })
-        : { status: 'none' };
+        : ignoredLengthCorrection
+            ? { status: 'ignored', reason: '正文长度不足仅报告，不在变量关键路径自动扩写' }
+            : { status: 'none' };
     if (correctionPlan.status === 'rejected') {
         console.warn('[MVU Auto Doctor] 正文硬合同修正版被本地守卫拒绝：', correctionPlan.reason);
         setHardContractStatus(`硬合同：修正版已拦截：${correctionPlan.reason}`, 'error');
@@ -4336,6 +4728,10 @@ function buildContinuityMessages({
     retryReason = '',
 }) {
     const settings = getSettings();
+    const jsonOnly = (
+        directProfile(settings, 'fast').provider === 'direct'
+        && settings.fastApiJsonMode !== false
+    );
     const forumSurface = forumView(readChatNamespace(context).forum, {
         chatId: captured.chatId,
         maxPosts: settings.forumMaxPosts,
@@ -4440,7 +4836,9 @@ function buildContinuityMessages({
         '【knowledge枚举】hidden / rumor / observed',
         '【eventType】conflict表示会积累至爆发/消散的冲突；progress表示会积累至完成/失败的事务。level 1-4：冲突level越高越易升级，事务level越高越难完成。',
         '【stageProgress】非终局阶段1-8；达到9由本地晋级。stalled只是暂时受阻，恢复条件写入trigger或offscreenBeat；永久失去条件才resolved并将outcome写failed/dissipated。',
-        '只输出一个<ContinuityState>包裹的JSON对象；threads必须保留所有旧线程及稳定ID，world只返回增量。',
+        jsonOnly
+            ? '只输出一个合法JSON对象，不要标签、代码围栏或解释；threads必须保留所有旧线程及稳定ID，world只返回增量。'
+            : '只输出一个<ContinuityState>包裹的JSON对象；threads必须保留所有旧线程及稳定ID，world只返回增量。',
     ].join('\n');
     const markerText = markers.taggedSections
         .map((item) => `<${item.tag}>${item.content}</${item.tag}>`)
@@ -4474,12 +4872,12 @@ function buildContinuityMessages({
                 captured.index,
                 settings.continuityContextMessages,
             ),
-            52000,
+            18000,
             '支线剧情上下文',
         ),
         '',
         '输出格式：',
-        '<ContinuityState>',
+        jsonOnly ? '' : '<ContinuityState>',
         '{',
         '  "turn": 1,',
         '  "lastTick": {"turn": 1, "action": "advanced", "threadId": "稳定ID", "reason": "本轮调度的具体事实依据"},',
@@ -4508,14 +4906,14 @@ function buildContinuityMessages({
         '    "influences": [{"id": null, "trigger": "风声或事件ID", "impact": "已造成的跨类别影响", "fallout": "仍可能延续的余波", "knowledge": "observed", "basis": "因果依据"}]',
         '  }',
         '}',
-        '</ContinuityState>',
-    ].join('\n');
+        jsonOnly ? '' : '</ContinuityState>',
+    ].filter(Boolean).join('\n');
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
 async function runContinuityTarget(captured, { force = false } = {}) {
     const token = operationToken(captured);
-    let guard = targetIsCurrent(captured, token);
+    let guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     const settings = getSettings();
     const context = getContext();
@@ -4524,7 +4922,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const markers = extractContinuityMarkers(messageText);
     if (settings.continuityMode === 'auto' && !markers.hasPresetParallel) {
         markers.hasPresetParallel = await activePresetHasContinuityPrompt();
-        guard = targetIsCurrent(captured, token);
+        guard = continuityTargetIsCurrent(captured, token);
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
     }
     let namespace = readChatNamespace(context);
@@ -4536,7 +4934,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     });
     const character = currentCharacter(context);
     const worldContext = await collectContinuityWorldContext(context, character);
-    guard = targetIsCurrent(captured, token);
+    guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     let stateAnchors = '未读取到当前 MVU 锚点。';
     try {
@@ -4546,7 +4944,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     } catch (error) {
         console.warn('[MVU Auto Doctor] 读取活世界时间/地点锚点失败：', error);
     }
-    guard = targetIsCurrent(captured, token);
+    guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     if (!continuityFeatureActive(settings, markers, base, worldContext, force)) {
         applyContinuityInjection();
@@ -4583,7 +4981,14 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     let progressed = false;
     let modelValidated = false;
     let modelFailure = '';
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    const maxAttempts = force ? 2 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        if (attempt > 0) {
+            setContinuityStatus(
+                `世界连续性：第 1 次结果不可用，正在进行第 2/${maxAttempts} 次手动重试…`,
+                'busy',
+            );
+        }
         const messages = buildContinuityMessages({
             context,
             captured,
@@ -4600,13 +5005,15 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             output = await callModel(messages, {
                 maxTokens: settings.continuityMaxTokens,
                 task: '活世界整理',
+                channel: 'fast',
+                jsonMode: true,
             });
         } catch (error) {
             modelFailure = String(error.message || error);
             retryReason = `世界模型调用失败：${modelFailure}`;
             console.warn('[MVU Auto Doctor] 世界连续性模型调用失败：', error);
         }
-        guard = targetIsCurrent(captured, token);
+        guard = continuityTargetIsCurrent(captured, token);
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
 
         let candidate = scheduledBase;
@@ -4762,7 +5169,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         maxThreads: settings.continuityMaxThreads,
     });
 
-    guard = targetIsCurrent(captured, token);
+    guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     const isReroll = ['swipe', 'regenerate'].includes(captured.generationType);
     const oldDigest = continuityContentDigest(namespace.continuity);
@@ -4788,7 +5195,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             ],
         });
     }
-    guard = targetIsCurrent(captured, token);
+    guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     applyContinuityInjection();
     const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
@@ -4826,6 +5233,15 @@ function sameTargetExceptContent(left, right) {
         && left.swipeId === right.swipeId
         && left.epoch === operationEpoch
     );
+}
+
+function continuityTargetIsCurrent(captured, token) {
+    const strict = targetIsCurrent(captured, token);
+    if (strict.ok || token?.epoch !== operationEpoch) return strict;
+    const fresh = captureTarget(getContext(), captured?.index);
+    return sameTargetExceptContent(captured, fresh)
+        ? { ok: true }
+        : strict;
 }
 
 function enqueueContinuity(targetId, {
@@ -5022,6 +5438,10 @@ function buildForumMessages({
     retryReason = '',
 }) {
     const settings = getSettings();
+    const jsonOnly = (
+        directProfile(settings, 'fast').provider === 'direct'
+        && settings.fastApiJsonMode !== false
+    );
     const orphanPosts = base.posts
         .filter((post) => post.status === 'active' && post.comments.length === 0)
         .slice(0, 10)
@@ -5047,7 +5467,9 @@ function buildForumMessages({
         '- kind枚举：chat（日常交流）/ reaction（公共事件反应）/ rumor（未证实风声）/ guide（攻略求助）/ trade（交易）。',
         '- JSON 必须严格合法：数组元素和对象字段之间逐项写逗号，最后一项后不写尾逗号；字符串中的换行必须转义，不得截断。',
         '',
-        '只输出一个<ForumUpdate>包裹的JSON对象，不要解释。',
+        jsonOnly
+            ? '只输出一个合法JSON对象，不要标签、代码围栏或解释。'
+            : '只输出一个<ForumUpdate>包裹的JSON对象，不要解释。',
         'JSON结构：{"summary":"本页一句话概况","newPosts":[{"id":"稳定且唯一","board":"版块","title":"标题","author":"网名","body":"正文","kind":"chat","tags":["标签"],"source":"公开依据或日常设定","sourceThreadIds":[],"causalSignal":false,"impact":"仅在已造成外部影响时填写","heat":12}],"comments":[{"postId":"旧帖ID","author":"网名","body":"评论","tone":"语气","likes":0}],"heat":[{"postId":"旧帖ID","delta":2}],"archive":["旧帖ID"]}',
     ].join('\n');
     const user = [
@@ -5173,6 +5595,8 @@ async function runForumTarget(captured, {
             output = await callModel(messages, {
                 maxTokens: settings.forumMaxTokens,
                 task: '内置论坛刷新',
+                channel: 'fast',
+                jsonMode: true,
             });
         } catch (error) {
             retryReason = `模型调用失败：${error.message || error}`;
@@ -6841,6 +7265,353 @@ function makeCheckbox(label, key) {
     return row;
 }
 
+function bindModelConnectionManager(root) {
+    if (!root) return;
+    const endpoint = root.querySelector('.mvuad-connection-endpoint');
+    const apiKey = root.querySelector('.mvuad-connection-key');
+    const model = root.querySelector('.mvuad-connection-model');
+    const viaBackend = root.querySelector('.mvuad-connection-backend');
+    const rawUrl = root.querySelector('.mvuad-connection-raw');
+    const fetchModels = root.querySelector('.mvuad-model-fetch');
+    const modelList = root.querySelector('.mvuad-model-list');
+    const modelHint = root.querySelector('.mvuad-model-hint');
+    const savedPreset = root.querySelector('.mvuad-connection-preset-select');
+    const loadPreset = root.querySelector('.mvuad-connection-preset-load');
+    const deletePreset = root.querySelector('.mvuad-connection-preset-delete');
+    const presetName = root.querySelector('.mvuad-connection-preset-name');
+    const savePreset = root.querySelector('.mvuad-connection-preset-save');
+    const strictRoute = root.querySelector('.mvuad-strict-preset');
+    const fastRoute = root.querySelector('.mvuad-fast-preset');
+    const strictStatus = root.querySelector('.mvuad-strict-provider-status');
+    const fastStatus = root.querySelector('.mvuad-fast-provider-status');
+
+    const readEditor = () => ({
+        name: String(presetName.value || '').trim(),
+        endpoint: String(endpoint.value || '').trim(),
+        apiKey: String(apiKey.value || '').trim(),
+        model: String(model.value || '').trim(),
+        viaBackend: viaBackend.checked,
+        rawUrl: rawUrl.checked,
+    });
+    const writeEditor = (draft) => {
+        endpoint.value = String(draft?.endpoint || '');
+        apiKey.value = String(draft?.apiKey || '');
+        model.value = String(draft?.model || '');
+        viaBackend.checked = draft?.viaBackend === true;
+        rawUrl.checked = draft?.rawUrl === true;
+        if (draft?.name && draft.name !== '当前编辑连接') {
+            presetName.value = draft.name;
+        }
+    };
+    const saveEditor = () => {
+        const draft = readEditor();
+        const settings = getSettings();
+        settings.connectionEndpoint = draft.endpoint;
+        settings.connectionApiKey = draft.apiKey;
+        settings.connectionModel = draft.model;
+        settings.connectionViaBackend = draft.viaBackend;
+        settings.connectionRawUrl = draft.rawUrl;
+        settings.strictModelProvider = 'direct';
+        settings.fastModelProvider = 'direct';
+        saveSettings();
+    };
+    const renderPresetOptions = () => {
+        const settings = getSettings();
+        const presets = normalizeConnectionPresets(settings.connectionPresets);
+        const selectedPreset = savedPreset.value;
+        savedPreset.textContent = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = presets.length ? '选择已保存预设' : '还没有已保存预设';
+        savedPreset.appendChild(placeholder);
+        for (const preset of presets) {
+            const option = document.createElement('option');
+            option.value = preset.name;
+            option.textContent = `${preset.name}${preset.model ? ` · ${preset.model}` : ''}`;
+            savedPreset.appendChild(option);
+        }
+        savedPreset.value = presets.some((item) => item.name === selectedPreset)
+            ? selectedPreset
+            : '';
+        for (const [select, route] of [
+            [strictRoute, settings.strictConnectionPreset],
+            [fastRoute, settings.fastConnectionPreset],
+        ]) {
+            select.textContent = '';
+            const current = document.createElement('option');
+            current.value = '__current__';
+            current.textContent = '当前编辑连接';
+            select.appendChild(current);
+            for (const preset of presets) {
+                const option = document.createElement('option');
+                option.value = preset.name;
+                option.textContent = `${preset.name}${preset.model ? ` · ${preset.model}` : ''}`;
+                select.appendChild(option);
+            }
+            select.value = route === '__current__'
+                || presets.some((item) => item.name === route)
+                ? route
+                : '__current__';
+        }
+        loadPreset.disabled = !savedPreset.value;
+        deletePreset.disabled = !savedPreset.value;
+    };
+
+    writeEditor(currentConnectionDraft());
+    renderPresetOptions();
+
+    for (const input of [endpoint, apiKey, model, viaBackend, rawUrl]) {
+        input.addEventListener('change', () => {
+            saveEditor();
+            inspectEnvironment();
+        });
+    }
+    savedPreset.addEventListener('change', () => {
+        loadPreset.disabled = !savedPreset.value;
+        deletePreset.disabled = !savedPreset.value;
+    });
+    loadPreset.addEventListener('click', () => {
+        const preset = normalizeConnectionPresets(getSettings().connectionPresets)
+            .find((item) => item.name === savedPreset.value);
+        if (!preset) return;
+        writeEditor(preset);
+        saveEditor();
+        modelList.hidden = true;
+        modelHint.dataset.kind = 'ok';
+        modelHint.textContent = `已载入“${preset.name}”到当前编辑连接`;
+        inspectEnvironment();
+    });
+    savePreset.addEventListener('click', () => {
+        saveEditor();
+        const preset = normalizeConnectionPreset(readEditor());
+        if (!preset) {
+            modelHint.dataset.kind = 'error';
+            modelHint.textContent = '请先填写预设名称';
+            return;
+        }
+        if (!preset.endpoint || !preset.apiKey || !preset.model) {
+            modelHint.dataset.kind = 'error';
+            modelHint.textContent = '保存预设前请填完整端点、密钥和模型';
+            return;
+        }
+        const settings = getSettings();
+        const presets = normalizeConnectionPresets(settings.connectionPresets);
+        const existing = presets.findIndex((item) => item.name === preset.name);
+        if (existing >= 0) presets.splice(existing, 1, preset);
+        else presets.push(preset);
+        settings.connectionPresets = presets;
+        saveSettings();
+        renderPresetOptions();
+        savedPreset.value = preset.name;
+        savedPreset.dispatchEvent(new Event('change'));
+        modelHint.dataset.kind = 'ok';
+        modelHint.textContent = existing >= 0
+            ? `已更新预设“${preset.name}”`
+            : `已保存预设“${preset.name}”`;
+        inspectEnvironment();
+    });
+    deletePreset.addEventListener('click', () => {
+        const name = savedPreset.value;
+        if (!name) return;
+        if (!window.confirm(`删除 API 预设“${name}”？`)) return;
+        const settings = getSettings();
+        settings.connectionPresets = normalizeConnectionPresets(settings.connectionPresets)
+            .filter((item) => item.name !== name);
+        if (settings.strictConnectionPreset === name) {
+            settings.strictConnectionPreset = '__current__';
+        }
+        if (settings.fastConnectionPreset === name) {
+            settings.fastConnectionPreset = '__current__';
+        }
+        saveSettings();
+        renderPresetOptions();
+        modelHint.dataset.kind = 'ok';
+        modelHint.textContent = `已删除预设“${name}”`;
+        inspectEnvironment();
+    });
+    strictRoute.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.strictConnectionPreset = strictRoute.value;
+        settings.strictModelProvider = 'direct';
+        saveSettings();
+        inspectEnvironment();
+    });
+    fastRoute.addEventListener('change', () => {
+        const settings = getSettings();
+        settings.fastConnectionPreset = fastRoute.value;
+        settings.fastModelProvider = 'direct';
+        saveSettings();
+        inspectEnvironment();
+    });
+    fetchModels.addEventListener('click', async () => {
+        saveEditor();
+        fetchModels.disabled = true;
+        modelHint.dataset.kind = 'busy';
+        modelHint.textContent = '正在获取模型列表…';
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+            const ids = await fetchConnectionModels(readEditor(), {
+                signal: controller.signal,
+            });
+            modelList.textContent = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = `共 ${ids.length} 个模型，选择一个`;
+            modelList.appendChild(placeholder);
+            for (const id of ids) {
+                const option = document.createElement('option');
+                option.value = id;
+                option.textContent = id;
+                modelList.appendChild(option);
+            }
+            if (ids.includes(model.value.trim())) modelList.value = model.value.trim();
+            modelList.hidden = false;
+            modelHint.dataset.kind = 'ok';
+            modelHint.textContent = `已获取 ${ids.length} 个模型`;
+        } catch (error) {
+            modelList.hidden = true;
+            modelHint.dataset.kind = 'error';
+            modelHint.textContent = error?.name === 'AbortError'
+                ? '获取模型超时'
+                : String(error?.message || error);
+        } finally {
+            clearTimeout(timer);
+            fetchModels.disabled = false;
+        }
+    });
+    modelList.addEventListener('change', () => {
+        if (!modelList.value) return;
+        model.value = modelList.value;
+        saveEditor();
+        modelHint.dataset.kind = 'ok';
+        modelHint.textContent = `当前模型：${modelList.value}`;
+        inspectEnvironment();
+    });
+
+    const bindTest = (channel, button, status) => {
+        button.addEventListener('click', async () => {
+            saveEditor();
+            button.disabled = true;
+            status.dataset.kind = 'busy';
+            status.textContent = '正在测试连接…';
+            try {
+                const output = await callModel([
+                    {
+                        role: 'system',
+                        content: channel === 'fast'
+                            ? '这是 JSON 连通测试。只返回 {"ok":true}。'
+                            : '这是模型连通测试。只回复 OK。',
+                    },
+                    {
+                        role: 'user',
+                        content: channel === 'fast' ? '请返回 JSON。' : '请回复 OK。',
+                    },
+                ], {
+                    channel,
+                    jsonMode: channel === 'fast',
+                    maxTokens: 128,
+                    task: `${channel === 'fast' ? '轻量' : '严格'}通道测试`,
+                });
+                if (!String(output || '').trim()) throw new Error('模型返回为空');
+                status.dataset.kind = 'ok';
+                status.textContent = '连接成功';
+            } catch (error) {
+                status.dataset.kind = 'error';
+                status.textContent = `连接失败：${error?.message || error}`;
+            } finally {
+                button.disabled = false;
+            }
+        });
+    };
+    bindTest(
+        'strict',
+        root.querySelector('.mvuad-test-strict'),
+        strictStatus,
+    );
+    bindTest(
+        'fast',
+        root.querySelector('.mvuad-test-fast'),
+        fastStatus,
+    );
+}
+
+function bindModelProviderCard(card) {
+    if (!card) return;
+    const channel = card.dataset.channel === 'fast' ? 'fast' : 'strict';
+    const fast = channel === 'fast';
+    const providerKey = fast ? 'fastModelProvider' : 'strictModelProvider';
+    const baseKey = fast ? 'fastApiBaseUrl' : 'strictApiBaseUrl';
+    const modelKey = fast ? 'fastApiModel' : 'strictApiModel';
+    const apiKey = fast ? 'fastApiKey' : 'strictApiKey';
+    const provider = card.querySelector('.mvuad-model-provider');
+    const base = card.querySelector('.mvuad-api-base');
+    const model = card.querySelector('.mvuad-api-model');
+    const key = card.querySelector('.mvuad-api-key');
+    const status = card.querySelector('.mvuad-provider-status');
+    const test = card.querySelector('.mvuad-provider-test');
+    const settings = getSettings();
+    provider.value = settings[providerKey];
+    base.value = settings[baseKey] || '';
+    model.value = settings[modelKey] || '';
+    key.value = settings[apiKey] || '';
+
+    const syncVisibility = () => {
+        const direct = provider.value === 'direct';
+        for (const field of card.querySelectorAll('.mvuad-provider-field')) {
+            field.hidden = !direct;
+        }
+    };
+    const save = () => {
+        const current = getSettings();
+        current[providerKey] = ['tavern', 'direct', 'story-oracle'].includes(provider.value)
+            ? provider.value
+            : 'direct';
+        current[baseKey] = base.value.trim();
+        current[modelKey] = model.value.trim();
+        current[apiKey] = key.value.trim();
+        saveSettings();
+        syncVisibility();
+        inspectEnvironment();
+    };
+    provider.addEventListener('change', save);
+    for (const input of [base, model, key]) input.addEventListener('change', save);
+    test.addEventListener('click', async () => {
+        save();
+        test.disabled = true;
+        status.dataset.kind = 'busy';
+        status.textContent = '正在测试连接…';
+        try {
+            const output = await callModel([
+                {
+                    role: 'system',
+                    content: fast
+                        ? '这是 JSON 连通测试。只返回 {"ok":true}。'
+                        : '这是模型连通测试。只回复 OK。',
+                },
+                {
+                    role: 'user',
+                    content: fast ? '请返回 JSON。' : '请回复 OK。',
+                },
+            ], {
+                channel,
+                jsonMode: fast,
+                maxTokens: 128,
+                task: `${fast ? '轻量' : '严格'}通道测试`,
+            });
+            if (!String(output || '').trim()) throw new Error('模型返回为空');
+            status.dataset.kind = 'ok';
+            status.textContent = '连接成功';
+        } catch (error) {
+            status.dataset.kind = 'error';
+            status.textContent = `连接失败：${error.message || error}`;
+        } finally {
+            test.disabled = false;
+        }
+    });
+    syncVisibility();
+}
+
 function buildSettingsPanel() {
     if (document.querySelector('#mvu-auto-doctor-settings')) return;
     const host = document.querySelector('#extensions_settings2')
@@ -6882,6 +7653,147 @@ function buildSettingsPanel() {
                             <ul class="mvuad-oplog-list mvuad-settings-oplog-list"></ul>
                         </div>
                     </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-connection-manager">
+                        <summary>独立 API 连接与通道路由</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                在这里维护多个 OpenAI-compatible API 预设；变量通道与活世界/论坛通道各自选择一个预设。
+                                医生不会借用酒馆当前模型，也不会借用故事神谕连接。密钥只保存在本机扩展设置中，不进入诊断包。
+                            </div>
+                            <div class="mvuad-provider-card mvuad-connection-editor">
+                                <b>当前编辑连接</b>
+                                <label class="mvuad-provider-field">
+                                    <span>端点 URL</span>
+                                    <input class="text_pole mvuad-connection-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>API 密钥</span>
+                                    <input class="text_pole mvuad-connection-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>模型</span>
+                                    <div class="mvuad-inline-field">
+                                        <input class="text_pole mvuad-connection-model" type="text" autocomplete="off" spellcheck="false" placeholder="输入模型名，或获取列表">
+                                        <button class="menu_button mvuad-model-fetch" type="button">获取模型</button>
+                                    </div>
+                                </label>
+                                <select class="text_pole mvuad-model-list" hidden aria-label="可用模型"></select>
+                                <label class="mvuad-check">
+                                    <input class="mvuad-connection-backend" type="checkbox">
+                                    <span>经酒馆后端转发（避免浏览器 CORS）</span>
+                                </label>
+                                <label class="mvuad-check">
+                                    <input class="mvuad-connection-raw" type="checkbox">
+                                    <span>地址原样使用（不自动补 /v1）</span>
+                                </label>
+                                <div class="mvuad-provider-status mvuad-model-hint" role="status"></div>
+                            </div>
+                            <div class="mvuad-provider-card">
+                                <b>连接预设</b>
+                                <label class="mvuad-select">
+                                    <span>已保存预设</span>
+                                    <select class="text_pole mvuad-connection-preset-select"></select>
+                                </label>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-connection-preset-load" type="button">载入</button>
+                                    <button class="menu_button mvuad-connection-preset-delete mvuad-danger" type="button">删除</button>
+                                </div>
+                                <label class="mvuad-provider-field">
+                                    <span>预设名称</span>
+                                    <input class="text_pole mvuad-connection-preset-name" type="text" maxlength="80" autocomplete="off" placeholder="例如：Gemini 3.5F">
+                                </label>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-connection-preset-save" type="button">保存当前连接为预设</button>
+                                </div>
+                            </div>
+                            <div class="mvuad-provider-card mvuad-channel-routing">
+                                <b>通道路由</b>
+                                <label class="mvuad-select">
+                                    <span>严格变量通道</span>
+                                    <select class="text_pole mvuad-strict-preset"></select>
+                                </label>
+                                <div class="mvuad-description">负责 MVU 变量诊断与修复；建议选择格式遵从性强的模型。</div>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-test-strict" type="button">测试严格通道</button>
+                                </div>
+                                <div class="mvuad-provider-status mvuad-strict-provider-status" role="status"></div>
+                                <label class="mvuad-select">
+                                    <span>轻量世界 / 论坛通道</span>
+                                    <select class="text_pole mvuad-fast-preset"></select>
+                                </label>
+                                <div class="mvuad-fast-options"></div>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-test-fast" type="button">测试轻量通道</button>
+                                </div>
+                                <div class="mvuad-provider-status mvuad-fast-provider-status" role="status"></div>
+                            </div>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-model-routing" hidden>
+                        <summary>模型通道（不依赖故事神谕）</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                严格通道只负责变量修复；轻量通道负责活世界和内置论坛。
+                                两条通道可以使用不同 API，并会在同一回合并发运行。
+                                密钥只保存在本机扩展设置中，不进入诊断包。
+                            </div>
+                            <div class="mvuad-provider-card" data-channel="strict">
+                                <b>严格格式通道（变量）</b>
+                                <label class="mvuad-select">
+                                    <span>来源</span>
+                                    <select class="text_pole mvuad-model-provider">
+                                        <option value="direct">独立 OpenAI-compatible API（推荐）</option>
+                                        <option value="tavern">酒馆当前连接（手动选择）</option>
+                                        <option value="story-oracle">故事神谕兼容通道（旧版）</option>
+                                    </select>
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>API 地址</span>
+                                    <input class="text_pole mvuad-api-base" type="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/v1">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>模型</span>
+                                    <input class="text_pole mvuad-api-model" type="text" autocomplete="off" spellcheck="false" placeholder="你的 3.5F 模型名">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>API 密钥</span>
+                                    <input class="text_pole mvuad-api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…">
+                                </label>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-provider-test" type="button">测试严格通道</button>
+                                </div>
+                                <div class="mvuad-provider-status" role="status"></div>
+                            </div>
+                            <div class="mvuad-provider-card" data-channel="fast">
+                                <b>轻量通道（活世界 / 论坛）</b>
+                                <label class="mvuad-select">
+                                    <span>来源</span>
+                                    <select class="text_pole mvuad-model-provider">
+                                        <option value="direct">独立 OpenAI-compatible API（DS 推荐）</option>
+                                        <option value="tavern">酒馆当前连接（手动选择）</option>
+                                        <option value="story-oracle">故事神谕兼容通道（旧版）</option>
+                                    </select>
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>API 地址</span>
+                                    <input class="text_pole mvuad-api-base" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>模型</span>
+                                    <input class="text_pole mvuad-api-model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-v4-flash">
+                                </label>
+                                <label class="mvuad-provider-field">
+                                    <span>API 密钥</span>
+                                    <input class="text_pole mvuad-api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…">
+                                </label>
+                                <div class="mvuad-fast-options"></div>
+                                <div class="mvuad-actions">
+                                    <button class="menu_button mvuad-provider-test" type="button">测试轻量通道</button>
+                                </div>
+                                <div class="mvuad-provider-status" role="status"></div>
+                            </div>
+                        </div>
+                    </details>
                     <details class="mvuad-settings-fold mvuad-settings-section mvuad-variable-section">
                         <summary>变量诊断与自动修复</summary>
                         <div class="mvuad-settings-fold-body">
@@ -6892,7 +7804,7 @@ function buildSettingsPanel() {
                                     <div class="mvuad-description">
                                         医生会自动提供完整的 Schema、规则、状态、正文和补丁协议。
                                         下框只用于粘贴你自己的破限/模型适配语句；正常成功只调用一次，
-                                        仅分析结果损坏时最多三次尝试。
+                                        自动回合固定一次；手动检查仅在分析结果损坏时最多两次。
                                     </div>
                                     <label class="mvuad-number">
                                         <span>单次分析 max_tokens</span>
@@ -6904,8 +7816,8 @@ function buildSettingsPanel() {
                                         <button type="button" data-max-tokens="32768">32768</button>
                                     </div>
                                     <div class="mvuad-description">
-                                        请填模型/公益站实际允许的单次输出上限。医生不会为了省钱新增全局 token 硬限；
-                                        只保留防止单一异常条目挤爆模型窗口的分段安全上限。
+                                        默认8192；只有模型确实支持更长输出时才调高。
+                                        医生会裁剪重复上下文，避免单一异常条目挤爆模型窗口。
                                     </div>
                                     <label class="mvuad-prompt-addon-label" for="mvuad-variable-prompt-addon">
                                         附加破限/模型适配提示词
@@ -7053,10 +7965,13 @@ function buildSettingsPanel() {
     options.append(
         makeCheckbox('自动检查每条新回复', 'enabled'),
         makeCheckbox('开局自动补满初始化失配的资源', 'normalizeOpeningResources'),
-        makeCheckbox('优先复用故事神谕的模型连接', 'preferStoryOracle'),
         makeCheckbox('自动关闭故事神谕 AUTO，避免双写', 'preventDoubleWrite'),
         makeCheckbox('无需修正时也弹提示', 'notifyNoChange'),
     );
+    wrapper.querySelector('.mvuad-fast-options').append(
+        makeCheckbox('独立轻量 API 使用 JSON 模式（DS 推荐）', 'fastApiJsonMode'),
+    );
+    bindModelConnectionManager(wrapper.querySelector('.mvuad-connection-manager'));
     wrapper.querySelector('.mvuad-protocol-options').append(
         makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
         makeCheckbox('硬错误时用同一次变量诊断生成可撤回修正版', 'hardContractCorrectionEnabled'),
@@ -7374,15 +8289,29 @@ function bindEvents() {
                     : result
             ));
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
-            const continuity = Promise.all([hardAudit, repair]).then(async (
-                [hardAuditResult, repairResult],
-            ) => {
-                const correctionApplied = repairResult?.correction?.status === 'applied';
+            // 活世界只读正文并写独立元数据。通过本地硬合同门后立即
+            // 与变量诊断并发，不再等待变量模型、写回和开局资源同步。
+            const continuity = hardAudit.then(async (hardAuditResult) => {
                 let effectiveHardAudit = hardAuditResult;
-                if (correctionApplied || repairResult?.status === 'applied') {
+                let continuityExpectedTarget = settledTarget || captured;
+                let hardErrors = (effectiveHardAudit?.issues || [])
+                    .filter((issue) => issue?.severity === 'error');
+                // Length is a presentation-quality contract. Keep reporting
+                // and correcting it, but do not disable the independent world
+                // ledger when the accepted reply is merely shorter than the
+                // requested target. State, dice, time and structure errors
+                // remain blocking.
+                let blockingHardErrors = hardErrors.filter(
+                    (issue) => issue?.code !== 'content-under-budget',
+                );
+                // 结构、骰子、时间等确定性错误仍须先修正。只有这个
+                // 少数分支等待变量任务，修正后立即本地复核再决定。
+                if (blockingHardErrors.length) {
+                    const repairResult = await repair;
                     await openingSync;
                     const postRepairTarget = repairResult?.correctedTarget
                         || captureTarget(getContext(), resolved);
+                    if (postRepairTarget) continuityExpectedTarget = postRepairTarget;
                     effectiveHardAudit = postRepairTarget
                         ? await enqueueHardContractAudit(resolved, {
                             queuedTarget: postRepairTarget,
@@ -7392,29 +8321,14 @@ function bindEvents() {
                             status: 'failed',
                             reason: '修复后目标楼层不可用，无法复核硬合同',
                         };
+                    hardErrors = (effectiveHardAudit?.issues || [])
+                        .filter((issue) => issue?.severity === 'error');
+                    blockingHardErrors = hardErrors.filter(
+                        (issue) => issue?.code !== 'content-under-budget',
+                    );
                 }
-                const hardErrors = (effectiveHardAudit?.issues || [])
-                    .filter((issue) => issue?.severity === 'error');
-                // Length is a presentation-quality contract. Keep reporting
-                // and correcting it, but do not disable the independent world
-                // ledger when the accepted reply is merely shorter than the
-                // requested target. State, dice, time and structure errors
-                // remain blocking.
-                const blockingHardErrors = hardErrors.filter(
-                    (issue) => issue?.code !== 'content-under-budget',
-                );
                 let blockedReason = '';
-                if (['stale', 'busy'].includes(repairResult?.status)) {
-                    blockedReason = repairResult.reason || '变量审计未完成';
-                } else if (
-                    repairResult?.status === 'failed'
-                    && (
-                        ['transport-error', 'rate-limit'].includes(repairResult.failureKind)
-                        || /模型调用失败/u.test(repairResult.reason || '')
-                    )
-                ) {
-                    blockedReason = repairResult.reason || '变量模型连接失败';
-                } else if (effectiveHardAudit?.status === 'failed') {
+                if (effectiveHardAudit?.status === 'failed') {
                     blockedReason = effectiveHardAudit.reason || '硬合同检查失败';
                 } else if (blockingHardErrors.length) {
                     blockedReason = `正文硬合同仍有 ${blockingHardErrors.length} 个阻断性错误`;
@@ -7429,13 +8343,8 @@ function bindEvents() {
                         reason: blockedReason,
                     };
                 }
-                const expectedTarget = repairResult?.correctedTarget
-                    || captureTarget(getContext(), resolved)
-                    || settledTarget
-                    || captured;
                 return enqueueContinuity(resolved, {
-                    after: openingSync,
-                    expectedTarget,
+                    expectedTarget: continuityExpectedTarget,
                 });
             });
             Promise.all([repair, continuity]).then(([repairResult, continuityResult]) => {
