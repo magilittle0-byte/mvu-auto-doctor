@@ -61,7 +61,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.1';
+const VERSION = '1.8.2';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -1765,6 +1765,90 @@ function targetIsCurrent(captured, token = null, { requireLatest = true } = {}) 
     return { ok: true, reason: '' };
 }
 
+function targetBranchIsCurrent(captured, { requireLatest = true } = {}) {
+    const context = getContext();
+    if (!captured || captured.epoch !== operationEpoch) {
+        return { ok: false, reason: '任务已被新的生成或聊天切换作废' };
+    }
+    if (!context || context.chatId !== captured.chatId) {
+        return { ok: false, reason: '聊天已经切换' };
+    }
+    const latest = latestAiMessage(context);
+    if (requireLatest && latest.index !== captured.index) {
+        return { ok: false, reason: '主聊天已经出现更新的 AI 回复' };
+    }
+    const fresh = captureTarget(context, captured.index);
+    if (!fresh) return { ok: false, reason: '目标回复已不存在' };
+    if (
+        fresh.messageId !== captured.messageId
+        || fresh.swipeId !== captured.swipeId
+    ) {
+        return { ok: false, reason: '目标回复身份已经变化' };
+    }
+    return { ok: true, reason: '', captured: fresh };
+}
+
+async function waitAutomaticTargetSettled(initialCaptured) {
+    const settings = getSettings();
+    const quietMs = Math.max(
+        300,
+        Number(settings.delayMs) || DEFAULTS.delayMs,
+    );
+    const timeoutMs = quietMs + Math.max(
+        1000,
+        Number(settings.mvuStableTimeoutMs) || DEFAULTS.mvuStableTimeoutMs,
+    );
+    const intervalMs = 250;
+    const started = Date.now();
+    let previousSignature = '';
+    let stableSince = 0;
+    const Mvu = await getMvu();
+
+    setStatus('等待本回合正文与 MVU 稳定…', 'busy');
+    while (Date.now() - started < timeoutMs) {
+        let branch = targetBranchIsCurrent(initialCaptured);
+        if (!branch.ok) return { status: 'stale', reason: branch.reason };
+
+        let busy = false;
+        try {
+            busy = !!Mvu?.isDuringExtraAnalysis?.();
+        } catch {
+            busy = true;
+        }
+        if (busy) {
+            previousSignature = '';
+            stableSince = 0;
+            await sleep(intervalMs);
+            continue;
+        }
+
+        let mvuFingerprint = 'mvu-unavailable';
+        if (typeof Mvu?.getMvuData === 'function') {
+            try {
+                const data = await mvuDataAt(Mvu, 'latest');
+                mvuFingerprint = fingerprint(safeJson(statDataOf(data), 0));
+            } catch {
+                mvuFingerprint = 'mvu-read-failed';
+            }
+        }
+
+        branch = targetBranchIsCurrent(initialCaptured);
+        if (!branch.ok) return { status: 'stale', reason: branch.reason };
+        const signature = `${branch.captured.fingerprint}:${mvuFingerprint}`;
+        if (signature !== previousSignature) {
+            previousSignature = signature;
+            stableSince = Date.now();
+        } else if (Date.now() - stableSince >= quietMs) {
+            return { status: 'settled', captured: branch.captured };
+        }
+        await sleep(intervalMs);
+    }
+    return {
+        status: 'busy',
+        reason: '本回合正文或 MVU 长时间仍在更新，已安全等待下一次完成事件',
+    };
+}
+
 function sourceRefOf(captured) {
     if (!captured) return null;
     return {
@@ -1943,7 +2027,8 @@ function enqueueHardContractAudit(targetId, options = {}) {
     const context = getContext();
     const latest = latestAiMessage(context);
     const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
-    const queuedTarget = options.queuedTarget || captureTarget(context, resolved);
+    const queuedTarget = options.queuedTarget
+        || (automatic ? captureTarget(context, resolved) : null);
     const key = automatic && queuedTarget
         ? `${capturedTargetKey(queuedTarget)}:${queuedTarget.epoch}`
         : '';
@@ -1954,7 +2039,7 @@ function enqueueHardContractAudit(targetId, options = {}) {
     if (key) hardContractPendingKeys.add(key);
     hardContractChain = hardContractChain
         .catch(() => {})
-        .then(() => runHardContractAudit(resolved, {
+        .then(() => runHardContractAudit(automatic ? resolved : targetId, {
             ...options,
             queuedTarget,
         }))
@@ -3749,7 +3834,11 @@ function enqueue(targetId, options = {}) {
     const context = getContext();
     const latest = latestAiMessage(context);
     const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
-    const queuedTarget = options.queuedTarget || captureTarget(context, resolved);
+    // Automatic work remains bound to the event target. Manual work can wait
+    // behind an older task, so it must capture the current target only when it
+    // actually starts instead of freezing the message at button-click time.
+    const queuedTarget = options.queuedTarget
+        || (automatic ? captureTarget(context, resolved) : null);
     const dedupeKey = automatic ? capturedTargetKey(queuedTarget) : '';
     if (
         dedupeKey
@@ -7216,12 +7305,36 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
-            const hardAudit = enqueueHardContractAudit(resolved, { queuedTarget: captured });
-            const repair = enqueue(resolved, {
-                queuedTarget: captured,
-                after: hardAudit,
-                skipDelay: true,
+            let settledTarget = null;
+            const settled = waitAutomaticTargetSettled(captured).then((result) => {
+                if (result.status === 'settled') {
+                    settledTarget = result.captured;
+                    return result;
+                }
+                if (result.status === 'stale') {
+                    setStatus(`已取消未稳定回复的变量审计：${result.reason}`, '');
+                } else {
+                    setStatus(result.reason || '本回合尚未稳定', 'busy');
+                }
+                return result;
             });
+            const hardAudit = settled.then((result) => (
+                result.status === 'settled'
+                    ? enqueueHardContractAudit(resolved, {
+                        queuedTarget: result.captured,
+                        skipDelay: true,
+                    })
+                    : result
+            ));
+            const repair = settled.then((result) => (
+                result.status === 'settled'
+                    ? enqueue(resolved, {
+                        queuedTarget: result.captured,
+                        after: hardAudit,
+                        skipDelay: true,
+                    })
+                    : result
+            ));
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
             const continuity = Promise.all([hardAudit, repair]).then(async (
                 [hardAuditResult, repairResult],
@@ -7272,6 +7385,7 @@ function bindEvents() {
                 }
                 const expectedTarget = repairResult?.correctedTarget
                     || captureTarget(getContext(), resolved)
+                    || settledTarget
                     || captured;
                 return enqueueContinuity(resolved, {
                     after: openingSync,
@@ -7285,6 +7399,7 @@ function bindEvents() {
                 }
                 const expectedTarget = repairResult?.correctedTarget
                     || captureTarget(getContext(), resolved)
+                    || settledTarget
                     || captured;
                 return enqueueForum(resolved, {
                     after: continuity,

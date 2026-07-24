@@ -497,7 +497,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.1');
+    assert.equal(continuity.version, '1.8.2');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         32768,
@@ -987,7 +987,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.1');
+    assert.equal(lifecycle.version, '1.8.2');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -1205,6 +1205,91 @@ try {
         '变量审计被 continue 作废后，不得绕过上游继续产生活世界费用',
     );
     await continueInterruptPage.close();
+
+    const sameTurnSettlePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await sameTurnSettlePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await sameTurnSettlePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await sameTurnSettlePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.extensionSettings.mvu_auto_doctor.delayMs = 300;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+        setTimeout(() => {
+            t.context.chat[2].mes += '\n宿主后处理补齐了本回合最终正文。';
+            t.setLatestData({
+                stat_data: { 账户: { 代币: 5 } },
+                display_data: {},
+            });
+        }, 100);
+    });
+    await sameTurnSettlePage.waitForFunction(() => (
+        window.__TEST__.calls.model.includes('repair')
+        && window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+    ), null, { timeout: 30000 });
+    const sameTurnSettle = await sameTurnSettlePage.evaluate(() => ({
+        repairCalls: window.__TEST__.calls.model.filter((kind) => kind === 'repair').length,
+        continuityCalls: window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length,
+        repairUser: window.__TEST__.calls.repairUser,
+        status: window.MvuAutoDoctorAPI.getStatus(),
+    }));
+    assert.equal(
+        sameTurnSettle.repairCalls,
+        1,
+        '同一楼正文与 MVU 在完成事件后继续落地时，稳定后仍必须调用变量模型',
+    );
+    assert.equal(sameTurnSettle.continuityCalls, 1);
+    assert.match(
+        sameTurnSettle.repairUser,
+        /宿主后处理补齐了本回合最终正文/u,
+        '变量模型必须读取稳定后的最终正文，而不是完成事件瞬间的半成品',
+    );
+    assert.doesNotMatch(sameTurnSettle.status, /目标回复正文已经变化/u);
+    await sameTurnSettlePage.close();
+
+    const queuedManualPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await queuedManualPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await queuedManualPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await queuedManualPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.extensionSettings.mvu_auto_doctor.delayMs = 300;
+        t.setMode('defer');
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await queuedManualPage.waitForFunction(() => window.__TEST__.hasDeferred(), null, { timeout: 20000 });
+    await queuedManualPage.evaluate(() => {
+        const t = window.__TEST__;
+        window.__QUEUED_MANUAL__ = window.MvuAutoDoctorAPI.runLatest();
+        t.context.chat[2].mes += '\n点击按钮后，同一回合又完成了一次宿主正文同步。';
+        t.setMode('normal');
+        t.resolveRepair(
+            '<UpdateVariable><Analysis>旧自动请求不得落地</Analysis>'
+            + '<JSONPatch>[{"op":"delta","path":"/账户/代币","value":9}]</JSONPatch>'
+            + '</UpdateVariable>',
+        );
+    });
+    await queuedManualPage.waitForFunction(() => (
+        window.__TEST__.calls.model.filter((kind) => kind === 'repair').length === 2
+    ), null, { timeout: 30000 });
+    const queuedManual = await queuedManualPage.evaluate(async () => {
+        const result = await window.__QUEUED_MANUAL__;
+        return {
+            result,
+            replacements: window.__TEST__.calls.replace.length,
+            repairUser: window.__TEST__.calls.repairUser,
+        };
+    });
+    assert.equal(
+        queuedManual.result.status,
+        'applied',
+        '排队中的手动检查必须在真正执行时读取当前回复',
+    );
+    assert.equal(queuedManual.replacements, 1, '失效的旧自动请求不得写入，手动新请求应写入一次');
+    assert.match(
+        queuedManual.repairUser,
+        /点击按钮后，同一回合又完成了一次宿主正文同步/u,
+    );
+    await queuedManualPage.close();
 
     const identityPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await identityPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
