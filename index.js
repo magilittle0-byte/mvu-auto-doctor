@@ -61,7 +61,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 5;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -123,6 +123,7 @@ const forumPendingKeys = new Set();
 const forumCompletedKeys = new Set();
 const hardContractPendingKeys = new Set();
 const hardContractCompletedKeys = new Set();
+let continuationIdentityHint = null;
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
 let latestStatusKind = '';
@@ -996,26 +997,47 @@ function scheduleSafeChatSave(context, chatId) {
 
 function ensureMessageStableId(context, message, index) {
     if (!message) return '';
+    const swipeId = Number(message.swipe_id) || 0;
+    const swipeInfo = Array.isArray(message.swipe_info)
+        && message.swipe_info[swipeId]
+        && typeof message.swipe_info[swipeId] === 'object'
+        ? message.swipe_info[swipeId]
+        : null;
+    const hintedId = continuationIdentityHint
+        && continuationIdentityHint.chatId === context?.chatId
+        && continuationIdentityHint.index === Number(index)
+        && continuationIdentityHint.swipeId === swipeId
+        ? continuationIdentityHint.messageId
+        : '';
     const existing = message.extra?.mvu_auto_doctor_source_id
+        || swipeInfo?.extra?.mvu_auto_doctor_source_id
         || message.mesId
-        || message.message_id;
-    if (existing != null && String(existing).trim()) return String(existing);
-    if (!message.extra || typeof message.extra !== 'object' || Array.isArray(message.extra)) {
-        message.extra = {};
-    }
+        || message.message_id
+        || hintedId;
     // Migrate the old send_date fallback by copying its present value once.
     // Future host edits to send_date no longer change this persisted identity.
     const legacySendDate = message.send_date != null
         ? String(message.send_date).trim()
         : '';
-    const id = legacySendDate || [
+    const id = existing != null && String(existing).trim()
+        ? String(existing)
+        : legacySendDate || [
         'mvuad',
         Date.now().toString(36),
         Number(index).toString(36),
         Math.random().toString(36).slice(2, 8),
     ].join('_');
-    message.extra.mvu_auto_doctor_source_id = id;
-    scheduleSafeChatSave(context, context?.chatId);
+    let changed = false;
+    for (const holder of [message, swipeInfo].filter(Boolean)) {
+        if (!holder.extra || typeof holder.extra !== 'object' || Array.isArray(holder.extra)) {
+            holder.extra = {};
+        }
+        if (holder.extra.mvu_auto_doctor_source_id !== id) {
+            holder.extra.mvu_auto_doctor_source_id = id;
+            changed = true;
+        }
+    }
+    if (changed) scheduleSafeChatSave(context, context?.chatId);
     return id;
 }
 
@@ -1829,6 +1851,7 @@ function renderHardContractAudit() {
 async function runHardContractAudit(targetId, {
     manual = false,
     queuedTarget = null,
+    skipDelay = false,
 } = {}) {
     const settings = getSettings();
     if (!manual && !settings.hardContractAuditEnabled) {
@@ -1842,7 +1865,7 @@ async function runHardContractAudit(targetId, {
     const token = operationToken(captured);
     let targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-    if (!manual) {
+    if (!manual && !skipDelay) {
         await sleep(Math.max(300, Number(settings.delayMs) || 1600));
         targetCheck = targetIsCurrent(captured, token);
         if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
@@ -2424,6 +2447,8 @@ async function buildAuditMessages({
         '- 校正必须是最小必要改动：保留原叙事事实、文风、人物语气、玩家已声明行动、骰值与成功等级；禁止为了配合剧情规划改骰、补骰、替玩家追加行动或把未发生分支写成事实。',
         '- 玩家本轮只授权原回复中的行动A。任何补字都不得新增、完成或暗示玩家接着执行B/C/D；不得新增玩家对白、移动、目标、路线、工具、选择、技能、资源消费或检定。',
         '- 正文字数低于明确硬下限时，只能补足A的既有过程与已锁定结果，以及NPC、敌人、同伴基于自身动机和有限信息的独立行动/对白/反应，或环境、空间、时间、关系、威胁后果；不得靠重复、总结或选项凑字。',
+        '- 本地error若包含 content-under-budget，<CorrectedContent>不是可选项：本次以及每次定向重试都必须输出完整修正版，并确保纯正文汉字数达到证据给出的最低值。不得用“保留玩家控制权”“变量已修好”或其他理由省略该区块。',
+        '- 输出前必须在内部复核修正版的纯汉字数；长度合同按<content>内部叙事文字计算，HTML状态栏、思维链、options、UpdateVariable和标签都不计入。建议超过最低值至少100汉字，避免边界计数差异。',
         '- NPC可以主动制造局势并向玩家施压；一旦下一步需要玩家选择新目标、路线、工具、对白或检定，正文必须停下，把决定留给options和下一回合。',
         '- 原A、已消费骰面、成功等级、S1/骰后锁与JSONPatch语义必须保持；严禁借扩写重判。',
         '- CorrectedContent只写原<content>标签内部的新正文，不得包含content标签本身、UpdateVariable、状态栏、思维链或其他机制区块。',
@@ -2516,6 +2541,10 @@ async function buildAuditMessages({
                     ? `上一次模型输出：\n${cropText(retry.output, 18000, '上次输出')}`
                     : '',
                 '请针对失败原因重新分析。变量区块必须最先完整闭合；若上次 JSON 或路径错误，重新生成合法的最小补丁，不要复制坏格式。',
+                '若失败原因是 insert 目标已存在：先查看上方当前 stat_data；当前路径已有值且确需改变时使用 replace，已有值已经正确时删除该操作，绝不能再次对同一路径使用 insert。',
+                hardErrors.some((issue) => issue.code === 'content-under-budget')
+                    ? 'content-under-budget 仍然存在：本次重试也必须在变量区块之后输出达到最低汉字数的完整 <CorrectedContent>，不得因为正在重试 JSONPatch 而省略。'
+                    : '',
             ].filter(Boolean).join('\n')
             : auditMode === 'opening'
                 ? '这是开局/人物创建审计。请审计全部已确认创建选择、资源、装备、物品、奖励、派生值的错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。'
@@ -3705,6 +3734,16 @@ function capturedTargetKey(captured) {
     ].join(':');
 }
 
+function capturedBranchKey(captured) {
+    if (!captured) return '';
+    return [
+        captured.chatId,
+        captured.index,
+        captured.messageId,
+        captured.swipeId,
+    ].join(':');
+}
+
 function enqueue(targetId, options = {}) {
     const automatic = !options.manual;
     const context = getContext();
@@ -3733,6 +3772,14 @@ function enqueue(targetId, options = {}) {
         ))
         .then(() => runTarget(targetId, queuedOptions))
         .then((result) => {
+            if (
+                result?.status === 'stale'
+                && queuedTarget?.epoch === operationEpoch
+            ) {
+                setStatus(`已取消未稳定回复的变量审计：${result.reason || '目标已变化'}`, '');
+            } else if (result?.status === 'disabled') {
+                setStatus('自动变量审计已关闭', '');
+            }
             if (
                 dedupeKey
                 && ['applied', 'nochange'].includes(result?.status)
@@ -4524,7 +4571,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             progressed = true;
             break;
         }
-        if (modelFailure && isRateLimitError(modelFailure)) break;
+        // Transport, auth, timeout and service failures are not parser
+        // failures. Retrying them immediately only spends the same broken
+        // connection twice. Semantic/JSON failures may still use attempt 2.
+        if (modelFailure) break;
         retryReason ||= lifecycle.activeBefore > 0
             ? '已有未结事件，但既没有实质变化，也没有给出指向具体事件与未满足条件的held调度记录'
             : '没有新建事件，也没有产生有依据的分类世界变化';
@@ -4533,6 +4583,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         setContinuityStatus('世界连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
         return { status: 'stalled', reason: retryReason || '账本无实质变化' };
     }
+    const degradedModelReason = modelFailure
+        ? '模型调用失败'
+        : '模型返回未通过账本校验';
     if (
         next.lastTick?.turn <= (base.lastTick?.turn || 0)
         && clockPlan.changedThreadIds.length
@@ -4555,10 +4608,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                         ? '本地事件时钟受挫回退，模型已完成因果复核'
                         : '本地事件时钟本轮保持，模型已完成因果复核'
                 : clockThread?.evolveResult === 'success'
-                    ? '模型暂不可用；本地事件时钟已成功推进，叙事后果待后续轮次补全'
+                    ? `${degradedModelReason}；本地事件时钟已成功推进，叙事后果待后续轮次补全`
                     : clockThread?.evolveResult === 'setback'
-                        ? '模型暂不可用；本地事件时钟已记录受挫，叙事后果待后续轮次补全'
-                        : '模型暂不可用；本地事件时钟已保留本轮结果，待后续轮次补全',
+                        ? `${degradedModelReason}；本地事件时钟已记录受挫，叙事后果待后续轮次补全`
+                        : `${degradedModelReason}；本地事件时钟已保留本轮结果，待后续轮次补全`,
         };
     } else if (
         next.lastTick?.turn <= (base.lastTick?.turn || 0)
@@ -4568,7 +4621,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             turn: tickTurn,
             action: 'advanced',
             threadId: 'WORLD',
-            reason: '分类世界状态或本地传播时钟发生变化，模型已完成因果复核',
+            reason: modelValidated
+                ? '分类世界状态或本地传播时钟发生变化，模型已完成因果复核'
+                : `${degradedModelReason}；分类世界状态或本地传播时钟已保留，待后续轮次补全`,
         };
     }
     next.turn = Math.max(tickTurn, Number(next.turn) || 0);
@@ -4613,7 +4668,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const held = next.lastTick?.action === 'held';
     if (!modelValidated && localProgressed) {
         setContinuityStatus(
-            `世界连续性：模型暂不可用，本地时钟已推进 ${clockPlan.changedThreadIds.length || 1} 项；不会丢账`,
+            `世界连续性：${degradedModelReason}，本地时钟已推进 ${clockPlan.changedThreadIds.length || 1} 项；不会丢账`,
             '',
         );
     } else {
@@ -4655,7 +4710,11 @@ function enqueueContinuity(targetId, {
     const latest = latestAiMessage(context);
     const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
     const expected = expectedTarget || captureTarget(context, resolved);
-    const dedupeKey = capturedTargetKey(expected);
+    // A continued generation may append to the same displayed swipe and change
+    // its content fingerprint. The living-world ledger still advances at most
+    // once for that logical AI floor; a regenerate/new swipe receives a new
+    // stable identity and is allowed to recompute from its checkpoint.
+    const dedupeKey = capturedBranchKey(expected);
     if (
         !force
         && dedupeKey
@@ -5077,7 +5136,11 @@ function enqueueForum(targetId, {
     const resolved = targetId == null || targetId < 0 ? latest.index : targetId;
     const expected = expectedTarget || captureTarget(context, resolved);
     if (!expected) return Promise.resolve({ status: 'missing' });
-    const dedupeKey = capturedTargetKey(expected);
+    // A continued generation is still the same displayed AI floor. Refreshing
+    // the optional forum twice for one floor wastes a second model call and can
+    // leak an intermediate branch, so share the same branch-level key as the
+    // continuity ledger.
+    const dedupeKey = capturedBranchKey(expected);
     if (
         !force
         && dedupeKey
@@ -7116,10 +7179,25 @@ function bindEvents() {
                 console.info('[MVU Auto Doctor] 已忽略数据库/算量 dryRun。');
                 return;
             }
+            const generationType = String(type || 'normal');
+            if (generationType === 'continue') {
+                const current = getContext();
+                const latest = latestAiMessage(current);
+                continuationIdentityHint = latest.message
+                    ? {
+                        chatId: current.chatId,
+                        index: latest.index,
+                        swipeId: Number(latest.message.swipe_id) || 0,
+                        messageId: ensureMessageStableId(current, latest.message, latest.index),
+                    }
+                    : null;
+            } else {
+                continuationIdentityHint = null;
+            }
             generationSerial += 1;
             lastGeneration = {
                 serial: generationSerial,
-                type: String(type || 'normal'),
+                type: generationType,
                 dryRun: false,
             };
             invalidateOperations(`开始新的${lastGeneration.type}生成`);
@@ -7145,7 +7223,53 @@ function bindEvents() {
                 skipDelay: true,
             });
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
-            const continuity = repair.then((repairResult) => {
+            const continuity = Promise.all([hardAudit, repair]).then(async (
+                [hardAuditResult, repairResult],
+            ) => {
+                const correctionApplied = repairResult?.correction?.status === 'applied';
+                let effectiveHardAudit = hardAuditResult;
+                if (correctionApplied || repairResult?.status === 'applied') {
+                    await openingSync;
+                    const postRepairTarget = repairResult?.correctedTarget
+                        || captureTarget(getContext(), resolved);
+                    effectiveHardAudit = postRepairTarget
+                        ? await enqueueHardContractAudit(resolved, {
+                            queuedTarget: postRepairTarget,
+                            skipDelay: true,
+                        })
+                        : {
+                            status: 'failed',
+                            reason: '修复后目标楼层不可用，无法复核硬合同',
+                        };
+                }
+                const hardErrors = (effectiveHardAudit?.issues || [])
+                    .filter((issue) => issue?.severity === 'error');
+                let blockedReason = '';
+                if (['stale', 'busy'].includes(repairResult?.status)) {
+                    blockedReason = repairResult.reason || '变量审计未完成';
+                } else if (
+                    repairResult?.status === 'failed'
+                    && (
+                        ['transport-error', 'rate-limit'].includes(repairResult.failureKind)
+                        || /模型调用失败/u.test(repairResult.reason || '')
+                    )
+                ) {
+                    blockedReason = repairResult.reason || '变量模型连接失败';
+                } else if (effectiveHardAudit?.status === 'failed') {
+                    blockedReason = effectiveHardAudit.reason || '硬合同检查失败';
+                } else if (hardErrors.length) {
+                    blockedReason = `正文硬合同仍有 ${hardErrors.length} 个错误`;
+                }
+                if (blockedReason) {
+                    setContinuityStatus(
+                        `世界连续性：已跳过本回合（${blockedReason}）；未调用模型、未推进账本`,
+                        '',
+                    );
+                    return {
+                        status: 'blocked',
+                        reason: blockedReason,
+                    };
+                }
                 const expectedTarget = repairResult?.correctedTarget
                     || captureTarget(getContext(), resolved)
                     || captured;
@@ -7154,7 +7278,11 @@ function bindEvents() {
                     expectedTarget,
                 });
             });
-            repair.then((repairResult) => {
+            Promise.all([repair, continuity]).then(([repairResult, continuityResult]) => {
+                if (['blocked', 'stale', 'failed'].includes(continuityResult?.status)) {
+                    setForumStatus('论坛：上游回复尚未稳定，本回合未自动刷新', '');
+                    return continuityResult;
+                }
                 const expectedTarget = repairResult?.correctedTarget
                     || captureTarget(getContext(), resolved)
                     || captured;
@@ -7177,6 +7305,7 @@ function bindEvents() {
             clearTimeout(pendingOperationLogSaveTimer);
             pendingOperationLogSaveTimer = null;
             invalidateOperations('聊天已经切换');
+            continuationIdentityHint = null;
             automaticPendingKeys.clear();
             automaticCompletedKeys.clear();
             openingSyncPendingKeys.clear();
