@@ -324,6 +324,62 @@ assert.deepEqual(continuityLifecycleStats(causalBase, causalAccepted), {
     tickAction: 'advanced',
 });
 
+const clusteredBase = normalizeContinuityState({
+    chatId: 'clustered-world',
+    turn: 9,
+    threads: Array.from({ length: 5 }, (_, index) => ({
+        id: `CLUSTER-${index + 1}`,
+        title: `港区关联事件${index + 1}`,
+        origin: 'setting_independent',
+        relation: 'independent',
+        stage: 'advancing',
+        summary: `港区状态${index + 1}`,
+        actors: ['港务行会'],
+        locations: ['港区'],
+        seedBasis: '世界书：港区制度',
+        urgency: 2,
+        createdTurn: index + 1,
+        lastAdvancedTurn: index + 1,
+    })),
+}, { maxThreads: 12 });
+const clusteredProposal = structuredClone(clusteredBase);
+clusteredProposal.turn = 10;
+clusteredProposal.lastTick = {
+    turn: 10,
+    action: 'advanced',
+    threadId: 'CLUSTER-5',
+    reason: '港务行会的同一份封港令同时影响多项事务',
+};
+clusteredProposal.threads.forEach((thread, index) => {
+    thread.summary = `封港后的关联变化${index + 1}`;
+    thread.offscreenBeat = `关联事件${index + 1}已响应封港令`;
+});
+const clusteredLiving = enforceContinuityPolicy(clusteredBase, clusteredProposal, {
+    autonomy: 'living',
+    allowAutonomous: true,
+    maxThreads: 12,
+});
+assert.equal(
+    continuityLifecycleStats(clusteredBase, clusteredLiving).changedExisting,
+    3,
+    '活世界模式应允许同一因果簇每轮批量推进最多3条旧事件',
+);
+assert.equal(
+    clusteredLiving.threads.find((thread) => thread.id === 'CLUSTER-5').lastAdvancedTurn,
+    10,
+    '模型指定的主调度事件必须优先进入批量推进簇',
+);
+const clusteredExpansive = enforceContinuityPolicy(clusteredBase, clusteredProposal, {
+    autonomy: 'expansive',
+    allowAutonomous: true,
+    maxThreads: 12,
+});
+assert.equal(
+    continuityLifecycleStats(clusteredBase, clusteredExpansive).changedExisting,
+    5,
+    '扩张模式可在一次调用中接受最多6条相关旧事件变化',
+);
+
 const heldBase = structuredClone(causalAccepted);
 heldBase.turn = 5;
 const heldProposal = structuredClone(heldBase);
