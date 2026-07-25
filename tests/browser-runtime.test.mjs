@@ -299,7 +299,7 @@ window.StoryOracleAPI = {
       const pageMark = firstPage ? '' : '（续页' + calls.forumRuns + '）';
       const newPosts = [
         { id: id + '-A', board: '闲聊广场', title: '北门面摊今天是不是淡了点' + pageMark, author: '盐汽水', body: '路过吃了一碗，老板说盐车晚到了。排队时又听见后厨的人讨论北门进货，说昨夜那场雨把盐车堵在旧桥外，今天午后才可能送到。有人觉得只是清淡一点，也有人说汤底和前几日完全不同。摊主没有涨价，还给等得久的人添了半勺肉末。旁边卖饼的倒是趁机忙了起来，不少人端着面去配咸饼。要是傍晚补货真的到了，我再来回一帖，省得大家白跑。顺便提醒第一次去的人，北门这家没有挂大招牌，看到修鞋摊之后往里走十几步就是。午时人最多，想坐靠窗的位置最好提前一点。今天还有两个外地客误以为摊子关门，绕去南街后才听说只是盐车晚到。老板说晚饭照常开火，汤底补齐以后不会另外加价，已经买过午饭的人拿木牌回来还能添一小碗。' + pageMark, kind: 'chat', tags: ['吃喝', '北门'], source: '港城普通生活', heat: 57 },
-        { id: id + '-B', board: '求助攻略', title: '夜里去北岸要注意什么' + pageMark, author: '赶夜路的人', body: '第一次走北岸，求问渡船和照明情况。' + pageMark, kind: 'guide', tags: ['求助'], source: '世界书中的港城交通', heat: 4 },
+        { id: id + '-B', board: '求助攻略', title: '夜里去北岸要注意什么' + pageMark, author: '赶夜路的人', body: '第一次走北岸，求问渡船和照明情况。听说最近退潮时间不稳定，石阶又湿又滑；如果要带货过去，哪一班船更稳，码头附近有没有能暂时避雨的棚子？也想避开巡夜队盘查。' + pageMark, kind: 'guide', tags: ['求助'], source: '世界书中的港城交通', heat: 4 },
         { id: id + '-C', board: '交易集市', title: '收两盏防风提灯', author: '旧船票', body: '码头风大，普通灯罩用不了多久。', kind: 'trade', tags: ['收购'], source: '港城普通交易', heat: 5 },
         { id: id + '-D', board: '街巷杂谈', title: '钟楼旁那群灰鸽子又回来了', author: '晒网人', body: '一到午后就落满屋檐，看着挺热闹。', kind: 'chat', tags: ['日常'], source: '港城普通生活', heat: 6 },
       ].slice(0, firstPage ? 4 : 2);
@@ -599,6 +599,10 @@ try {
         await t.context.eventSource.emit('generation_started', 'normal', {}, true);
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
+        window.__DATABASE_FINAL_REPLY_BARRIER__ = window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 20000 },
+        );
     });
     await page.waitForFunction(() => (
         window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.threads?.length === 1
@@ -614,6 +618,12 @@ try {
     await page.waitForFunction(() => (
         window.__TEST__.calls.repairOptions.length === 1
     ), null, { timeout: 20000 });
+    const finalReplyBarrier = await page.evaluate(
+        () => window.__DATABASE_FINAL_REPLY_BARRIER__,
+    );
+    assert.equal(finalReplyBarrier.status, 'settled');
+    assert.equal(finalReplyBarrier.targetIndex, 2);
+    assert.equal(typeof finalReplyBarrier.fingerprint, 'string');
     const defaultForumMode = await page.evaluate(() => ({
         turn: window.MvuAutoDoctorAPI.getForumState().turn,
         runs: window.__TEST__.calls.forumRuns,
@@ -663,7 +673,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.8');
+    assert.equal(continuity.version, '1.8.9');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -710,8 +720,8 @@ try {
         });
         await new Promise((resolve) => setTimeout(resolve, 850));
         return {
-            apiCompatible: window.MvuAutoDoctorAPI.isCompatible(1),
-            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(2),
+            apiCompatible: window.MvuAutoDoctorAPI.isCompatible(2),
+            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(3),
             healthItems: document.querySelectorAll('.mvuad-health-item').length,
             promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
             modelCalls: window.MvuAutoDoctorAPI.getModelCallStats(),
@@ -913,7 +923,7 @@ try {
     assert.equal(forumPanel.heatBadges, 4);
     assert.equal(forumPanel.hotPosts, 1);
     assert.equal(forumPanel.hotComments, 4, '每个有回复的主题只显示一条紧凑热评预览');
-    assert.equal(forumPanel.longBodies, 1);
+    assert.equal(forumPanel.longBodies, 2);
     assert.equal(forumPanel.feedEnds, 1);
     assert.ok(forumPanel.headerHeight <= 64, '论坛顶栏不得再次膨胀成大面积空头图');
     assert.ok(
@@ -956,6 +966,22 @@ try {
         true,
         '长帖必须可以展开查看全文',
     );
+    await page.click('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-details > summary');
+    const mediumPostExpansion = await page.evaluate(() => {
+        const details = document.querySelector('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-details');
+        const summary = details?.querySelector('summary');
+        const full = details?.querySelector('.mvuad-forum-post-full');
+        return {
+            open: !!details?.open,
+            expanded: summary?.getAttribute('aria-expanded'),
+            fullHeight: full?.getBoundingClientRect().height || 0,
+            previewVisible: (details?.querySelector('.mvuad-forum-post-preview')?.getClientRects().length || 0) > 0,
+        };
+    });
+    assert.equal(mediumPostExpansion.open, true, 'medium-length posts must expose a working full-text control');
+    assert.equal(mediumPostExpansion.expanded, 'true');
+    assert.equal(mediumPostExpansion.previewVisible, false);
+    assert.ok(mediumPostExpansion.fullHeight > 0, 'opened post must render its complete body');
     await page.click('.mvuad-forum-body-details > summary');
     if (process.env.MVUAD_FORUM_PANEL_SCREENSHOT) {
         await page.locator('#mvuad-forum-panel .mvuad-forum-shell').screenshot({
@@ -1181,7 +1207,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.8');
+    assert.equal(lifecycle.version, '1.8.9');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

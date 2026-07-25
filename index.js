@@ -66,7 +66,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.8';
+const VERSION = '1.8.9';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -147,6 +147,8 @@ const forumPendingKeys = new Set();
 const forumCompletedKeys = new Set();
 const hardContractPendingKeys = new Set();
 const hardContractCompletedKeys = new Set();
+const targetSettlementRecords = new Map();
+let targetSettlementSerial = 0;
 let continuationIdentityHint = null;
 let lastUndo = null;
 let latestStatus = '等待新的 AI 回复';
@@ -4696,6 +4698,147 @@ function capturedBranchKey(captured) {
     ].join(':');
 }
 
+function targetSettlementKey(chatId, targetIndex) {
+    return `${String(chatId || '')}:${Number(targetIndex)}`;
+}
+
+function safeSettlementResult(record, status, extra = {}) {
+    return {
+        status,
+        chatId: record?.chatId || '',
+        targetIndex: Number(record?.targetIndex),
+        serial: Number(record?.serial) || 0,
+        ...extra,
+    };
+}
+
+function registerTargetSettlement(captured, settlementPromise) {
+    if (!captured) return null;
+    const key = targetSettlementKey(captured.chatId, captured.index);
+    const record = {
+        key,
+        serial: ++targetSettlementSerial,
+        chatId: captured.chatId,
+        targetIndex: captured.index,
+        messageId: captured.messageId,
+        initialSwipeId: captured.swipeId,
+        initialFingerprint: captured.fingerprint,
+        registeredAt: Date.now(),
+        settledAt: 0,
+        pending: true,
+        result: null,
+        promise: null,
+    };
+    targetSettlementRecords.set(key, record);
+    record.promise = Promise.resolve(settlementPromise)
+        .then((workflowResult) => {
+            const context = getContext();
+            const current = captureTarget(context, record.targetIndex);
+            if (
+                context?.chatId !== record.chatId
+                || !current
+                || current.messageId !== record.messageId
+            ) {
+                return safeSettlementResult(record, 'stale', {
+                    reason: '聊天、楼层或回复分支已经变化',
+                });
+            }
+            return safeSettlementResult(record, 'settled', {
+                messageId: current.messageId,
+                swipeId: current.swipeId,
+                fingerprint: current.fingerprint,
+                workflowStatus: workflowResult?.status || 'completed',
+                reason: workflowResult?.reason || '',
+            });
+        })
+        .catch((error) => safeSettlementResult(record, 'settled', {
+            messageId: captureTarget(getContext(), record.targetIndex)?.messageId || record.messageId,
+            swipeId: captureTarget(getContext(), record.targetIndex)?.swipeId ?? record.initialSwipeId,
+            fingerprint: captureTarget(getContext(), record.targetIndex)?.fingerprint || '',
+            workflowStatus: 'failed',
+            reason: String(error?.message || error || '医生流程异常'),
+        }))
+        .then((result) => {
+            record.pending = false;
+            record.settledAt = Date.now();
+            record.result = result;
+            try {
+                window.dispatchEvent(new CustomEvent('mvu-auto-doctor-target-settled', {
+                    detail: {
+                        status: result.status,
+                        chatId: result.chatId,
+                        targetIndex: result.targetIndex,
+                        messageId: result.messageId,
+                        swipeId: result.swipeId,
+                        fingerprint: result.fingerprint,
+                        workflowStatus: result.workflowStatus,
+                    },
+                }));
+            } catch {}
+            return result;
+        });
+    return record;
+}
+
+async function waitForTargetSettled(
+    targetIndex,
+    { timeoutMs = 240000, registrationGraceMs = 1200 } = {},
+) {
+    const startedAt = Date.now();
+    const context = getContext();
+    const resolved = Number(targetIndex);
+    if (!context?.chatId || !Number.isInteger(resolved) || resolved < 0) {
+        return {
+            status: 'unmanaged',
+            reason: '目标楼层不可用',
+            targetIndex: resolved,
+        };
+    }
+    const key = targetSettlementKey(context.chatId, resolved);
+    let record = targetSettlementRecords.get(key);
+    const grace = Math.max(0, Number(registrationGraceMs) || 0);
+    while (!record && Date.now() - startedAt < grace) {
+        await sleep(40);
+        record = targetSettlementRecords.get(key);
+    }
+    if (!record) {
+        return {
+            status: 'unmanaged',
+            chatId: context.chatId,
+            targetIndex: resolved,
+            reason: '该楼层没有医生自动处理任务',
+        };
+    }
+
+    const cap = Math.max(1000, Number(timeoutMs) || 240000);
+    while (record) {
+        const remaining = cap - (Date.now() - startedAt);
+        if (remaining <= 0) {
+            return safeSettlementResult(record, 'timeout', {
+                reason: `等待医生最终正文超过 ${cap}ms`,
+            });
+        }
+        const timeout = new Promise((resolve) => {
+            setTimeout(() => resolve(safeSettlementResult(record, 'timeout', {
+                reason: `等待医生最终正文超过 ${cap}ms`,
+            })), remaining);
+        });
+        const result = await Promise.race([record.promise, timeout]);
+        const latestRecord = targetSettlementRecords.get(key);
+        if (latestRecord && latestRecord.serial !== record.serial) {
+            record = latestRecord;
+            continue;
+        }
+        return result;
+    }
+    return {
+        status: 'unmanaged',
+        chatId: context.chatId,
+        targetIndex: resolved,
+        reason: '医生任务没有登记',
+    };
+}
+
 function enqueue(targetId, options = {}) {
     const automatic = !options.manual;
     const context = getContext();
@@ -6852,6 +6995,11 @@ const FORUM_KIND_LABELS = Object.freeze({
     trade: '交易',
 });
 
+// The feed visually clamps a post to two lines. Use a deliberately lower
+// threshold than the model's usual post length so every post that can be
+// clipped on a phone exposes an explicit full-text control.
+const FORUM_BODY_COLLAPSE_THRESHOLD = 72;
+
 function forumAuthorHue(author) {
     let hash = 0;
     for (const char of String(author || '匿名')) {
@@ -6866,6 +7014,7 @@ function buildForumPostCard(post, {
 } = {}) {
     const card = document.createElement('article');
     card.className = 'mvuad-forum-post';
+    card.dataset.postId = String(post.id || '');
     card.dataset.board = post.board;
     card.dataset.kind = post.kind;
     const heatValue = Math.max(0, Number(post.heat) || 0);
@@ -6906,11 +7055,13 @@ function buildForumPostCard(post, {
     card.append(heading);
 
     const bodyText = String(post.body || '');
-    if (bodyText.length > 180) {
+    if (bodyText.length > FORUM_BODY_COLLAPSE_THRESHOLD) {
         const bodyDetails = document.createElement('details');
         bodyDetails.className = 'mvuad-forum-body-details';
         const bodySummary = document.createElement('summary');
         bodySummary.setAttribute('aria-label', '展开或收起帖子全文');
+        bodySummary.setAttribute('role', 'button');
+        bodySummary.setAttribute('aria-expanded', 'false');
         const preview = document.createElement('div');
         preview.className = 'mvuad-forum-post-body mvuad-forum-post-preview';
         preview.textContent = bodyText;
@@ -6919,6 +7070,18 @@ function buildForumPostCard(post, {
         fullBody.className = 'mvuad-forum-post-body mvuad-forum-post-full';
         fullBody.textContent = bodyText;
         bodyDetails.append(bodySummary, fullBody);
+        const syncBodyExpanded = () => {
+            bodySummary.setAttribute('aria-expanded', String(bodyDetails.open));
+        };
+        // Android WebViews occasionally fail to toggle a styled <summary>
+        // containing a block preview. Keep native details semantics, but make
+        // the touch/click path deterministic as well.
+        bodySummary.addEventListener('click', (event) => {
+            event.preventDefault();
+            bodyDetails.open = !bodyDetails.open;
+            syncBodyExpanded();
+        });
+        bodyDetails.addEventListener('toggle', syncBodyExpanded);
         card.appendChild(bodyDetails);
     } else {
         const body = document.createElement('div');
@@ -8798,6 +8961,15 @@ function bindEvents() {
                     : result
             ));
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
+            const finalReplySettlement = Promise.all([repair, openingSync])
+                .then(([repairResult, openingResult]) => ({
+                    status: repairResult?.status === 'stale'
+                        ? 'stale'
+                        : openingResult?.status || repairResult?.status || 'completed',
+                    reason: repairResult?.reason || openingResult?.reason || '',
+                    correctedTarget: repairResult?.correctedTarget || null,
+                }));
+            registerTargetSettlement(captured, finalReplySettlement);
             // 活世界只读正文并写独立元数据。通过本地硬合同门后立即
             // 与变量诊断并发，不再等待变量模型、写回和开局资源同步。
             const continuity = hardAudit.then(async (hardAuditResult) => {
@@ -8895,6 +9067,7 @@ function bindEvents() {
             continuityCompletedKeys.clear();
             forumPendingKeys.clear();
             forumCompletedKeys.clear();
+            targetSettlementRecords.clear();
             presetContinuityCache = { checkedAt: 0, active: false };
             lastUndo = latestUndoRecord(readChatNamespace());
             lastInjectionInspection = {
@@ -8951,8 +9124,9 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 1,
-        isCompatible: (required = 1) => Number(required) <= 1,
+        apiVersion: 2,
+        isCompatible: (required = 1) => Number(required) <= 2,
+        waitForTargetSettled,
         runLatest: () => enqueue(null, { manual: true }),
         auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
         getHardContractAudit: () => deepClone(latestHardContractAudit),
