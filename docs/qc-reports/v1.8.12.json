@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "version": "1.8.12",
+  "testedAt": "2026-07-25T20:01:53+08:00",
+  "result": "pass",
+  "codeFingerprint": "ec0eecddc86596e598b73fa23fb86a2a49c1b5d0faafc572bf94662be060a3ae",
+  "environment": {
+    "sillyTavernVersion": "1.18.0",
+    "sillyTavernCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browser": "Codex In-app Browser",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "modelProxy": {
+      "url": "http://127.0.0.1:9328/v1",
+      "credentialMode": "memory-only"
+    }
+  },
+  "checks": {
+    "testSuite": {
+      "total": 26,
+      "passed": 26,
+      "failed": 0,
+      "durationMs": 126813
+    },
+    "deepSeek": {
+      "model": "deepseek-v4-flash",
+      "calls": 3,
+      "httpStatuses": [
+        200,
+        200,
+        200
+      ],
+      "credentialPersisted": false,
+      "proxyStopped": true
+    },
+    "forum": {
+      "generatedPages": 3,
+      "topicCount": 13,
+      "openWithPointerOrTouch": true,
+      "expand": true,
+      "collapse": true,
+      "ariaStateSynchronized": true,
+      "singleWholeThreadControl": true,
+      "controlsPerPost": 1,
+      "legacyBodyControlCount": 0,
+      "legacyReplyControlCount": 0,
+      "opBodyMatchesSource": true,
+      "opFinalTextVisible": true,
+      "opBodyClipped": false,
+      "repliesExpandedTogether": true,
+      "collapsedRepliesHidden": true,
+      "visibleReplyCount": 2,
+      "totalReplyCount": 2
+    },
+    "mobile": {
+      "touchTargetWidth": 368,
+      "touchTargetHeight": 50,
+      "minimumTouchTarget": 42,
+      "floatingPanelTop": 87.921875,
+      "floatingPanelBottom": 780,
+      "forumPanelTop": 0,
+      "forumPanelBottom": 844,
+      "forumShellClientWidth": 390,
+      "forumShellScrollWidth": 390
+    }
+  },
+  "privacy": {
+    "apiKeyIncluded": false,
+    "privateChatIncluded": false,
+    "userDataIncluded": false,
+    "rawModelPayloadIncluded": false
+  }
+}

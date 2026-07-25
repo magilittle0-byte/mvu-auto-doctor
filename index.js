@@ -66,7 +66,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.11';
+const VERSION = '1.8.12';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -6995,11 +6995,6 @@ const FORUM_KIND_LABELS = Object.freeze({
     trade: '交易',
 });
 
-// The feed visually clamps a post to two lines. Use a deliberately lower
-// threshold than the model's usual post length so every post that can be
-// clipped on a phone exposes an explicit full-text control.
-const FORUM_BODY_COLLAPSE_THRESHOLD = 72;
-
 function forumAuthorHue(author) {
     let hash = 0;
     for (const char of String(author || '匿名')) {
@@ -7054,44 +7049,10 @@ function buildForumPostCard(post, {
     meta.append(authorMeta, metrics);
     card.append(heading);
 
-    const bodyText = String(post.body || '');
-    if (bodyText.length > FORUM_BODY_COLLAPSE_THRESHOLD) {
-        const bodyDetails = document.createElement('div');
-        bodyDetails.className = 'mvuad-forum-body-details';
-        const preview = document.createElement('div');
-        preview.className = 'mvuad-forum-post-body mvuad-forum-post-preview';
-        preview.textContent = bodyText;
-        const bodyToggle = document.createElement('button');
-        bodyToggle.className = 'mvuad-forum-body-toggle';
-        bodyToggle.type = 'button';
-        bodyToggle.setAttribute('aria-expanded', 'false');
-        bodyToggle.textContent = '展开全文';
-        const fullBody = document.createElement('div');
-        fullBody.className = 'mvuad-forum-post-body mvuad-forum-post-full';
-        fullBody.textContent = bodyText;
-        fullBody.hidden = true;
-        bodyDetails.append(preview, bodyToggle, fullBody);
-        const setBodyExpanded = (expanded) => {
-            const next = !!expanded;
-            bodyDetails.classList.toggle('is-open', next);
-            bodyToggle.setAttribute('aria-expanded', String(next));
-            bodyToggle.textContent = next ? '收起全文' : '展开全文';
-            preview.hidden = next;
-            fullBody.hidden = !next;
-        };
-        // Do not rely on <details>/<summary> here. Android WebViews disagree
-        // about whether a styled summary toggles before or after a prevented
-        // click, which can immediately undo a manual fallback toggle.
-        bodyToggle.addEventListener('click', () => {
-            setBodyExpanded(bodyToggle.getAttribute('aria-expanded') !== 'true');
-        });
-        card.appendChild(bodyDetails);
-    } else {
-        const body = document.createElement('div');
-        body.className = 'mvuad-forum-post-body';
-        body.textContent = bodyText;
-        card.appendChild(body);
-    }
+    const body = document.createElement('div');
+    body.className = 'mvuad-forum-post-body';
+    body.textContent = String(post.body || '');
+    card.appendChild(body);
 
     if (post.tags.length || post.causalSignal) {
         const tags = document.createElement('div');
@@ -7109,13 +7070,10 @@ function buildForumPostCard(post, {
     }
     card.appendChild(meta);
 
-    const comments = document.createElement('details');
+    const comments = document.createElement('section');
     comments.className = 'mvuad-forum-comments';
-    comments.open = openComments && post.comments.length > 0;
-    const summary = document.createElement('summary');
-    summary.textContent = post.comments.length
-        ? `查看全部 ${post.comments.length} 条回复`
-        : '暂时没有回复';
+    comments.hidden = true;
+    let hotCommentPreview = null;
     if (post.comments.length) {
         const hotComment = [...post.comments].sort(
             (left, right) => (Number(right.likes) || 0) - (Number(left.likes) || 0),
@@ -7129,13 +7087,9 @@ function buildForumPostCard(post, {
         const byline = document.createElement('small');
         byline.textContent = `— ${hotComment.author}`;
         preview.append(label, body, byline);
-        preview.addEventListener('click', () => {
-            comments.open = true;
-            comments.querySelector('summary')?.focus?.({ preventScroll: true });
-        });
+        hotCommentPreview = preview;
         card.appendChild(preview);
     }
-    comments.appendChild(summary);
     const list = document.createElement('div');
     list.className = 'mvuad-forum-comment-list';
     if (!post.comments.length) {
@@ -7167,7 +7121,30 @@ function buildForumPostCard(post, {
         list.appendChild(row);
     }
     comments.appendChild(list);
+
+    const collapsedToggleLabel = post.comments.length
+        ? `展开 ${post.comments.length} 条评论`
+        : '展开全文';
+    const expandedToggleLabel = post.comments.length
+        ? '收起全文与评论'
+        : '收起全文';
+    const threadToggle = document.createElement('button');
+    threadToggle.className = 'mvuad-forum-thread-toggle';
+    threadToggle.type = 'button';
+    const setThreadExpanded = (expanded) => {
+        const next = !!expanded;
+        card.classList.toggle('is-expanded', next);
+        threadToggle.setAttribute('aria-expanded', String(next));
+        threadToggle.textContent = next ? expandedToggleLabel : collapsedToggleLabel;
+        comments.hidden = !next;
+        if (hotCommentPreview) hotCommentPreview.hidden = next;
+    };
+    threadToggle.addEventListener('click', () => {
+        setThreadExpanded(threadToggle.getAttribute('aria-expanded') !== 'true');
+    });
+    card.appendChild(threadToggle);
     card.appendChild(comments);
+    setThreadExpanded(openComments);
     return card;
 }
 

@@ -95,13 +95,24 @@ At 390×844:
    its panel to cover, but not extend beyond, the same viewport. This must be checked
    in the real SillyTavern root geometry; a mock page without SillyTavern's
    transformed root is not sufficient.
-2. Locate a real `展开全文` button.
-3. Require its bounding box to be at least 42×42.
+2. Require every topic card to expose exactly one
+   `.mvuad-forum-thread-toggle`. A collapsed topic must line-clamp the owner post,
+   keep the reply section `hidden`, and give both the reply section and every reply
+   a zero-size visible rectangle.
+3. Require the whole-thread button's bounding box to be at least 42×42.
 4. Require the forum shell `scrollWidth <= clientWidth`.
-5. Click `展开全文`; require:
-   `aria-expanded=true`, `.is-open`, preview hidden, full body visible.
-6. Click `收起全文`; require the exact inverse.
-7. Capture and visually inspect the viewport. Reject clipped headers, unreadable text,
+5. Click `展开 N 条评论` (or `展开全文` when there are no replies) once. Require all
+   of the following from that same click:
+   `aria-expanded=true`, `.is-expanded`, the complete owner body, every reply,
+   and no separate body/reply expansion control. The owner body's text must exactly
+   match its source value, `overflow` must not clip, line clamp must be disabled,
+   `scrollHeight === clientHeight`, and a DOM `Range` around the final characters
+   must have a non-zero rectangle inside the reachable card. Hide the hot-comment
+   preview while the real reply list is open.
+6. Click `收起全文与评论` (or `收起全文`) and require the exact inverse:
+   `aria-expanded=false`, no `.is-expanded`, owner body clamped, and replies hidden.
+7. Capture and visually inspect both collapsed and expanded states. Reject clipped
+   owner-post endings, missing replies, clipped headers, unreadable text,
    controls outside the shell, button/text overlap, inaccessible refresh/close
    controls, or a layout that loses the mobile information-flow density.
 

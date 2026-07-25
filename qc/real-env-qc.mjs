@@ -90,6 +90,14 @@ function loadAndValidateReport() {
         || forum.expand !== true
         || forum.collapse !== true
         || forum.ariaStateSynchronized !== true
+        || forum.singleWholeThreadControl !== true
+        || forum.opBodyMatchesSource !== true
+        || forum.opFinalTextVisible !== true
+        || forum.opBodyClipped !== false
+        || forum.repliesExpandedTogether !== true
+        || forum.collapsedRepliesHidden !== true
+        || forum.visibleReplyCount !== forum.totalReplyCount
+        || forum.totalReplyCount < 1
     ) fail('real forum interaction evidence is incomplete');
 
     const mobile = report.checks?.mobile;
