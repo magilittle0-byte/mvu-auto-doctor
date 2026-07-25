@@ -34,6 +34,16 @@ const RELATIONS = new Set([
     'converging',
 ]);
 
+const CONVERGENCE_CHANNELS = new Set([
+    'actor',
+    'faction',
+    'location',
+    'resource',
+    'time',
+    'causal',
+    'public_signal',
+]);
+
 const TICK_ACTIONS = new Set([
     'created',
     'advanced',
@@ -229,6 +239,7 @@ function normalizeWorldItemBase(value, fallbackId, turn) {
         knowledge: KNOWLEDGE.has(source.knowledge) ? source.knowledge : 'hidden',
         basis: cleanText(source.basis, 420),
         lastChange: cleanText(source.lastChange, 500),
+        sourceThreads: cleanList(source.sourceThreads, 8),
         updatedTurn: boundedInteger(
             source.updatedTurn,
             0,
@@ -460,7 +471,7 @@ export function normalizeWorldState(value, { turn = 0 } = {}) {
 
 export function emptyContinuityState(chatId = '') {
     return {
-        version: 3,
+        version: 4,
         chatId: cleanText(chatId, 180),
         turn: 0,
         lastTick: {
@@ -513,6 +524,11 @@ function normalizeThread(value, index, turn) {
         .map(normalizeSourceRef)
         .filter(Boolean)
         .slice(-8);
+    const convergenceSource = value.convergence && typeof value.convergence === 'object'
+        ? value.convergence
+        : {};
+    const convergenceChannels = cleanList(convergenceSource.channels, 7)
+        .filter((channel) => CONVERGENCE_CHANNELS.has(channel));
     return {
         id,
         title,
@@ -536,6 +552,19 @@ function normalizeThread(value, index, turn) {
         resolution: cleanText(value.resolution, 700),
         actors: cleanList(value.actors),
         locations: cleanList(value.locations),
+        propagation: cleanList(value.propagation, 12),
+        convergence: {
+            score: boundedInteger(convergenceSource.score, 0, 4, 0),
+            channels: convergenceChannels,
+            evidence: cleanList(convergenceSource.evidence, 8),
+            entryBeat: cleanText(convergenceSource.entryBeat, 500),
+            lastCheckedTurn: boundedInteger(
+                convergenceSource.lastCheckedTurn,
+                0,
+                Number.MAX_SAFE_INTEGER,
+                0,
+            ),
+        },
         knowledge,
         urgency: boundedInteger(value.urgency, 0, 3, 1),
         stageProgress: stage === 'resolved'
@@ -618,7 +647,7 @@ export function normalizeContinuityState(value, {
         ))
         .slice(0, resolvedLimit);
     return {
-        version: 3,
+        version: 4,
         chatId: cleanText(chatId || source.chatId, 180),
         turn,
         lastTick: normalizeTick(source.lastTick, turn),
@@ -1083,6 +1112,80 @@ function enforceWorldPolicy(beforeState, afterState) {
     return after;
 }
 
+function worldItems(value) {
+    const world = value && typeof value === 'object' ? value : emptyWorldState();
+    return [
+        ...(world.trends || []),
+        ...(world.factions || []),
+        ...(world.winds || []),
+        ...(world.environment?.incidents || []),
+        ...(world.shadows?.enemies || []),
+        ...(world.shadows?.secrets || []),
+        ...(world.influences || []),
+    ];
+}
+
+function sanitizeWorldSourceThreads(value, validThreadIds, turn) {
+    const next = clone(value);
+    for (const item of worldItems(next)) {
+        item.sourceThreads = cleanList(item.sourceThreads, 8)
+            .filter((id) => validThreadIds.has(id));
+    }
+    return normalizeWorldState(next, { turn });
+}
+
+function enrichThreadPropagation(thread, world) {
+    const next = clone(thread);
+    const linkedItems = worldItems(world).filter((item) => (
+        Array.isArray(item.sourceThreads)
+        && item.sourceThreads.includes(next.id)
+    ));
+    next.propagation = cleanList([
+        ...(next.propagation || []),
+        ...linkedItems.map((item) => item.id),
+    ], 12);
+    const hasPublicSurface = linkedItems.some((item) => item.knowledge !== 'hidden');
+    if (
+        next.convergence?.channels?.includes('public_signal')
+        && !hasPublicSurface
+    ) {
+        next.convergence.channels = next.convergence.channels
+            .filter((channel) => channel !== 'public_signal');
+        if (!next.convergence.channels.length) {
+            next.convergence.score = Math.min(
+                Number(next.convergence.score) || 0,
+                1,
+            );
+        }
+    }
+    return next;
+}
+
+function threadHasMatureConvergence(thread, world) {
+    const convergence = thread?.convergence || {};
+    const channels = Array.isArray(convergence.channels) ? convergence.channels : [];
+    const evidence = Array.isArray(convergence.evidence) ? convergence.evidence : [];
+    if (
+        Number(convergence.score) < 2
+        || !channels.length
+        || !evidence.length
+        || !String(convergence.entryBeat || '').trim()
+    ) {
+        return false;
+    }
+    if (!channels.includes('public_signal')) return true;
+    const publicRefs = new Set(
+        worldItems(world)
+            .filter((item) => (
+                item.knowledge !== 'hidden'
+                && Array.isArray(item.sourceThreads)
+                && item.sourceThreads.includes(thread.id)
+            ))
+            .map((item) => item.id),
+    );
+    return (thread.propagation || []).some((id) => publicRefs.has(id));
+}
+
 export function enforceContinuityPolicy(previous, candidate, {
     autonomy = 'living',
     allowAutonomous = true,
@@ -1090,8 +1193,40 @@ export function enforceContinuityPolicy(previous, candidate, {
 } = {}) {
     const before = normalizeContinuityState(previous, { maxThreads });
     const after = normalizeContinuityState(candidate, { maxThreads });
+    const validThreadIds = new Set([
+        ...before.threads.map((thread) => thread.id),
+        ...after.threads.map((thread) => thread.id),
+    ]);
+    const policyWorld = sanitizeWorldSourceThreads(
+        enforceWorldPolicy(before, after, { autonomy }),
+        validThreadIds,
+        before.turn + 1,
+    );
     const gateUnmanifestedKnowledge = (baseline, proposed) => {
-        const protectedThread = clone(proposed);
+        const protectedThread = enrichThreadPropagation(proposed, policyWorld);
+        const previousRelation = baseline?.relation || (
+            protectedThread.origin === 'main_derivative'
+                ? 'linked'
+                : protectedThread.origin === 'setting_linked'
+                    ? 'latent'
+                    : 'independent'
+        );
+        const requestedBridge = ['linked', 'converging'].includes(
+            protectedThread.relation,
+        ) && ['independent', 'latent'].includes(previousRelation);
+        const requestedConvergence = protectedThread.relation === 'converging'
+            && previousRelation !== 'converging';
+        if (requestedBridge || requestedConvergence) {
+            const mature = threadHasMatureConvergence(
+                protectedThread,
+                policyWorld,
+            );
+            if (requestedBridge) {
+                protectedThread.relation = mature ? 'converging' : previousRelation;
+            } else if (!mature) {
+                protectedThread.relation = previousRelation;
+            }
+        }
         const mayBePublic = ['linked', 'converging'].includes(protectedThread.relation)
             || ['manifested', 'resolved'].includes(protectedThread.stage);
         if (
@@ -1106,14 +1241,17 @@ export function enforceContinuityPolicy(previous, candidate, {
         return protectedThread;
     };
     const oldById = new Map(before.threads.map((thread) => [thread.id, thread]));
-    const newById = new Map(after.threads.map((thread) => [thread.id, thread]));
+    const newById = new Map(after.threads.map((thread) => {
+        const enriched = enrichThreadPropagation(thread, policyWorld);
+        return [enriched.id, enriched];
+    }));
     const changeLimit = autonomy === 'expansive'
         ? 6
         : autonomy === 'living'
             ? 3
             : 1;
     const requestedTickId = String(after.lastTick?.threadId || '');
-    const changedExisting = after.threads
+    const changedExisting = [...newById.values()]
         .filter((thread) => {
             const old = oldById.get(thread.id);
             return old && stableThreadContent(old) !== stableThreadContent(thread);
@@ -1134,21 +1272,6 @@ export function enforceContinuityPolicy(previous, candidate, {
         proposed.origin = old.origin;
         proposed.createdTurn = old.createdTurn;
         proposed.lastAdvancedTurn = before.turn + 1;
-        if (
-            ['independent', 'latent'].includes(old.relation)
-            && proposed.relation === 'linked'
-        ) {
-            proposed.relation = 'converging';
-        }
-        if (
-            ['independent', 'latent'].includes(proposed.relation)
-            && (
-                proposed.knowledge === 'observed'
-                || proposed.stage === 'manifested'
-            )
-        ) {
-            proposed.relation = 'converging';
-        }
         if (proposed.stage === 'resolved') {
             proposed.resolvedTurn = before.turn + 1;
             proposed.resolution ||= proposed.summary || proposed.offscreenBeat;
@@ -1159,7 +1282,8 @@ export function enforceContinuityPolicy(previous, candidate, {
         return proposed;
     });
 
-    const newCandidates = after.threads.filter((thread) => !oldById.has(thread.id));
+    const newCandidates = [...newById.values()]
+        .filter((thread) => !oldById.has(thread.id));
     const autonomousBefore = before.threads.filter((thread) => (
         thread.origin !== 'main_derivative'
         && thread.stage !== 'resolved'
@@ -1264,7 +1388,7 @@ export function enforceContinuityPolicy(previous, candidate, {
         ...after,
         lastTick,
         threads,
-        world: enforceWorldPolicy(before, after, { autonomy }),
+        world: policyWorld,
     }, { chatId: before.chatId || after.chatId, maxThreads });
 }
 
@@ -1413,6 +1537,15 @@ export function mergeMarkerRecords(state, records, {
             resolution: incoming.resolution || old.resolution,
             actors: incoming.actors.length ? incoming.actors : old.actors,
             locations: incoming.locations.length ? incoming.locations : old.locations,
+            propagation: incoming.propagation.length
+                ? incoming.propagation
+                : old.propagation,
+            convergence: incoming.convergence.score
+                || incoming.convergence.channels.length
+                || incoming.convergence.evidence.length
+                || incoming.convergence.entryBeat
+                ? incoming.convergence
+                : old.convergence,
             knowledge,
             urgency: Math.max(old.urgency, incoming.urgency),
             createdTurn: old.createdTurn,
@@ -1433,15 +1566,19 @@ export function buildContinuityInjection(state, {
     maxVisible = 1,
 } = {}) {
     const normalized = normalizeContinuityState(state, { maxThreads: 12 });
-    const isHiddenBackstage = (thread) => !!thread
-        && thread.knowledge === 'hidden'
-        && ['independent', 'latent'].includes(thread.relation);
-    const active = normalized.threads.filter((thread) => thread.stage !== 'resolved');
+    const canReachMain = (thread) => !!thread
+        && (
+            thread.origin === 'main_derivative'
+            || ['linked', 'converging'].includes(thread.relation)
+        );
+    const active = normalized.threads.filter((thread) => (
+        thread.stage !== 'resolved' && canReachMain(thread)
+    ));
     const aftermath = normalized.threads.filter((thread) => (
         thread.stage === 'resolved'
         && normalized.turn - thread.resolvedTurn <= 6
         && (thread.effects.length || thread.rumors.length)
-        && !isHiddenBackstage(thread)
+        && canReachMain(thread)
     ));
     const visibleWorldRows = [
         ...normalized.world.trends
@@ -1498,7 +1635,9 @@ export function buildContinuityInjection(state, {
     const tickThread = normalized.threads.find(
         (thread) => thread.id === normalized.lastTick.threadId,
     );
-    const tickReason = tickThread && !isHiddenBackstage(tickThread)
+    const tickReason = tickThread
+        && canReachMain(tickThread)
+        && tickThread.knowledge !== 'hidden'
         ? normalized.lastTick.reason || '未登记'
         : '幕后条件变化已记录（细节已折叠）';
     const directorText = director === 'stitches'
@@ -1512,18 +1651,32 @@ export function buildContinuityInjection(state, {
                     : director === 'mixed'
                         ? '预设、缝合怪或世界引擎负责剧情与世界提案；本账本只做去重、接续与回收。'
                         : '当前没有检测到外部剧情推进器；可按账本低频推进世界支线。';
+    const candidateLimit = Math.min(
+        4,
+        Math.max(1, Math.max(0, Number(maxVisible) || 1) * 3),
+    );
     const rows = active
-        .sort((left, right) => right.urgency - left.urgency)
+        .sort((left, right) => (
+            Number(right.relation === 'converging')
+                - Number(left.relation === 'converging')
+            || right.convergence.score - left.convergence.score
+            || right.urgency - left.urgency
+            || right.lastAdvancedTurn - left.lastAdvancedTurn
+        ))
+        .slice(0, candidateLimit)
         .map((thread) => {
-            const hiddenBackstage = isHiddenBackstage(thread);
-            if (hiddenBackstage) {
+            const hiddenConvergence = thread.knowledge === 'hidden'
+                && thread.relation === 'converging';
+            if (hiddenConvergence) {
                 return [
-                    `[${thread.id}] 幕后事件（标题已折叠）`,
+                    `[${thread.id}] 汇流候选（幕后原因保密）`,
                     `阶段=${CONTINUITY_STAGE_LABELS[thread.stage] || thread.stage}`,
                     `来源=${CONTINUITY_ORIGIN_LABELS[thread.origin] || thread.origin}`,
-                    `主线关系=${CONTINUITY_RELATION_LABELS[thread.relation] || thread.relation}`,
                     '认知=hidden',
-                    '调度=按账本条件只在幕后推进；正文仅在真实传播、时空重合或因果汇流成立后显示可观察痕迹',
+                    `汇流强度=${thread.convergence.score}/4`,
+                    `成立依据=${thread.convergence.evidence.join('；')}`,
+                    `可观察入口=${thread.convergence.entryBeat}`,
+                    '调度=只可描写可观察入口，不得揭露幕后标题、真相或不知情角色无法取得的信息',
                 ].join('；');
             }
             return [
@@ -1537,6 +1690,15 @@ export function buildContinuityInjection(state, {
                 `触发=${thread.trigger || '等待自然接口'}`,
                 `下一拍=${thread.nextBeat || '保持，不强推'}`,
                 `汇流条件=${thread.intersection || '无；允许独立发展或在幕后结束'}`,
+                thread.convergence.score
+                    ? `当前汇流=${thread.convergence.score}/4；${thread.convergence.evidence.join('；')}`
+                    : '',
+                thread.convergence.entryBeat
+                    ? `可观察入口=${thread.convergence.entryBeat}`
+                    : '',
+                thread.propagation.length
+                    ? `传播节点=${thread.propagation.join('、')}`
+                    : '',
                 thread.causedBy.length ? `因果父项=${thread.causedBy.join('、')}` : '',
                 thread.effects.length ? `已生效影响=${thread.effects.join('；')}` : '',
                 thread.rumors.length ? `传播中的流言=${thread.rumors.join('；')}` : '',
@@ -1554,18 +1716,18 @@ export function buildContinuityInjection(state, {
         normalized.lastTick.action
             ? `最近世界调度=${CONTINUITY_TICK_LABELS[normalized.lastTick.action] || normalized.lastTick.action}；对象=${normalized.lastTick.threadId || '全局'}；依据=${tickReason}`
             : '最近世界调度=尚未运行。',
-        '以下内容是活世界与事件连续性账本，不是玩家行动授权，也不是要求本回合全部发生。',
-        `本回合最多让${Math.max(0, Number(maxVisible) || 1)}条事件产生可观察变化；已有事件优先，不得另造同义事件。`,
+        '以下只包含已经接入主线或具备真实汇流证据的“小型主线接口”，不是完整后台账本；未列出的复杂支线仍会在幕后独立演化。',
+        `本回合可自然采用0—${Math.max(0, Number(maxVisible) || 1)}条接口；没有合适叙事位置时必须采用0条，禁止为了证明世界引擎存在而生硬插入。`,
         '只可推动NPC、势力、环境、约定与敌方行动；禁止替玩家角色决定、说话、移动、消费资源或追加检定。',
         '外部预设、缝合怪或世界引擎安排的未来桥段都只是条件式导演提案：成功路线只在真实成功后启用，失败路线也必须保留，不得把计划目标当成已发生事实。',
         '裁决与规划必须隔离：先按当前卡/骰子前端规则锁定行动、DC、应消费的唯一骰值与成功等级，再选择匹配的剧情分支。若提供骰池或随机序列，只能按其规定位置/顺序取值，禁止为了配合规划浏览后挑选成功数字；禁止先写结果再补造检定。',
         'hidden信息只能形成符合传播路径的痕迹，不能让不知情角色突然全知。计划、传闻和未来可能性不得写成已经发生的事实。',
-        'relation=independent或latent的事件默认只在后台账本推进，禁止为了展示伏笔而强行写入正文；只有真实传播路径、地点/时间重合或因果后果满足intersection时，才能转为converging并产生可观察痕迹。',
+        'relation=independent或latent的事件默认只在后台账本推进，禁止为了展示伏笔而强行写入正文；只有传播、人物/势力、地点、资源、时间或因果证据通过账本校验并转为converging后，才会出现在这里。',
         '独立事件可以始终不与主线相交，也可以在幕后自行解决；不要把所有世界变化都变成围着玩家转的任务。',
         '已结束事件不是被抹除：其effects与rumors仍是世界事实；若影响仍会自行发展，应沿causedBy建立新的稳定事件，禁止把同一事件无限续命。',
-        '若触发条件尚未满足，保持或低调铺垫；满足时先在正文写出可观察因果，再按原预设/缝合怪格式更新对应事件。',
+        '采用汇流候选时，只写“可观察入口”及其自然后果；入口可以是风声、价格/供给、公告、环境异常、NPC态度或行动，不必让支线人物直接登场。若入口与当前叙事节奏不合，继续不写。',
         visibleWorldRows.length
-            ? '以下为已经可被主回复合理感知或影响当前局势的分类世界快照；没有列出的隐藏条目不得泄露：'
+            ? '以下是已经公开或正在产生客观影响的世界表面，不是逐项播报清单；仅当当前人物、地点、资源或行动实际会接触时才自然体现，没有列出的隐藏条目不得泄露：'
             : '',
         ...visibleWorldRows,
         ...rows,

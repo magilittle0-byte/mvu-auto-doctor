@@ -89,7 +89,7 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], raw: 0, replace: [], prompts: [], toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], raw: 0, replace: [], prompts: [], extensionPrompts: {}, toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let deferredResolve = null;
@@ -152,7 +152,18 @@ const context = {
   updateChatMetadata(patch) { Object.assign(this.chatMetadata, patch); },
   async saveChat() { calls.order.push('saveChat'); calls.saves += 1; },
   updateMessageBlock() {},
-  setExtensionPrompt(name, content) { calls.prompts.push([name, content]); },
+  setExtensionPrompt(name, content, position, depth, scan = false, role = 0) {
+    const stored = {
+      name,
+      content: String(content),
+      position: Number(position),
+      depth: Number(depth),
+      scan: !!scan,
+      role: Number(role),
+    };
+    calls.prompts.push([name, content, position, depth, scan, role]);
+    calls.extensionPrompts[name] = stored;
+  },
   eventTypes: {
     GENERATION_STARTED: 'generation_started',
     MESSAGE_RECEIVED: 'message_received',
@@ -673,7 +684,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.12');
+    assert.equal(continuity.version, '1.8.13');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -695,6 +706,14 @@ try {
     assert.equal(continuity.state.world.factions[0].id, 'FAC-01');
     assert.equal(continuity.state.world.winds[0].id, 'WIND-01');
     assert.equal(continuity.state.world.shadows.secrets[0].knowledge, 'hidden');
+    assert.match(continuity.calls.continuitySystem, /按需要建立0或1条自主事件/u);
+    assert.match(
+        continuity.calls.continuitySystem,
+        /intersection不是创建时写完就永久不变的备注/u,
+    );
+    assert.match(continuity.calls.continuitySystem, /事件→世界表面→汇流候选/u);
+    assert.match(continuity.calls.continuityUser, /"convergence": \{"score": 0/u);
+    assert.match(continuity.calls.continuityUser, /"sourceThreads": \["来源事件ID"\]/u);
     assert.equal(continuity.forumState.posts.length, 4);
     assert.equal(
         continuity.forumState.posts.reduce((sum, post) => sum + post.comments.length, 0),
@@ -713,10 +732,14 @@ try {
     assert.match(continuity.calls.forumSystem, /不可信引用数据/u);
     const diagnosticsUi = await page.evaluate(async () => {
         const t = window.__TEST__;
-        const injection = t.calls.prompts.at(-1)?.[1] || '';
+        const injection = Object.values(t.calls.extensionPrompts)
+            .find((entry) => entry.name === 'mvu-auto-doctor-continuity');
+        const assembledChat = injection?.role === 0 && injection.content
+            ? [{ role: 'system', content: injection.content }]
+            : [];
         await t.context.eventSource.emit('chat_completion_prompt_ready', {
             dryRun: false,
-            chat: [{ role: 'system', content: injection }],
+            chat: assembledChat,
         });
         await new Promise((resolve) => setTimeout(resolve, 850));
         return {
@@ -728,6 +751,7 @@ try {
             savedModelCalls: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.modelCallStats || {},
             ),
+            hostPrompt: structuredClone(injection || null),
             injection: window.MvuAutoDoctorAPI.getInjectionInspection(),
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
@@ -746,6 +770,11 @@ try {
         other: 0,
     });
     assert.equal(diagnosticsUi.savedModelCalls.total, 3, '模型调用统计必须按聊天持久化');
+    assert.equal(
+        diagnosticsUi.hostPrompt.role,
+        0,
+        'SillyTavern setExtensionPrompt 必须使用数值 SYSTEM=0；字符串system会变成NaN并被最终提示词过滤',
+    );
     assert.equal(diagnosticsUi.modelCalls.currentRun.total, 3, '本次生成统计应与聊天累计分开保存');
     assert.deepEqual(diagnosticsUi.modelCalls.currentRun.byTask, {
         variable: 1,
@@ -872,6 +901,11 @@ try {
         await page.locator('#mvuad-floating-panel .mvuad-world-category[data-world-category="factions"]').textContent(),
         /港区运输联合体/u,
     );
+    assert.match(
+        await page.locator('#mvuad-floating-panel .mvuad-world-category[data-world-category="factions"]').textContent(),
+        /来源事件未绑定事件账本/u,
+        '分类世界条目必须显示与事件账本的因果绑定状态',
+    );
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="threads"]');
     assert.equal(
         await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
@@ -881,6 +915,13 @@ try {
         await page.locator('#mvuad-floating-panel .mvuad-thread-progress').textContent(),
         /\/9/u,
     );
+    const threadPanelText = await page.locator(
+        '#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]',
+    ).textContent();
+    assert.match(threadPanelText, /交联成熟度0\/4/u);
+    assert.match(threadPanelText, /交联通道尚无可核验交联/u);
+    assert.match(threadPanelText, /当前可观察入口当前不应进入正文/u);
+    assert.match(threadPanelText, /传播节点尚未形成世界表面/u);
     if (process.env.MVUAD_FLOATING_THREADS_SCREENSHOT) {
         await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_THREADS_SCREENSHOT });
     }
@@ -1322,7 +1363,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.12');
+    assert.equal(lifecycle.version, '1.8.13');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

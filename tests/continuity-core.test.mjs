@@ -150,7 +150,7 @@ const injection = buildContinuityInjection(state, {
     maxVisible: 1,
 });
 assert.match(injection, /预设、缝合怪或世界引擎负责剧情与世界提案/u);
-assert.match(injection, /最多让1条事件/u);
+assert.match(injection, /可自然采用0—1条接口/u);
 assert.match(injection, /禁止替玩家角色决定/u);
 assert.match(injection, /PE-港口-哨兵-01/u);
 assert.match(injection, /禁止为了展示伏笔而强行写入正文/u);
@@ -175,8 +175,11 @@ const livingBase = normalizeContinuityState({
     }],
 }, { maxThreads: 8 });
 const hiddenBackstageInjection = buildContinuityInjection(livingBase);
-assert.match(hiddenBackstageInjection, /WE-旧城-药房-01/u);
-assert.doesNotMatch(hiddenBackstageInjection, /旧城药房的断供|库存只能支撑三天|向邻城商队发出询价/u);
+assert.equal(
+    hiddenBackstageInjection,
+    '',
+    '没有公共影响或成熟汇流证据的后台支线不得进入主回复提示词',
+);
 const hiddenTickState = structuredClone(livingBase);
 hiddenTickState.lastTick = {
     turn: 6,
@@ -185,16 +188,18 @@ hiddenTickState.lastTick = {
     reason: '秘密依据：药房地下室只剩一箱禁药，店主准备深夜灭口',
 };
 const hiddenTickInjection = buildContinuityInjection(hiddenTickState);
-assert.match(hiddenTickInjection, /幕后条件变化已记录（细节已折叠）/u);
-assert.doesNotMatch(
+assert.equal(
     hiddenTickInjection,
-    /秘密依据|地下室|禁药|深夜灭口/u,
-    'hidden independent/latent 的 lastTick.reason 不得绕过正文注入折叠',
+    '',
+    '后台调度理由也不得让独立隐藏支线绕过主线接口',
 );
 const rumoredLivingBase = structuredClone(livingBase);
 rumoredLivingBase.threads[0].knowledge = 'rumor';
-assert.match(buildContinuityInjection(rumoredLivingBase), /库存只能支撑三天/u);
-assert.match(buildContinuityInjection(rumoredLivingBase), /旧城药房的断供/u);
+assert.equal(
+    buildContinuityInjection(rumoredLivingBase),
+    '',
+    '线程自称rumor但没有可追溯世界传播节点时仍不得注入',
+);
 
 const livingProposal = normalizeContinuityState({
     chatId: 'living-chat',
@@ -258,7 +263,137 @@ const convergenceGuard = enforceContinuityPolicy(livingBase, prematureLink, {
     allowAutonomous: true,
     maxThreads: 8,
 });
-assert.equal(convergenceGuard.threads[0].relation, 'converging', '独立事件必须先进入汇流阶段');
+assert.equal(
+    convergenceGuard.threads[0].relation,
+    'independent',
+    '独立事件没有评分、证据和可观察入口时不得仅凭模型声明接入主线',
+);
+assert.equal(convergenceGuard.threads[0].knowledge, 'hidden');
+
+const forgedPropagationProposal = structuredClone(livingBase);
+forgedPropagationProposal.threads[0].relation = 'converging';
+forgedPropagationProposal.threads[0].convergence = {
+    score: 3,
+    channels: ['public_signal'],
+    evidence: ['模型声称有一条公共消息'],
+    entryBeat: '市场出现涨价。',
+    lastCheckedTurn: 7,
+};
+forgedPropagationProposal.world.winds = [{
+    id: 'WIND-FORGED',
+    topic: '无法追溯的消息',
+    type: 'rumor',
+    content: '来源事件并不存在',
+    source: '未知来源',
+    sourceThreads: ['NOT-A-REAL-THREAD'],
+    knowledge: 'rumor',
+    basis: '模型声称存在',
+}];
+const forgedPropagation = enforceContinuityPolicy(
+    livingBase,
+    forgedPropagationProposal,
+    {
+        autonomy: 'living',
+        allowAutonomous: true,
+        maxThreads: 8,
+    },
+);
+assert.equal(forgedPropagation.threads[0].relation, 'independent');
+assert.deepEqual(forgedPropagation.world.winds[0].sourceThreads, []);
+assert.deepEqual(
+    forgedPropagation.threads[0].convergence.channels,
+    [],
+    '没有真实世界表面的公共信号通道必须被本地剔除',
+);
+assert.equal(forgedPropagation.threads[0].convergence.score, 1);
+
+const mainDerivativeBase = normalizeContinuityState({
+    chatId: 'main-derivative-chat',
+    turn: 4,
+    threads: [],
+}, { maxThreads: 8 });
+const mainDerivativeProposal = normalizeContinuityState({
+    chatId: 'main-derivative-chat',
+    turn: 5,
+    threads: [{
+        id: 'EVT-STREET-01',
+        title: '街角的异常观察',
+        origin: 'main_derivative',
+        relation: 'converging',
+        stage: 'advancing',
+        summary: '可疑人物正在观察当前街角。',
+        seedBasis: '正文已观察到该人物的戒备姿态。',
+        convergence: {
+            score: 3,
+            channels: ['actor', 'public_signal'],
+            evidence: ['当前正文直接观察到同一人物'],
+            entryBeat: '该人物继续用余光留意玩家。',
+            lastCheckedTurn: 5,
+        },
+        knowledge: 'observed',
+    }],
+}, { maxThreads: 8 });
+const sanitizedMainDerivative = enforceContinuityPolicy(
+    mainDerivativeBase,
+    mainDerivativeProposal,
+    {
+        autonomy: 'living',
+        allowAutonomous: true,
+        maxThreads: 8,
+    },
+);
+assert.equal(sanitizedMainDerivative.threads[0].relation, 'converging');
+assert.deepEqual(
+    sanitizedMainDerivative.threads[0].convergence.channels,
+    ['actor'],
+    '主线衍生事件可凭真实人物交联汇流，但不得虚报尚未形成的公共信号',
+);
+assert.deepEqual(sanitizedMainDerivative.threads[0].propagation, []);
+
+const matureConvergenceProposal = structuredClone(livingBase);
+matureConvergenceProposal.threads[0].relation = 'converging';
+matureConvergenceProposal.threads[0].convergence = {
+    score: 3,
+    channels: ['resource', 'public_signal'],
+    evidence: [
+        '当前MVU任务需要医疗物资',
+        'WIND-01已经覆盖玩家所在商队圈',
+    ],
+    entryBeat: '玩家询价时发现常用药材报价上涨，商人提到旧城供货延迟。',
+    lastCheckedTurn: 7,
+};
+matureConvergenceProposal.world.winds = [{
+    id: 'WIND-01',
+    topic: '旧城药材延迟',
+    type: 'report',
+    strength: 2,
+    content: '旧城常用药材到货普遍延迟',
+    source: '药材商→行商圈',
+    scope: '当前商队圈',
+    sourceThreads: ['WE-旧城-药房-01'],
+    knowledge: 'rumor',
+    basis: '三家药材商已经调整交货时间',
+}];
+const matureConvergence = enforceContinuityPolicy(
+    livingBase,
+    matureConvergenceProposal,
+    {
+        autonomy: 'living',
+        allowAutonomous: true,
+        maxThreads: 8,
+    },
+);
+assert.equal(matureConvergence.threads[0].relation, 'converging');
+assert.deepEqual(matureConvergence.threads[0].propagation, ['WIND-01']);
+const matureInjection = buildContinuityInjection(matureConvergence);
+assert.match(matureInjection, /可自然采用0—1条接口/u);
+assert.match(matureInjection, /常用药材报价上涨/u);
+assert.match(matureInjection, /旧城药材延迟/u);
+assert.doesNotMatch(
+    matureInjection,
+    /旧城药房的断供|库存只能支撑三天|向邻城商队发出询价/u,
+    '隐藏支线汇流时只能注入可观察入口与公开表面，不得泄露幕后真相',
+);
 
 const hallucinatedRumor = structuredClone(livingBase);
 hallucinatedRumor.threads[0].summary = '药房仍在私下寻找货源。';
@@ -458,7 +593,18 @@ assert.doesNotMatch(
     '未显现的 latent 已收束事件及其后果不得注入正文',
 );
 const publicResolved = structuredClone(resolvedAccepted);
-publicResolved.threads.find((thread) => thread.id === 'WE-行会-议价-01').knowledge = 'observed';
+const publicResolvedParent = publicResolved.threads.find(
+    (thread) => thread.id === 'WE-行会-议价-01',
+);
+publicResolvedParent.knowledge = 'observed';
+publicResolvedParent.relation = 'converging';
+publicResolvedParent.convergence = {
+    score: 4,
+    channels: ['causal', 'public_signal'],
+    evidence: ['新费率公告已经进入当前商队的报价单'],
+    entryBeat: '当前药材报价单已经采用行会的新费率。',
+    lastCheckedTurn: 5,
+};
 const publicAftermathInjection = buildContinuityInjection(publicResolved);
 assert.match(publicAftermathInjection, /持续影响=旧城药材运输成本下降/u);
 assert.match(publicAftermathInjection, /仍在传播=商队流传行会高层发生了权力交换/u);

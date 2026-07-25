@@ -66,7 +66,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.12';
+const VERSION = '1.8.13';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -2483,12 +2483,15 @@ function continuityAnchorState(mvuData) {
     const flat = flattenStateForPrompt(stat, 2500).paths;
     const anchors = Object.fromEntries(
         Object.entries(flat)
-            .filter(([pathValue]) => /时间|日期|天数|时刻|地点|位置|区域|场景|世界|位面|time|date|day|location|place|scene|world/iu.test(pathValue))
-            .slice(0, 80),
+            .filter(([pathValue]) => (
+                /时间|日期|天数|时刻|地点|位置|区域|场景|世界|位面|角色|人物|同伴|队伍|势力|组织|阵营|任务|目标|资源|物品|装备|货币|库存|time|date|day|location|place|scene|world|actor|character|npc|party|faction|organization|quest|task|resource|item|equipment|inventory/iu
+                    .test(pathValue)
+            ))
+            .slice(0, 140),
     );
     return Object.keys(anchors).length
         ? safeJson(anchors)
-        : '当前 MVU 没有可通用识别的时间/地点字段；以最近正文为准，不得猜造精确日期。';
+        : '当前 MVU 没有可通用识别的时间、地点、人物、势力、任务或资源锚点；以最近正文为准，不得猜造交集。';
 }
 
 function stateForPrompt(stat) {
@@ -5106,7 +5109,7 @@ function registerContinuityInjection(content) {
                 IN_CHAT_POSITION,
                 IN_CHAT_DEPTH,
                 false,
-                'system',
+                0,
             );
             lastRegisteredContinuityContent = registeredContent;
             return true;
@@ -5258,6 +5261,8 @@ function preserveMissingThreadClockFields(previous, next, rawThreads) {
         'stalled',
         'outcome',
         'lastAdvancedTurn',
+        'propagation',
+        'convergence',
     ];
     next.threads = (next.threads || []).map((thread) => {
         const old = oldById.get(thread.id);
@@ -5345,13 +5350,13 @@ function buildContinuityMessages({
             || base.turn - latestAutonomousCreation >= cadence
         );
     const autonomousSlotDirective = autonomousSlotReady
-        ? '本轮自主事件创建槽=到期：若本轮没有更明确的正文衍生事件，必须从取材池建立恰好1条setting_linked、setting_independent或ambient事件；它可以完全与主线无关、保持hidden并在幕后自行结束。不得返回空账本。'
+        ? '本轮自主事件创建槽=可用：可从取材池建立0或1条setting_linked、setting_independent或ambient事件。只有出现与旧事件不同、具备人物/组织、资源、地点、目标与可持续因果的真实世界过程时才新建；没有足够依据就建0条，优先推进、休眠、合并或收束旧事件。'
         : `本轮自主事件创建槽=未到期或已满（当前未结自主事件${autonomousThreads.length}/${autonomousLimit}）；优先推进、休眠或收束旧事件，不为凑数新建。`;
     const autonomyRule = settings.continuityAutonomy === 'conservative'
         ? '保守：只能登记正文/预设/缝合怪已经提出的未决因果，不得新建世界自主事件。'
         : settings.continuityAutonomy === 'expansive'
-            ? '活跃：允许每轮从世界设定建立1条自主事件，未结自主事件最多12条；每轮可让同一因果簇内最多6条旧事件发生实质变化。'
-            : '活世界：允许每轮从世界设定建立1条自主事件，未结自主事件最多8条；每轮可让同一因果簇内最多3条旧事件发生实质变化。';
+            ? '活跃：允许每轮从世界设定按需要建立0或1条自主事件，未结自主事件最多12条；每轮可让同一因果簇内最多6条旧事件发生实质变化。'
+            : '活世界：允许每轮从世界设定按需要建立0或1条自主事件，未结自主事件最多8条；每轮可让同一因果簇内最多3条旧事件发生实质变化。';
     const system = [
         '你是一个通用的跑团“活世界事件与状态”记账与调度引擎。你不写主回复，只维护结构化事件账本与分类世界快照。',
         '你必须服从当前角色卡与已发生正文，不得套用别的角色卡设定。',
@@ -5373,7 +5378,12 @@ function buildContinuityMessages({
         '- 论坛信号不是事实数据库：普通帖子永远留在论坛；只有帖子已经促成可持续的外部行动、传播、短缺、聚集或人物决定时，才能以帖子ID为seedBasis登记后继事件。网友猜测仍只能作为rumor，禁止倒推成真相。',
         '- 暂时没有自然推进条件的单条事件可标记dormant；不能因为一条休眠就让整个世界停止，仍应调度其他事件或按自主度产生世界脉动。',
         '- 独立事件可以永远不与主线相交，也可以在幕后自行解决。禁止把所有世界变化都改造成围着玩家转的任务。',
-        '- 只有真实的传播链、因果后果、人物接触、地点重合或时间窗口满足intersection时，relation才可从independent/latent变为converging，再由主回复决定是否形成可观察痕迹。禁止巧合传送和强行汇流。',
+        '- intersection不是创建时写完就永久不变的备注。每轮先用“当前MVU锚点+最近剧情”重新扫描全部未结事件，再评估人物、势力、地点、资源、时间、因果和公共信号七类交联通道；主线锚点改变时，旧的“无交集”必须重算。',
+        '- convergence.score取0—4：0=无交集，1=只有模糊相似，2=存在一条可核验的直接交联，3=多条交联或影响已经抵达当前局势，4=正文已经实际接触。channels只能使用actor/faction/location/resource/time/causal/public_signal；evidence逐条引用当前正文、MVU锚点、稳定事件ID或世界表面ID，不能写抽象巧合。',
+        '- 只有score>=2、channels与evidence非空且entryBeat写明“当前视角可观察到的入口”时，relation才可从independent/latent变为converging。若使用public_signal通道，必须在world中建立或更新带sourceThreads的非hidden风声/影响/环境等传播节点。禁止巧合传送和强行汇流。',
+        '- converging不等于强制进正文：它只是给下一轮主回复一个成熟候选。entryBeat应优先写价格/供给、公告、风声、环境异常、NPC态度或行动等自然表面，不要求支线人物直接登场；主回复可采用0条。',
+        '- 当正文后来真实观察或参与该支线时，下一次调度再把score记为4并转为linked；若交联窗口消失，可把score降低并退回原有latent/independent关系，不得让“曾经可能”永久黏在主线。',
+        '- 事件每次实质推进、失败、结束或派生后，检查是否产生新的传播节点或跨类别后果。world条目的sourceThreads必须列出来源事件稳定ID；线程的propagation由本地根据这些ID反向登记，形成“事件→世界表面→汇流候选”的可追溯链。',
         '',
         '【事件来源分类 origin】',
         '- main_derivative：直接由已发生正文衍生。',
@@ -5391,12 +5401,12 @@ function buildContinuityMessages({
         '【分类世界快照：按固定因果顺序检查】',
         '1. 私密性最先：无目击、未留痕迹的行为只能进入world.shadows.secrets；不得因此生成风声、声誉或让不知情NPC行动。',
         '2. 检查world.trends中的长期趋势是否仍在约束局势；普通事件、短期热议和单次公告不算长期趋势。',
-        '3. 判断是否形成新的公开信息主题world.winds；同一主题沿用稳定ID，不得因措辞或细节变化重复建条目。',
-        '4. 只有出现新的合法传播节点，winds才可扩大strength或scope；必须写清source传播链。',
+        '3. 判断是否形成新的公开信息主题world.winds；同一主题沿用稳定ID，不得因措辞或细节变化重复建条目。凡由账本事件造成的world条目必须在sourceThreads列出来源事件ID。',
+        '4. 只有出现新的合法传播节点，winds才可扩大strength或scope；必须写清source传播链与sourceThreads。没有传播节点时，事件仍可继续hidden推进。',
         '5. 只有风声实际覆盖对应组织、地区或圈层，才能联动factions、reputation、environment或shadows.enemies。',
         '6. 跨类别变化必须写入world.influences，说明trigger → impact → fallout；禁止从面板全知信息直接跳到NPC行动。',
         '7. 经济只在有可追溯事件或市场信号时变化；单一商品的小波动通常不足以改变整体经济气候。',
-        '8. 不为凑数量更新任何类别。world只返回本轮有实质变化的字段；未返回的旧条目由本地保留。',
+        '8. 不为凑数量更新任何类别。world只返回本轮有实质变化的字段；未返回的旧条目由本地保留。普通后台进度可以不生成任何world表面。',
         '',
         '【世界分类枚举（中性、跨世界观）】',
         '- faction.relation: bonded / allied / friendly / neutral / distant / hostile / irreconcilable',
@@ -5436,7 +5446,7 @@ function buildContinuityMessages({
         '=== 内置论坛的公共信号（普通水帖已过滤，仍不等于事实）===',
         forumSignals.length ? safeJson(forumSignals) : '无达到事件候选门槛的论坛信号。',
         '',
-        '=== 当前MVU时间/地点等锚点（只读）===',
+        '=== 当前MVU主线锚点（时间/地点/人物/势力/任务/资源，只读）===',
         stateAnchors,
         '',
         `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
@@ -5465,7 +5475,9 @@ function buildContinuityMessages({
         '    "stage": "seeded", "stageProgress": 3, "evolveResult": "hold", "stalled": false, "outcome": "",',
         '    "summary": "目前已成立的事实", "offscreenBeat": "本轮幕后实际变化或空字符串",',
         '    "nextBeat": "下次自然推进的一拍", "trigger": "事件自身的可验证推进条件",',
-        '    "intersection": "与主线自然汇流的条件；可写无，不强求相交",',
+        '    "intersection": "本轮重算后的汇流条件；无交集可明确写无",',
+        '    "convergence": {"score": 0, "channels": [], "evidence": [], "entryBeat": "", "lastCheckedTurn": 1},',
+        '    "propagation": ["由本地按world.sourceThreads反向补齐的世界表面ID；模型可省略"],',
         '    "seedBasis": "引用的角色卡/世界书设定依据",',
         '    "causedBy": ["因果父事件ID"], "effects": ["已经成立且会持续的后果"],',
         '    "rumors": ["有来源与传播范围的流言"], "resolution": "结束方式；未结束留空",',
@@ -5474,13 +5486,13 @@ function buildContinuityMessages({
         '  }],',
         '  "world": {',
         '    "digest": "只概括本轮真正变化；没有变化可省略",',
-        '    "trends": [{"id": null, "name": "长期趋势", "status": "active", "summary": "持续约束", "scope": "范围", "source": "明确来源", "knowledge": "observed", "basis": "设定或已发生事实"}],',
-        '    "factions": [{"id": "FAC-01", "name": "组织", "relation": "neutral", "condition": "stable", "goal": "当前目标", "summary": "实质变化", "pillars": [], "scope": "范围", "knowledge": "observed", "basis": "依据", "lastChange": "本轮变化"}],',
-        '    "winds": [{"id": null, "topic": "信息主题", "type": "report", "strength": 1, "content": "传播中的说法", "source": "来源→传播节点", "scope": "已覆盖范围", "knowledge": "rumor", "basis": "本轮公开事实"}],',
+        '    "trends": [{"id": null, "name": "长期趋势", "status": "active", "summary": "持续约束", "scope": "范围", "source": "明确来源", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "设定或已发生事实"}],',
+        '    "factions": [{"id": "FAC-01", "name": "组织", "relation": "neutral", "condition": "stable", "goal": "当前目标", "summary": "实质变化", "pillars": [], "scope": "范围", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "依据", "lastChange": "本轮变化"}],',
+        '    "winds": [{"id": null, "topic": "信息主题", "type": "report", "strength": 1, "content": "传播中的说法", "source": "来源→传播节点", "scope": "已覆盖范围", "sourceThreads": ["来源事件ID"], "knowledge": "rumor", "basis": "本轮公开事实"}],',
         '    "reputation": {"public": {"level": 1, "summary": "圈层总体评价变化", "basis": "已覆盖该圈层的风声ID"}},',
         '    "environment": {"economy": "stable", "summary": "已发生的环境或市场变化", "basis": "事件/风声依据", "incidents": []},',
         '    "shadows": {"enemies": [], "secrets": []},',
-        '    "influences": [{"id": null, "trigger": "风声或事件ID", "impact": "已造成的跨类别影响", "fallout": "仍可能延续的余波", "knowledge": "observed", "basis": "因果依据"}]',
+        '    "influences": [{"id": null, "trigger": "风声或事件ID", "impact": "已造成的跨类别影响", "fallout": "仍可能延续的余波", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "因果依据"}]',
         '  }',
         '}',
         jsonOnly ? '' : '</ContinuityState>',
@@ -6420,6 +6432,16 @@ function appendLedgerGroup(host, title, fields, { open = false } = {}) {
     host.appendChild(group);
 }
 
+const CONVERGENCE_CHANNEL_LABELS = Object.freeze({
+    actor: '人物',
+    faction: '势力',
+    location: '地点',
+    resource: '资源',
+    time: '时间',
+    causal: '因果',
+    public_signal: '公共信号',
+});
+
 function buildLedgerThreadCard(thread, {
     open = false,
     concealSpoiler = false,
@@ -6501,10 +6523,41 @@ function buildLedgerThreadCard(thread, {
     appendLedgerGroup(body, '因果', [
         { label: '事件来源', value: thread.originLabel, showEmpty: true },
         { label: '与主线关系', value: thread.relationLabel, showEmpty: true },
+        {
+            label: '交联成熟度',
+            value: `${Number(thread.convergence?.score || 0)}/4`,
+            showEmpty: true,
+        },
+        {
+            label: '交联通道',
+            value: thread.convergence?.channels
+                ?.map((channel) => CONVERGENCE_CHANNEL_LABELS[channel] || channel)
+                .join('、'),
+            showEmpty: true,
+            emptyText: '尚无可核验交联',
+        },
+        {
+            label: '交联证据',
+            value: thread.convergence?.evidence?.join('；'),
+            showEmpty: true,
+            emptyText: '尚无直接证据',
+        },
+        {
+            label: '当前可观察入口',
+            value: thread.convergence?.entryBeat,
+            showEmpty: true,
+            emptyText: '当前不应进入正文',
+        },
         { label: '设定依据', value: thread.seedBasis },
         { label: '因果父事件', value: thread.causedBy?.join('、') },
         { label: '事件推进条件', value: thread.trigger },
         { label: '与主线汇流条件', value: thread.intersection },
+        {
+            label: '传播节点',
+            value: thread.propagation?.join('、'),
+            showEmpty: true,
+            emptyText: '尚未形成世界表面',
+        },
         { label: '涉及人物/势力', value: thread.actors?.join('、') },
         { label: '涉及地点', value: thread.locations?.join('、') },
     ]);
@@ -6619,6 +6672,13 @@ function buildWorldItemCard({
     return details;
 }
 
+function worldFieldsWithSources(item, fields = []) {
+    return [
+        ...fields,
+        ['来源事件', item?.sourceThreads?.join('、'), '未绑定事件账本'],
+    ];
+}
+
 function renderWorldOverview(view, settings) {
     if (!ui?.floatingWorldCategories?.length) return;
     if (ui.floatingWorldDigest) {
@@ -6641,11 +6701,11 @@ function renderWorldOverview(view, settings) {
             title: item.name,
             meta: item.status === 'resolved' ? '已结束' : (item.scope || '长期趋势'),
             summary: item.summary,
-            fields: [
+            fields: worldFieldsWithSources(item, [
                 ['影响范围', item.scope],
                 ['形成来源', item.source],
                 ['登记依据', item.basis],
-            ],
+            ]),
             conceal: conceal(item),
             concealedTitle: '隐藏长期趋势（点击查看）',
         })),
@@ -6653,13 +6713,13 @@ function renderWorldOverview(view, settings) {
             title: item.name,
             meta: `${WORLD_FACTION_RELATION_LABELS[item.relation] || item.relation} · ${WORLD_FACTION_CONDITION_LABELS[item.condition] || item.condition}`,
             summary: item.summary || item.lastChange || item.goal,
-            fields: [
+            fields: worldFieldsWithSources(item, [
                 ['当前目标', item.goal],
                 ['影响范围', item.scope],
                 ['能力支柱', item.pillars?.join('、'), '尚未登记'],
                 ['最近变化', item.lastChange],
                 ['登记依据', item.basis],
-            ],
+            ]),
             conceal: conceal(item),
             concealedTitle: '隐藏势力状态（点击查看）',
         })),
@@ -6668,11 +6728,11 @@ function renderWorldOverview(view, settings) {
                 title: item.topic,
                 meta: `${WORLD_WIND_TYPE_LABELS[item.type] || item.type} · ${item.strength}级${item.scope ? ` · ${item.scope}` : ''}`,
                 summary: item.content,
-                fields: [
+                fields: worldFieldsWithSources(item, [
                     ['传播来源', item.source],
                     ['登记依据', item.basis],
                     ['沉寂轮次', item.quietTurns ? String(item.quietTurns) : '本轮仍有传播'],
-                ],
+                ]),
                 conceal: conceal(item),
                 concealedTitle: '尚未传到角色圈层的风声（点击查看）',
             })),
@@ -6708,10 +6768,10 @@ function renderWorldOverview(view, settings) {
                     ? `持续中${item.remainingTurns ? ` · 约 ${item.remainingTurns} 轮` : ''}`
                     : item.status === 'cooldown' ? '冷却中' : '已结束',
                 summary: item.summary || item.lastChange,
-                fields: [
+                fields: worldFieldsWithSources(item, [
                     ['影响范围', item.scope],
                     ['登记依据', item.basis],
-                ],
+                ]),
                 conceal: conceal(item),
                 concealedTitle: '隐藏环境事件（点击查看）',
             })),
@@ -6721,10 +6781,10 @@ function renderWorldOverview(view, settings) {
                 title: item.name,
                 meta: WORLD_ENEMY_STATUS_LABELS[item.status] || item.status,
                 summary: item.summary || item.lastChange,
-                fields: [
+                fields: worldFieldsWithSources(item, [
                     ['行动动机', item.motive],
                     ['登记依据', item.basis],
-                ],
+                ]),
                 conceal: conceal(item),
                 concealedTitle: '隐藏敌方动向（点击查看）',
             })),
@@ -6732,10 +6792,10 @@ function renderWorldOverview(view, settings) {
                 title: item.title,
                 meta: `${WORLD_SECRET_STATUS_LABELS[item.status] || item.status} · 暴露 ${item.exposure}/4`,
                 summary: item.summary || item.lastChange,
-                fields: [
+                fields: worldFieldsWithSources(item, [
                     ['知情者', item.holders?.join('、'), '无人或未登记'],
                     ['登记依据', item.basis],
-                ],
+                ]),
                 conceal: conceal(item),
                 concealedTitle: '隐藏行为或资产（点击查看）',
             })),
@@ -6744,10 +6804,10 @@ function renderWorldOverview(view, settings) {
             title: item.trigger,
             meta: item.expiresTurn ? `保留至第 ${item.expiresTurn} 轮` : '因果联动',
             summary: item.impact,
-            fields: [
+            fields: worldFieldsWithSources(item, [
                 ['后续余波', item.fallout],
                 ['因果依据', item.basis],
-            ],
+            ]),
             conceal: conceal(item),
             concealedTitle: '隐藏因果联动（点击查看）',
         })),
