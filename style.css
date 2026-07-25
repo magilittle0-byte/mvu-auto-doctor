@@ -581,7 +581,13 @@
 
 /* ===== 游玩时悬浮入口 ===== */
 #mvuad-floating-orb {
-    position: fixed;
+    /*
+     * SillyTavern transforms the root element while keeping <body> fixed to the
+     * viewport. Fixed descendants are then laid out against the transformed
+     * root's zero-height containing block. Anchor overlays to the fixed body
+     * instead so their real pointer targets stay inside the viewport.
+     */
+    position: absolute;
     z-index: 100020;
     width: 50px;
     height: 50px;
@@ -692,7 +698,7 @@
 }
 
 #mvuad-floating-panel {
-    position: fixed;
+    position: absolute;
     z-index: 100019;
     right: 12px;
     bottom: 74px;
@@ -1219,7 +1225,7 @@
 
 /* ===== 独立世界论坛 ===== */
 #mvuad-forum-panel {
-    position: fixed;
+    position: absolute;
     z-index: 100040;
     inset: 0;
     display: grid;
@@ -1704,24 +1710,26 @@
     line-height: 1.58;
 }
 
-.mvuad-forum-body-details > summary {
+.mvuad-forum-body-details {
     display: grid;
     gap: 6px;
-    list-style: none;
-    cursor: pointer;
 }
 
-.mvuad-forum-body-details > summary::-webkit-details-marker { display: none; }
-
-.mvuad-forum-body-details > summary::after {
+.mvuad-forum-body-toggle {
+    width: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
     justify-self: start;
+    border: 0;
+    background: transparent;
     color: var(--mvuad-accent-text);
-    content: '展开全文';
+    cursor: pointer;
+    font: inherit;
     font-size: 0.76em;
     opacity: 0.84;
+    text-align: left;
 }
-
-.mvuad-forum-body-details[open] > summary::after { content: '收起全文'; }
 
 .mvuad-forum-post-preview {
     display: -webkit-box;
@@ -1730,7 +1738,9 @@
     -webkit-line-clamp: 5;
 }
 
-.mvuad-forum-body-details[open] .mvuad-forum-post-preview { display: none; }
+.mvuad-forum-body-details.is-open .mvuad-forum-post-preview,
+.mvuad-forum-post-preview[hidden],
+.mvuad-forum-post-full[hidden] { display: none !important; }
 .mvuad-forum-post-full { padding-top: 4px; }
 
 .mvuad-forum-tags {
@@ -1975,6 +1985,7 @@
 .mvuad-forum-board-head {
     flex: 0 0 auto;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 7px;
     padding: 12px 15px 10px;
     border-bottom: 1px solid color-mix(in srgb, var(--mvuad-forum-border) 48%, transparent);
@@ -1985,6 +1996,7 @@
 
 .mvuad-forum-board-head > div:first-child {
     display: grid;
+    min-width: 0;
     gap: 2px;
 }
 
@@ -2150,9 +2162,9 @@
     -webkit-line-clamp: 2;
 }
 
-.mvuad-forum-body-details > summary { gap: 2px; min-height: 0; }
+.mvuad-forum-body-details { gap: 2px; }
 
-.mvuad-forum-body-details > summary::after {
+.mvuad-forum-body-toggle {
     justify-self: end;
     margin-top: -2px;
     font-size: 10px;
@@ -2160,7 +2172,7 @@
 
 .mvuad-forum-post-preview { -webkit-line-clamp: 2; }
 
-.mvuad-forum-body-details[open] .mvuad-forum-post-full {
+.mvuad-forum-body-details.is-open .mvuad-forum-post-full {
     display: block;
     padding-top: 2px;
     color: color-mix(in srgb, var(--mvuad-forum-text) 84%, transparent);
@@ -2301,10 +2313,34 @@
     .mvuad-forum-board-head { padding: 10px 14px 9px; }
     .mvuad-forum-controls > summary { min-height: 32px; }
 
+    #mvuad-forum-panel .mvuad-forum-shell .mvuad-forum-body-toggle {
+        position: absolute;
+        z-index: 1;
+        top: 0;
+        right: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: var(--mvuad-touch);
+        min-height: var(--mvuad-touch);
+        padding: 6px 8px;
+        font-size: 11px;
+        line-height: 1.2;
+        touch-action: manipulation;
+    }
+
+    #mvuad-forum-panel .mvuad-forum-shell .mvuad-forum-body-details {
+        position: relative;
+    }
+
     #mvuad-forum-panel .mvuad-forum-shell :is(
-        .mvuad-forum-body-details > summary,
-        .mvuad-forum-comments > summary
+        .mvuad-forum-post-preview,
+        .mvuad-forum-post-full
     ) {
+        padding-right: calc(var(--mvuad-touch) + 8px);
+    }
+
+    #mvuad-forum-panel .mvuad-forum-shell .mvuad-forum-comments > summary {
         min-height: 0;
     }
 

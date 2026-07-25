@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "sillyTavern": {
+    "version": "1.18.0",
+    "commit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browserLaunch": false
+  },
+  "extension": {
+    "primaryPath": "data/default-user/extensions/mvu-auto-doctor",
+    "publicUrl": "/scripts/extensions/third-party/mvu-auto-doctor/"
+  },
+  "modelProxy": {
+    "script": "qc/deepseek-memory-proxy.mjs",
+    "host": "127.0.0.1",
+    "port": 9328,
+    "credentialPersistence": "none"
+  },
+  "mobile": {
+    "width": 390,
+    "height": 844,
+    "minimumTouchTarget": 42
+  },
+  "excludedFromArchive": [
+    "API keys",
+    "SillyTavern data directories",
+    "private chats",
+    "browser profiles",
+    "raw model requests and responses"
+  ]
+}

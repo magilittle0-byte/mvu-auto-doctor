@@ -673,7 +673,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.9');
+    assert.equal(continuity.version, '1.8.11');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -782,6 +782,25 @@ try {
         JSON.stringify(orbBeforeOpen),
     );
     assert.equal(orbBeforeOpen.count, '1');
+    await page.evaluate(() => {
+        /*
+         * Reproduce SillyTavern's real root geometry. A transformed zero-height
+         * root creates a containing block for fixed descendants, while the
+         * application body remains fixed to the visual viewport.
+         */
+        Object.assign(document.documentElement.style, {
+            height: '0px',
+            perspective: '1000px',
+            transform: 'translateZ(0)',
+        });
+        Object.assign(document.body.style, {
+            position: 'fixed',
+            inset: '0',
+            width: '390px',
+            height: '844px',
+            overflow: 'hidden',
+        });
+    });
     await page.click('#mvuad-floating-orb');
     const floatingPanel = await page.evaluate(() => {
         const panel = document.querySelector('#mvuad-floating-panel');
@@ -791,6 +810,8 @@ try {
         const progress = firstCard?.querySelector('[role="progressbar"]');
         return {
             hidden: !!panel?.hidden,
+            top: rect?.top ?? -1,
+            bottom: rect?.bottom ?? Number.MAX_SAFE_INTEGER,
             left: rect?.left ?? -1,
             right: rect?.right ?? Number.MAX_SAFE_INTEGER,
             cards: panel?.querySelectorAll('.mvuad-thread-card').length || 0,
@@ -803,6 +824,10 @@ try {
         };
     });
     assert.equal(floatingPanel.hidden, false);
+    assert.ok(
+        floatingPanel.top >= 0 && floatingPanel.bottom <= 844,
+        `浮层必须留在真实 SillyTavern 视口内：${JSON.stringify(floatingPanel)}`,
+    );
     assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
     assert.equal(floatingPanel.cards, 1);
     assert.equal(floatingPanel.badgeCount, 2, '事件摘要只保留阶段与紧迫度两枚徽章');
@@ -883,6 +908,8 @@ try {
         const rect = shell?.getBoundingClientRect();
         return {
             hidden: !!panel?.hidden,
+            panelTop: panel?.getBoundingClientRect().top ?? -1,
+            panelBottom: panel?.getBoundingClientRect().bottom ?? Number.MAX_SAFE_INTEGER,
             left: rect?.left ?? -1,
             right: rect?.right ?? Number.MAX_SAFE_INTEGER,
             posts: panel?.querySelectorAll('.mvuad-forum-post').length || 0,
@@ -894,6 +921,10 @@ try {
             hotPosts: panel?.querySelectorAll('.mvuad-forum-post[data-heat-tier="hot"]').length || 0,
             hotComments: panel?.querySelectorAll('.mvuad-forum-hot-comment').length || 0,
             longBodies: panel?.querySelectorAll('.mvuad-forum-body-details').length || 0,
+            bodyToggleHeight: panel?.querySelector('.mvuad-forum-body-toggle')?.getBoundingClientRect().height || 0,
+            bodyToggleWidth: panel?.querySelector('.mvuad-forum-body-toggle')?.getBoundingClientRect().width || 0,
+            shellClientWidth: shell?.clientWidth || 0,
+            shellScrollWidth: shell?.scrollWidth || 0,
             feedEnds: panel?.querySelectorAll('.mvuad-forum-feed-end').length || 0,
             headerHeight: panel?.querySelector('.mvuad-forum-header')?.getBoundingClientRect().height || 0,
             firstPostHeight: panel?.querySelector('.mvuad-forum-post')?.getBoundingClientRect().height || 0,
@@ -914,6 +945,10 @@ try {
         };
     });
     assert.equal(forumPanel.hidden, false);
+    assert.ok(
+        forumPanel.panelTop >= 0 && forumPanel.panelBottom <= 844,
+        `完整论坛必须留在真实 SillyTavern 视口内：${JSON.stringify(forumPanel)}`,
+    );
     assert.ok(forumPanel.left >= 0 && forumPanel.right <= 391);
     assert.equal(forumPanel.posts, 4);
     assert.equal(forumPanel.comments, 6);
@@ -924,6 +959,14 @@ try {
     assert.equal(forumPanel.hotPosts, 1);
     assert.equal(forumPanel.hotComments, 4, '每个有回复的主题只显示一条紧凑热评预览');
     assert.equal(forumPanel.longBodies, 2);
+    assert.ok(
+        forumPanel.bodyToggleHeight >= 42 && forumPanel.bodyToggleWidth >= 42,
+        `mobile full-text control must expose a 42px touch target (measured ${forumPanel.bodyToggleWidth}x${forumPanel.bodyToggleHeight}px)`,
+    );
+    assert.ok(
+        forumPanel.shellScrollWidth <= forumPanel.shellClientWidth,
+        `forum shell must not overflow horizontally (scroll ${forumPanel.shellScrollWidth}px, client ${forumPanel.shellClientWidth}px)`,
+    );
     assert.equal(forumPanel.feedEnds, 1);
     assert.ok(forumPanel.headerHeight <= 64, '论坛顶栏不得再次膨胀成大面积空头图');
     assert.ok(
@@ -960,29 +1003,60 @@ try {
         '用户主动展开后才显示来源与管理选项',
     );
     await page.click('.mvuad-forum-controls > summary');
-    await page.click('.mvuad-forum-body-details > summary');
-    assert.equal(
-        await page.evaluate(() => document.querySelector('.mvuad-forum-body-details')?.open),
-        true,
+    await page.click('.mvuad-forum-body-details .mvuad-forum-body-toggle');
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const body = document.querySelector('.mvuad-forum-body-details');
+            const toggle = body?.querySelector('.mvuad-forum-body-toggle');
+            return {
+                open: !!body?.classList.contains('is-open'),
+                expanded: toggle?.getAttribute('aria-expanded'),
+                label: toggle?.textContent,
+            };
+        }),
+        { open: true, expanded: 'true', label: '收起全文' },
         '长帖必须可以展开查看全文',
     );
-    await page.click('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-details > summary');
+    await page.click('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-toggle');
     const mediumPostExpansion = await page.evaluate(() => {
-        const details = document.querySelector('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-details');
-        const summary = details?.querySelector('summary');
-        const full = details?.querySelector('.mvuad-forum-post-full');
+        const body = document.querySelector('.mvuad-forum-post[data-post-id="FP-1-B"] .mvuad-forum-body-details');
+        const toggle = body?.querySelector('.mvuad-forum-body-toggle');
+        const full = body?.querySelector('.mvuad-forum-post-full');
         return {
-            open: !!details?.open,
-            expanded: summary?.getAttribute('aria-expanded'),
+            open: !!body?.classList.contains('is-open'),
+            expanded: toggle?.getAttribute('aria-expanded'),
             fullHeight: full?.getBoundingClientRect().height || 0,
-            previewVisible: (details?.querySelector('.mvuad-forum-post-preview')?.getClientRects().length || 0) > 0,
+            previewVisible: (body?.querySelector('.mvuad-forum-post-preview')?.getClientRects().length || 0) > 0,
         };
     });
     assert.equal(mediumPostExpansion.open, true, 'medium-length posts must expose a working full-text control');
     assert.equal(mediumPostExpansion.expanded, 'true');
     assert.equal(mediumPostExpansion.previewVisible, false);
     assert.ok(mediumPostExpansion.fullHeight > 0, 'opened post must render its complete body');
-    await page.click('.mvuad-forum-body-details > summary');
+    await page.click('.mvuad-forum-body-details .mvuad-forum-body-toggle');
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const body = document.querySelector('.mvuad-forum-body-details');
+            const toggle = body?.querySelector('.mvuad-forum-body-toggle');
+            const preview = body?.querySelector('.mvuad-forum-post-preview');
+            const full = body?.querySelector('.mvuad-forum-post-full');
+            return {
+                open: !!body?.classList.contains('is-open'),
+                expanded: toggle?.getAttribute('aria-expanded'),
+                label: toggle?.textContent,
+                previewVisible: (preview?.getClientRects().length || 0) > 0,
+                fullVisible: (full?.getClientRects().length || 0) > 0,
+            };
+        }),
+        {
+            open: false,
+            expanded: 'false',
+            label: '展开全文',
+            previewVisible: true,
+            fullVisible: false,
+        },
+        '收起长帖后必须恢复预览，并移除完整正文的布局占位',
+    );
     if (process.env.MVUAD_FORUM_PANEL_SCREENSHOT) {
         await page.locator('#mvuad-forum-panel .mvuad-forum-shell').screenshot({
             path: process.env.MVUAD_FORUM_PANEL_SCREENSHOT,
@@ -1207,7 +1281,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.9');
+    assert.equal(lifecycle.version, '1.8.11');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

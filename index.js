@@ -66,7 +66,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.9';
+const VERSION = '1.8.11';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -7056,32 +7056,35 @@ function buildForumPostCard(post, {
 
     const bodyText = String(post.body || '');
     if (bodyText.length > FORUM_BODY_COLLAPSE_THRESHOLD) {
-        const bodyDetails = document.createElement('details');
+        const bodyDetails = document.createElement('div');
         bodyDetails.className = 'mvuad-forum-body-details';
-        const bodySummary = document.createElement('summary');
-        bodySummary.setAttribute('aria-label', '展开或收起帖子全文');
-        bodySummary.setAttribute('role', 'button');
-        bodySummary.setAttribute('aria-expanded', 'false');
         const preview = document.createElement('div');
         preview.className = 'mvuad-forum-post-body mvuad-forum-post-preview';
         preview.textContent = bodyText;
-        bodySummary.appendChild(preview);
+        const bodyToggle = document.createElement('button');
+        bodyToggle.className = 'mvuad-forum-body-toggle';
+        bodyToggle.type = 'button';
+        bodyToggle.setAttribute('aria-expanded', 'false');
+        bodyToggle.textContent = '展开全文';
         const fullBody = document.createElement('div');
         fullBody.className = 'mvuad-forum-post-body mvuad-forum-post-full';
         fullBody.textContent = bodyText;
-        bodyDetails.append(bodySummary, fullBody);
-        const syncBodyExpanded = () => {
-            bodySummary.setAttribute('aria-expanded', String(bodyDetails.open));
+        fullBody.hidden = true;
+        bodyDetails.append(preview, bodyToggle, fullBody);
+        const setBodyExpanded = (expanded) => {
+            const next = !!expanded;
+            bodyDetails.classList.toggle('is-open', next);
+            bodyToggle.setAttribute('aria-expanded', String(next));
+            bodyToggle.textContent = next ? '收起全文' : '展开全文';
+            preview.hidden = next;
+            fullBody.hidden = !next;
         };
-        // Android WebViews occasionally fail to toggle a styled <summary>
-        // containing a block preview. Keep native details semantics, but make
-        // the touch/click path deterministic as well.
-        bodySummary.addEventListener('click', (event) => {
-            event.preventDefault();
-            bodyDetails.open = !bodyDetails.open;
-            syncBodyExpanded();
+        // Do not rely on <details>/<summary> here. Android WebViews disagree
+        // about whether a styled summary toggles before or after a prevented
+        // click, which can immediately undo a manual fallback toggle.
+        bodyToggle.addEventListener('click', () => {
+            setBodyExpanded(bodyToggle.getAttribute('aria-expanded') !== 'true');
         });
-        bodyDetails.addEventListener('toggle', syncBodyExpanded);
         card.appendChild(bodyDetails);
     } else {
         const body = document.createElement('div');

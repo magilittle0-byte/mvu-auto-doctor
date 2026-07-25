@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "version": "1.8.11",
+  "testedAt": "2026-07-25T18:36:51+08:00",
+  "result": "pass",
+  "codeFingerprint": "41b702b71aa879795b873e3d462d75a585572788bf6837ebcf3167f2ba67c8bb",
+  "environment": {
+    "sillyTavernVersion": "1.18.0",
+    "sillyTavernCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browser": "Codex In-app Browser",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "modelProxy": {
+      "url": "http://127.0.0.1:9328/v1",
+      "credentialMode": "memory-only"
+    }
+  },
+  "checks": {
+    "testSuite": {
+      "total": 26,
+      "passed": 26,
+      "failed": 0,
+      "durationMs": 127440
+    },
+    "deepSeek": {
+      "model": "deepseek-v4-flash",
+      "calls": 2,
+      "httpStatuses": [
+        200,
+        200
+      ],
+      "credentialPersisted": false,
+      "proxyStopped": true
+    },
+    "forum": {
+      "generatedPages": 2,
+      "topicCount": 9,
+      "openWithPointerOrTouch": true,
+      "expand": true,
+      "collapse": true,
+      "ariaStateSynchronized": true
+    },
+    "mobile": {
+      "touchTargetWidth": 60,
+      "touchTargetHeight": 42,
+      "minimumTouchTarget": 42,
+      "floatingPanelTop": 87.921875,
+      "floatingPanelBottom": 780,
+      "forumPanelTop": 0,
+      "forumPanelBottom": 844,
+      "forumShellClientWidth": 390,
+      "forumShellScrollWidth": 390
+    }
+  },
+  "privacy": {
+    "apiKeyIncluded": false,
+    "privateChatIncluded": false,
+    "userDataIncluded": false,
+    "rawModelPayloadIncluded": false
+  }
+}
