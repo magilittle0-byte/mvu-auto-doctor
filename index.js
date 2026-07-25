@@ -32,6 +32,7 @@ import {
     continuityContentDigest,
     continuityLifecycleStats,
     continuityLedgerView,
+    continuityScenarioDigest,
     continuityWorldDigest,
     CONTINUITY_TICK_LABELS,
     emptyContinuityState,
@@ -66,7 +67,7 @@ import {
 } from './protocol-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.13';
+const VERSION = '1.8.14';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 6;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -5385,6 +5386,19 @@ function buildContinuityMessages({
         '- 当正文后来真实观察或参与该支线时，下一次调度再把score记为4并转为linked；若交联窗口消失，可把score降低并退回原有latent/independent关系，不得让“曾经可能”永久黏在主线。',
         '- 事件每次实质推进、失败、结束或派生后，检查是否产生新的传播节点或跨类别后果。world条目的sourceThreads必须列出来源事件稳定ID；线程的propagation由本地根据这些ID反向登记，形成“事件→世界表面→汇流候选”的可追溯链。',
         '',
+        '【副本/封闭场景规划：软结构，不是固定剧本】',
+        '- 当正文已经明确进入或生成一个有边界的副本、任务场、试炼、调查区、行动阶段或类似封闭场景时，若scenarioPlan.status=inactive，应建立一次基线规划；普通开放式日常或尚未成立的未来提议不要建规划。',
+        '- 基线必须来自当前MVU任务锚点、已发生正文、角色卡或世界书中的明确事实，并在baselineEvidence逐条指出来源。至少登记主目标goal与可判定的完成条件completion；activeApex表示原生终局冲突/最高威胁，不要求每个场景都有Boss，非战斗副本可留空。',
+        '- 规划只固定“世界里目前真实存在的结构和边界”，不替玩家规定路径。玩家可绕行、交涉、逃离、失败、提前解决或造成意外；route写可选结构，不写必须照演的章节脚本。',
+        '- 已建立规划后，模型不得重写baseline/current。只有确有变化时才在scenarioPlan.amendments增量返回1条新修订；没有变化就省略scenarioPlan。所有字段都可合理变化，包括目标、完成/失败条件、终局威胁、路线、阶段、时限、赌注与收束状态，但绝不允许无因改口。',
+        '- 每条修订必须包含稳定id、causeType、impact、sourceThreadIds、trigger、mechanism、evidence、changes与preserves。changes逐项给出field以及与更新前current完全一致的before和新的after；本地会拒绝任何不匹配、无来源或跳步变更。',
+        '- causeType=world_chain时，所有sourceThreadIds必须引用更新前就已存在并有实际进展/来源记录的事件；本回合正文里临时编出的气氛、拦路怪、伏笔或“其实还有一层”不能在同回合伪装成长期因果链。',
+        '- causeType=player_action可引用本回合由玩家明确行动造成的main_derivative事件；必须说明玩家行动如何客观改变结构，不能把主回复自己新增的障碍冒充玩家选择。',
+        '- 既有设定事实或系统规则造成变化时使用setting_fact/system_rule，仍须引用已有事件线程与可核验证据，不能借“设定如此”临时补丁。',
+        '- 修改goal、completion、failure、activeApex或closure属于结构性变化，preserves必须列出此前战斗、探索、资源、承诺与阶段成果如何继续有效。已打败的原终局Boss不能被降格成“前菜”，已完成的目标不能被无痕取消。',
+        '- 世界支线可以经过多轮推进、互相影响后引入比原生终局威胁更强的敌人，也可以削弱威胁、打开捷径、取消冲突或改变通关方式；方向不限于升级，但机制和来源必须完整可追溯，并作为新版本activeApex/目标正式生效。',
+        '- 当完成条件已满足时把closure修订为ready或completed并写closureReason，随后自然结算。scenarioPlan一旦completed/failed就永久终止；仍在发展的余波另建世界事件，禁止复开同一副本继续刷怪。',
+        '',
         '【事件来源分类 origin】',
         '- main_derivative：直接由已发生正文衍生。',
         '- setting_linked：尚未在主线出现，但依据世界设定与主线存在潜在因果。',
@@ -5423,6 +5437,8 @@ function buildContinuityMessages({
         '【eventType】conflict表示会积累至爆发/消散的冲突；progress表示会积累至完成/失败的事务。level 1-4：冲突level越高越易升级，事务level越高越难完成。',
         '【stageProgress】非终局阶段1-8；达到9由本地晋级。stalled只是暂时受阻，恢复条件写入trigger或offscreenBeat；永久失去条件才resolved并将outcome写failed/dissipated。',
         '- threads采用增量输出：只返回本轮实质变化的旧线程和新线程，未返回的旧线程由本地账本原样保留。更新旧线程必须沿用稳定ID，禁止输出同义副本。world同样只返回增量。',
+        '- scenarioPlan也采用增量输出：首次建立时返回完整status/instanceId/title/baselineEvidence/baseline且amendments为空；此后只返回{"amendments":[本轮至多1条新修订]}，不得复制、删除或改写旧修订。',
+        '- 修订对象格式：{"id":"AMEND-稳定ID","causeType":"player_action|world_chain|setting_fact|system_rule","impact":"minor|material|structural","sourceThreadIds":["事件ID"],"trigger":"发生了什么","mechanism":"为何会改变规划","evidence":["正文/MVU/事件证据"],"changes":[{"field":"goal|completion|failure|activeApex|route|timeLimit|stakes|phase|closure|closureReason","before":"更新前精确值","after":"更新后值"}],"preserves":["仍然有效的既有成果"],"visibility":"hidden|rumor|observed","reversible":true}。',
         jsonOnly
             ? '只输出一个合法JSON对象，不要标签、代码围栏或解释。'
             : '只输出一个<ContinuityState>包裹的JSON对象。',
@@ -5484,6 +5500,17 @@ function buildContinuityMessages({
         '    "actors": [], "locations": [], "knowledge": "hidden",',
         '    "urgency": 1, "createdTurn": 1, "lastAdvancedTurn": 1',
         '  }],',
+        '  "scenarioPlan": {',
+        '    "status": "active", "instanceId": "SCN-稳定ID", "title": "副本/场景名",',
+        '    "baselineEvidence": ["当前任务锚点或已发生正文的明确证据"],',
+        '    "baseline": {',
+        '      "goal": "原始主目标", "completion": "可验证完成条件", "failure": "失败边界",',
+        '      "activeApex": "原生终局冲突/最高威胁；没有则空", "route": "可选路线结构",',
+        '      "timeLimit": "明确时限；没有则空", "stakes": "代价与赌注",',
+        '      "phase": "setup", "closure": "open", "closureReason": ""',
+        '    },',
+        '    "amendments": []',
+        '  },',
         '  "world": {',
         '    "digest": "只概括本轮真正变化；没有变化可省略",',
         '    "trends": [{"id": null, "name": "长期趋势", "status": "active", "summary": "持续约束", "scope": "范围", "source": "明确来源", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "设定或已发生事实"}],',
@@ -5689,9 +5716,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         const lifecycle = continuityLifecycleStats(scheduledBase, candidate);
         const worldChanged = continuityWorldDigest(scheduledBase)
             !== continuityWorldDigest(candidate);
+        const scenarioChanged = continuityScenarioDigest(scheduledBase)
+            !== continuityScenarioDigest(candidate);
         const modelProgressed = validOutput && (
             localProgressed
             || worldChanged
+            || scenarioChanged
             || lifecycle.changedExisting > 0
             || lifecycle.added > 0
             || (lifecycle.schedulerAdvanced && lifecycle.tickAction === 'held')
@@ -6574,11 +6604,104 @@ function buildLedgerThreadCard(thread, {
     return details;
 }
 
+function buildScenarioPlanCard(plan, concealSpoiler) {
+    const details = document.createElement('details');
+    details.className = 'mvuad-scenario-card';
+    const heading = document.createElement('summary');
+    const title = document.createElement('b');
+    title.textContent = concealSpoiler
+        ? '副本/场景幕后规划（点击追溯）'
+        : `${plan.title || plan.instanceId} · v${plan.revision}`;
+    const meta = document.createElement('span');
+    meta.textContent = `${plan.statusLabel} · ${plan.phaseLabel}`;
+    heading.append(title, meta);
+    details.appendChild(heading);
+
+    const body = document.createElement('div');
+    body.className = 'mvuad-scenario-body';
+    if (concealSpoiler) {
+        appendLedgerField(body, '真实规划', `${plan.title || plan.instanceId} · v${plan.revision}`);
+    }
+    appendLedgerGroup(body, '当前有效版本', [
+        { label: '主目标', value: plan.current.goal, showEmpty: true },
+        { label: '完成条件', value: plan.current.completion, showEmpty: true },
+        { label: '失败边界', value: plan.current.failure },
+        {
+            label: '终局冲突/最高威胁',
+            value: plan.current.activeApex,
+            showEmpty: true,
+            emptyText: '没有固定战斗型终局',
+        },
+        { label: '路线结构', value: plan.current.route },
+        { label: '时限', value: plan.current.timeLimit, emptyText: '无明确时限' },
+        { label: '代价与赌注', value: plan.current.stakes },
+        {
+            label: '收束状态',
+            value: `${plan.current.closure}${plan.current.closureReason ? ` · ${plan.current.closureReason}` : ''}`,
+            showEmpty: true,
+        },
+    ], { open: true });
+    appendLedgerGroup(body, '初始基线（不可覆盖）', [
+        { label: '原始主目标', value: plan.baseline.goal, showEmpty: true },
+        { label: '原始完成条件', value: plan.baseline.completion, showEmpty: true },
+        { label: '原生终局冲突', value: plan.baseline.activeApex, emptyText: '无固定战斗型终局' },
+        { label: '初始路线', value: plan.baseline.route },
+        { label: '建立依据', value: plan.baselineEvidence?.join('；'), showEmpty: true },
+        {
+            label: '建立位置',
+            value: plan.baselineSourceRef
+                ? `第 ${plan.baselineSourceRef.index + 1} 楼 · 候选 ${plan.baselineSourceRef.swipeId + 1}`
+                : `账本第 ${plan.createdTurn} 轮`,
+            showEmpty: true,
+        },
+    ]);
+
+    if (plan.amendments?.length) {
+        const history = document.createElement('div');
+        history.className = 'mvuad-scenario-history';
+        const historyTitle = document.createElement('b');
+        historyTitle.textContent = `可追溯修订（${plan.amendments.length}）`;
+        history.appendChild(historyTitle);
+        for (const amendment of [...plan.amendments].reverse()) {
+            const item = document.createElement('details');
+            item.className = 'mvuad-scenario-amendment';
+            const itemHeading = document.createElement('summary');
+            itemHeading.textContent = `v${amendment.revision} · ${amendment.causeLabel} · ${amendment.trigger}`;
+            const itemBody = document.createElement('div');
+            itemBody.className = 'mvuad-scenario-amendment-body';
+            appendLedgerField(itemBody, '来源事件', amendment.sourceThreadIds?.join('、'));
+            appendLedgerField(itemBody, '作用机制', amendment.mechanism);
+            appendLedgerField(itemBody, '证据', amendment.evidence?.join('；'));
+            appendLedgerField(
+                itemBody,
+                '字段变更',
+                amendment.changes?.map(
+                    (change) => `${change.field}：${change.before} → ${change.after}`,
+                ).join('；'),
+            );
+            appendLedgerField(itemBody, '保留成果', amendment.preserves?.join('；'));
+            appendLedgerField(
+                itemBody,
+                '正文来源',
+                amendment.sourceRef
+                    ? `第 ${amendment.sourceRef.index + 1} 楼 · 候选 ${amendment.sourceRef.swipeId + 1}`
+                    : `账本第 ${amendment.turn} 轮`,
+            );
+            item.append(itemHeading, itemBody);
+            history.appendChild(item);
+        }
+        body.appendChild(history);
+    }
+    details.appendChild(body);
+    return details;
+}
+
 function ledgerSurfaceFrom(root) {
     if (!root) return null;
     return {
         root,
         summary: root.querySelector('.mvuad-ledger-summary'),
+        scenario: root.querySelector('.mvuad-scenario-plan'),
         empty: root.querySelector('.mvuad-ledger-empty'),
         active: root.querySelector('.mvuad-ledger-active'),
         resolved: root.querySelector('.mvuad-ledger-resolved'),
@@ -6839,6 +6962,9 @@ function renderLedgerSurface(surface, view, namespace, settings, context) {
         view.dormantCount ? `${view.dormantCount} 条因容量休眠保留` : '',
         `${view.resolvedCount} 条已收束`,
         `${view.echoCount} 条因果风声`,
+        view.scenarioPlan.status !== 'inactive'
+            ? `场景规划 v${view.scenarioPlan.revision} · ${view.scenarioPlan.statusLabel}`
+            : '',
         view.turn ? `账本第 ${view.turn} 轮` : '尚未建立账本轮次',
         `最近调度：${tickLabel}`,
         view.lastTick?.reason ? `依据：${view.lastTick.reason}` : '',
@@ -6846,6 +6972,20 @@ function renderLedgerSurface(surface, view, namespace, settings, context) {
         `来源：${CONTINUITY_DIRECTOR_LABELS[namespace.continuityDirector] || '等待识别'}`,
         settings.continuityMode === 'off' ? '当前已关闭运行（旧账本仍保留）' : '',
     ].filter(Boolean).join(' · ');
+
+    if (surface.scenario) {
+        const wasOpen = !!surface.scenario.querySelector('.mvuad-scenario-card[open]');
+        surface.scenario.replaceChildren();
+        if (view.scenarioPlan.status !== 'inactive') {
+            const card = buildScenarioPlanCard(
+                view.scenarioPlan,
+                settings.hideContinuitySpoilers,
+            );
+            card.open = wasOpen;
+            surface.scenario.appendChild(card);
+        }
+        surface.scenario.hidden = view.scenarioPlan.status === 'inactive';
+    }
 
     surface.active.replaceChildren();
     const concealById = new Map(view.active.map((thread) => [
@@ -6937,6 +7077,40 @@ function saveFloatingOrbPosition(position) {
     }
 }
 
+function floatingViewportOffsetX() {
+    const visualPageLeft = Number(window.visualViewport?.pageLeft);
+    const pageLeft = Number.isFinite(visualPageLeft)
+        ? visualPageLeft
+        : Number(window.scrollX) || 0;
+    return Math.max(0, pageLeft);
+}
+
+function applyFloatingViewportOffset() {
+    const pageOffset = floatingViewportOffsetX();
+    const viewportWidth = Math.max(
+        1,
+        Number(window.visualViewport?.width) || Number(window.innerWidth) || 1,
+    );
+    const preferredGutter = Math.min(6, Math.floor(viewportWidth / 2));
+    for (const panel of [ui?.floatingPanel, ui?.forumPanel]) {
+        if (!panel) continue;
+        let offset = pageOffset;
+        panel.style.transform = offset ? `translateX(${offset}px)` : '';
+        if (!panel.hidden) {
+            const rect = panel.getBoundingClientRect();
+            const gutter = rect.width > viewportWidth - (preferredGutter * 2)
+                ? 0
+                : preferredGutter;
+            if (rect.left < gutter) {
+                offset += gutter - rect.left;
+            } else if (rect.right > viewportWidth - gutter) {
+                offset -= rect.right - (viewportWidth - gutter);
+            }
+            panel.style.transform = offset ? `translateX(${offset}px)` : '';
+        }
+    }
+}
+
 function applyFloatingOrbPosition(position = readFloatingOrbPosition()) {
     const orb = ui?.floatingOrb;
     if (!orb) return;
@@ -6947,7 +7121,7 @@ function applyFloatingOrbPosition(position = readFloatingOrbPosition()) {
     const left = position.tucked
         ? (side === 'left' ? handle - size : window.innerWidth - handle)
         : (side === 'left' ? 10 : window.innerWidth - size - 10);
-    orb.style.left = `${left}px`;
+    orb.style.left = `${left + floatingViewportOffsetX()}px`;
     orb.style.top = `${top}px`;
     orb.classList.toggle('mvuad-orb-tucked', !!position.tucked);
     orb.dataset.side = side;
@@ -7003,6 +7177,7 @@ function showFloatingPanel() {
     if (ui.floatingOrb) ui.floatingOrb.hidden = true;
     ui.floatingPanel.hidden = false;
     ui.floatingPanel.classList.add('mvuad-floating-panel-open');
+    applyFloatingViewportOffset();
     renderContinuityLedger();
     renderForum();
     let page = 'world';
@@ -7498,6 +7673,7 @@ function showForumPanel() {
     if (ui.forumControls) ui.forumControls.open = false;
     ui.forumPanel.hidden = false;
     ui.forumPanel.classList.add('mvuad-forum-panel-open');
+    applyFloatingViewportOffset();
     renderForum();
     ui.forumClose?.focus?.({ preventScroll: true });
     const settings = getSettings();
@@ -7693,7 +7869,10 @@ function makeFloatingOrbDraggable(orb) {
         if (!moved) return;
         const size = orb.offsetWidth || 50;
         const top = Math.max(8, Math.min(startTop + dy, window.innerHeight - size - 8));
-        orb.style.left = `${Math.max(4, Math.min(event.clientX - size / 2, window.innerWidth - size - 4))}px`;
+        orb.style.left = `${
+            Math.max(4, Math.min(event.clientX - size / 2, window.innerWidth - size - 4))
+            + floatingViewportOffsetX()
+        }px`;
         orb.style.top = `${top}px`;
         event.preventDefault();
     });
@@ -7829,6 +8008,7 @@ function buildFloatingUi() {
                     <div class="mvuad-ledger-header"><b>事件账本</b><button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button></div>
                     <div class="mvuad-ledger-note">可能包含角色尚不知道的幕后事实；默认折叠剧透。这里只查看，不会推进剧情。</div>
                     <div class="mvuad-ledger-summary"></div>
+                    <div class="mvuad-scenario-plan" hidden></div>
                     <div class="mvuad-ledger-empty">当前没有未结事件。</div>
                     <div class="mvuad-ledger-active"></div>
                     <details class="mvuad-ledger-resolved"><summary class="mvuad-ledger-resolved-summary">已收束事件（0）</summary><div class="mvuad-ledger-resolved-list"></div></details>
@@ -7916,7 +8096,14 @@ function buildFloatingUi() {
     panel.querySelector('.mvuad-floating-forum').addEventListener('click', openSelectedForum);
     panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
     makeFloatingOrbDraggable(orb);
-    window.addEventListener('resize', () => applyFloatingOrbPosition());
+    const updateFloatingViewport = () => {
+        applyFloatingOrbPosition();
+        applyFloatingViewportOffset();
+    };
+    window.addEventListener('resize', updateFloatingViewport);
+    window.addEventListener('scroll', updateFloatingViewport, { passive: true });
+    window.visualViewport?.addEventListener('resize', updateFloatingViewport);
+    window.visualViewport?.addEventListener('scroll', updateFloatingViewport);
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && !panel.hidden) hideFloatingPanel();
         trapDialogFocus(panel, event);

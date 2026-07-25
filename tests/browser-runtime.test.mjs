@@ -684,7 +684,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.13');
+    assert.equal(continuity.version, '1.8.14');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -712,8 +712,12 @@ try {
         /intersection不是创建时写完就永久不变的备注/u,
     );
     assert.match(continuity.calls.continuitySystem, /事件→世界表面→汇流候选/u);
+    assert.match(continuity.calls.continuitySystem, /副本\/封闭场景规划/u);
+    assert.match(continuity.calls.continuitySystem, /所有字段都可合理变化/u);
+    assert.match(continuity.calls.continuitySystem, /completed\/failed就永久终止/u);
     assert.match(continuity.calls.continuityUser, /"convergence": \{"score": 0/u);
     assert.match(continuity.calls.continuityUser, /"sourceThreads": \["来源事件ID"\]/u);
+    assert.match(continuity.calls.continuityUser, /"baselineEvidence"/u);
     assert.equal(continuity.forumState.posts.length, 4);
     assert.equal(
         continuity.forumState.posts.reduce((sum, post) => sum + post.comments.length, 0),
@@ -829,6 +833,24 @@ try {
             height: '844px',
             overflow: 'hidden',
         });
+        /*
+         * Some real browser sidebars append a 350px-wide custom element just
+         * beyond the app and leave visualViewport.pageLeft/scrollX non-zero.
+         * Body-anchored overlays must compensate instead of losing their left
+         * edge outside the visible mobile viewport.
+         */
+        const sidebar = document.createElement('div');
+        sidebar.id = 'qc-browser-sidebar-offset';
+        Object.assign(sidebar.style, {
+            position: 'absolute',
+            left: '390px',
+            top: '0',
+            width: '350px',
+            height: '1px',
+        });
+        document.documentElement.appendChild(sidebar);
+        document.documentElement.style.overflowX = 'auto';
+        window.scrollTo(35, 0);
     });
     await page.click('#mvuad-floating-orb');
     const floatingPanel = await page.evaluate(() => {
@@ -849,6 +871,7 @@ try {
             firstGroupOpen: !!groups[0]?.open,
             laterGroupsClosed: groups.slice(1).every((group) => !group.open),
             progressNow: progress?.getAttribute('aria-valuenow') || '',
+            pageLeft: window.visualViewport?.pageLeft ?? window.scrollX,
             text: panel?.textContent || '',
         };
     });
@@ -857,7 +880,11 @@ try {
         floatingPanel.top >= 0 && floatingPanel.bottom <= 844,
         `浮层必须留在真实 SillyTavern 视口内：${JSON.stringify(floatingPanel)}`,
     );
-    assert.ok(floatingPanel.left >= 0 && floatingPanel.right <= 391);
+    assert.ok(
+        floatingPanel.left >= 0 && floatingPanel.right <= 391,
+        `浮层必须完整落在横向可视区：${JSON.stringify(floatingPanel)}`,
+    );
+    assert.ok(floatingPanel.pageLeft >= 35, '回归必须真实覆盖非零水平视口偏移');
     assert.equal(floatingPanel.cards, 1);
     assert.equal(floatingPanel.badgeCount, 2, '事件摘要只保留阶段与紧迫度两枚徽章');
     assert.equal(floatingPanel.groupCount, 3, '事件字段必须分成当前、因果、传播与收束');
@@ -1363,7 +1390,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.13');
+    assert.equal(lifecycle.version, '1.8.14');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -3347,6 +3374,161 @@ try {
     assert.equal(futureTurnResult.state.threads[0].createdTurn, 1);
     assert.equal(futureTurnResult.state.threads[0].lastAdvancedTurn, 1);
     await futureTurnPage.close();
+
+    const scenarioPlanPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await scenarioPlanPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await scenarioPlanPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const scenarioPlanResult = await scenarioPlanPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const originalRun = window.StoryOracleAPI.run;
+        let scenarioRuns = 0;
+        window.StoryOracleAPI.run = async (messages, options) => {
+            const system = messages[0].content;
+            if (!system.includes('活世界事件')) return originalRun(messages, options);
+            scenarioRuns += 1;
+            t.calls.model.push('continuity');
+            t.calls.continuityRuns += 1;
+            t.calls.continuitySystem = system;
+            t.calls.continuityUser = messages[1].content;
+            if (scenarioRuns === 1) {
+                return '<ContinuityState>' + JSON.stringify({
+                    turn: 1,
+                    threads: [{
+                        id: 'WE-界外猎手-01',
+                        title: '界外猎手追踪核心信号',
+                        kind: 'enemy',
+                        eventType: 'progress',
+                        level: 3,
+                        origin: 'setting_linked',
+                        relation: 'latent',
+                        stage: 'advancing',
+                        stageProgress: 4,
+                        summary: '界外猎手已经定位迷宫所在区域。',
+                        offscreenBeat: '追踪信号逐步收敛。',
+                        nextBeat: '信号足够强时猎手可能抵达。',
+                        trigger: '迷宫核心释放可追踪能量。',
+                        intersection: '只有信号覆盖当前出口时才可能汇流。',
+                        seedBasis: '世界书：界外猎手持续追踪异常核心能量',
+                        knowledge: 'hidden',
+                    }],
+                    scenarioPlan: {
+                        status: 'active',
+                        instanceId: 'SCN-MINOS-01',
+                        title: '米诺斯回廊',
+                        baselineEvidence: [
+                            'MVU主任务要求摧毁迷宫核心并撤离',
+                            '正文确认米诺斯是原生终局守卫',
+                        ],
+                        baseline: {
+                            goal: '摧毁迷宫核心并从出口撤离',
+                            completion: '迷宫核心失效且队伍抵达出口',
+                            failure: '队伍全灭',
+                            activeApex: '米诺斯',
+                            route: '中庭或排污管道',
+                            timeLimit: '',
+                            stakes: '队伍生存与迷宫核心',
+                            phase: 'exploration',
+                            closure: 'open',
+                            closureReason: '',
+                        },
+                        amendments: [],
+                    },
+                }) + '</ContinuityState>';
+            }
+            return '<ContinuityState>' + JSON.stringify({
+                turn: 2,
+                threads: [],
+                scenarioPlan: {
+                    amendments: [{
+                        id: 'AMEND-界外猎手-01',
+                        causeType: 'world_chain',
+                        impact: 'structural',
+                        sourceThreadIds: ['WE-界外猎手-01'],
+                        trigger: '核心爆炸放大了已被持续追踪的信号',
+                        mechanism: '推进多轮的界外猎手沿已锁定信号抵达出口，接管撤离阶段终局冲突',
+                        evidence: ['WE-界外猎手-01已有进展', '核心爆炸是正文事实'],
+                        changes: [{
+                            field: 'activeApex',
+                            before: '米诺斯',
+                            after: '界外猎手（外部因果介入）',
+                        }, {
+                            field: 'phase',
+                            before: 'exploration',
+                            after: 'climax',
+                        }],
+                        preserves: ['米诺斯已被击败且胜利有效', '迷宫核心无需重复摧毁'],
+                        visibility: 'observed',
+                        reversible: false,
+                    }],
+                },
+            }) + '</ContinuityState>';
+        };
+        await window.MvuAutoDoctorAPI.clearContinuityState();
+        const initialized = await window.MvuAutoDoctorAPI.runContinuity();
+        const amended = await window.MvuAutoDoctorAPI.runContinuity();
+        const state = window.MvuAutoDoctorAPI.getContinuityState();
+        const injection = Object.values(t.calls.extensionPrompts)
+            .map((item) => item.content)
+            .find((content) => content.includes('Parallel_Continuity_Bridge')) || '';
+        return {
+            initialized,
+            amended,
+            state,
+            injection,
+            continuitySystem: t.calls.continuitySystem,
+            continuityUser: t.calls.continuityUser,
+        };
+    });
+    assert.equal(scenarioPlanResult.initialized.status, 'applied');
+    assert.equal(scenarioPlanResult.amended.status, 'applied');
+    assert.equal(scenarioPlanResult.state.version, 5);
+    assert.equal(scenarioPlanResult.state.scenarioPlan.revision, 1);
+    assert.equal(
+        scenarioPlanResult.state.scenarioPlan.current.activeApex,
+        '界外猎手（外部因果介入）',
+    );
+    assert.equal(
+        scenarioPlanResult.state.scenarioPlan.baseline.activeApex,
+        '米诺斯',
+        '修订不得覆盖初始副本基线',
+    );
+    assert.equal(
+        scenarioPlanResult.state.scenarioPlan.amendments[0].sourceRef.index,
+        2,
+        '规划修订必须记录可返回正文楼层的来源指针',
+    );
+    assert.equal(
+        scenarioPlanResult.state.scenarioPlan.baselineSourceRef.index,
+        2,
+        '规划基线必须记录建立时对应的正文楼层',
+    );
+    assert.match(scenarioPlanResult.continuitySystem, /软结构，不是固定剧本/u);
+    assert.match(scenarioPlanResult.continuitySystem, /临时编出的气氛、拦路怪/u);
+    assert.match(scenarioPlanResult.continuityUser, /"scenarioPlan"/u);
+    assert.match(scenarioPlanResult.injection, /当前副本\/场景规划/u);
+    assert.match(scenarioPlanResult.injection, /米诺斯已被击败且胜利有效/u);
+    assert.match(scenarioPlanResult.injection, /禁止为了延长副本临时追加更强怪物/u);
+    await scenarioPlanPage.click('#mvuad-floating-orb');
+    await scenarioPlanPage.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="threads"]');
+    const scenarioPlanUi = await scenarioPlanPage.evaluate(() => {
+        const card = document.querySelector('#mvuad-floating-panel .mvuad-scenario-card');
+        const summary = card?.querySelector(':scope > summary');
+        return {
+            exists: !!card,
+            summaryHeight: summary?.getBoundingClientRect().height || 0,
+            text: card?.textContent || '',
+            amendments: card?.querySelectorAll('.mvuad-scenario-amendment').length || 0,
+        };
+    });
+    assert.equal(scenarioPlanUi.exists, true);
+    assert.ok(
+        scenarioPlanUi.summaryHeight >= 42,
+        `scenario plan summary must expose a 42px mobile touch target (${scenarioPlanUi.summaryHeight}px)`,
+    );
+    assert.equal(scenarioPlanUi.amendments, 1);
+    assert.match(scenarioPlanUi.text, /初始基线（不可覆盖）/u);
+    assert.match(scenarioPlanUi.text, /米诺斯已被击败且胜利有效/u);
+    await scenarioPlanPage.close();
 
     const invalidContinuityPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await invalidContinuityPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

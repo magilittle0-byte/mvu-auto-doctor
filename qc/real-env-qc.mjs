@@ -100,6 +100,34 @@ function loadAndValidateReport() {
         || forum.totalReplyCount < 1
     ) fail('real forum interaction evidence is incomplete');
 
+    const scenarioPlan = report.checks?.scenarioPlan;
+    if (
+        !scenarioPlan
+        || scenarioPlan.baselineCreated !== true
+        || scenarioPlan.baselineImmutable !== true
+        || scenarioPlan.baselineEvidenceCount < 1
+        || scenarioPlan.baselineSourceRefVerified !== true
+        || scenarioPlan.playerActionAmendmentApplied !== true
+        || scenarioPlan.revisionAfterAmendment < 1
+        || scenarioPlan.amendmentCauseType !== 'player_action'
+        || scenarioPlan.sourceThreadCount < 1
+        || scenarioPlan.triggerVerified !== true
+        || scenarioPlan.mechanismVerified !== true
+        || scenarioPlan.evidenceCount < 1
+        || scenarioPlan.changedFieldCount < 1
+        || scenarioPlan.exactBeforeAfterVerified !== true
+        || scenarioPlan.preservedAchievementCount < 1
+        || scenarioPlan.amendmentSourceRefVerified !== true
+        || scenarioPlan.uiTraceVisible !== true
+        || scenarioPlan.summaryTouchTargetHeight < 42
+        || scenarioPlan.sameTurnWorldRewriteRejected !== true
+        || scenarioPlan.matureWorldChainAccepted !== true
+        || scenarioPlan.missingPreservesRejected !== true
+        || scenarioPlan.apexRemovalAllowed !== true
+        || scenarioPlan.terminalReopenRejected !== true
+        || scenarioPlan.promptInjectionVerified !== true
+    ) fail('versioned scenario-plan evidence is incomplete');
+
     const mobile = report.checks?.mobile;
     if (
         !mobile

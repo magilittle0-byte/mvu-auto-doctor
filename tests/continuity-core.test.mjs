@@ -7,8 +7,11 @@ import {
     buildContinuityInjection,
     continuityLifecycleStats,
     continuityLedgerView,
+    continuityScenarioDigest,
     continuityWorldDigest,
+    emptyScenarioPlan,
     enforceContinuityPolicy,
+    enforceScenarioPlanPolicy,
     extractContinuityMarkers,
     latestUndoRecord,
     markRepairUndone,
@@ -806,6 +809,347 @@ const parsedWorldDelta = parseContinuityOutput(`
 }
 </ContinuityState>`, { chatId: 'world-chat' });
 assert.equal(parsedWorldDelta.raw.world.winds[0].id, 'WIND-01');
+
+const legacyWithoutScenario = normalizeContinuityState({
+    version: 4,
+    chatId: 'legacy-scenario',
+    turn: 3,
+    threads: [],
+});
+assert.equal(legacyWithoutScenario.version, 5);
+assert.deepEqual(legacyWithoutScenario.scenarioPlan, {
+    ...emptyScenarioPlan(),
+    createdTurn: 3,
+    updatedTurn: 3,
+});
+
+const initialScenarioCandidate = {
+    status: 'active',
+    instanceId: 'SCN-MINOS-01',
+    title: '米诺斯回廊',
+    baselineEvidence: [
+        'MVU主任务：摧毁迷宫核心并从出口撤离',
+        '正文已确认米诺斯是迷宫守卫与原生终局敌人',
+    ],
+    baseline: {
+        goal: '摧毁迷宫核心并从出口撤离',
+        completion: '迷宫核心失效且队伍抵达出口',
+        failure: '队伍全灭或撤离时限耗尽',
+        activeApex: '米诺斯',
+        route: '中庭或排污管道均可抵达核心区',
+        timeLimit: '日落前',
+        stakes: '队伍生存与迷宫核心',
+        phase: 'exploration',
+        closure: 'open',
+        closureReason: '',
+    },
+    amendments: [],
+};
+const initializedScenario = enforceScenarioPlanPolicy(
+    emptyScenarioPlan(),
+    initialScenarioCandidate,
+    { turn: 5 },
+);
+assert.equal(initializedScenario.status, 'active');
+assert.equal(initializedScenario.revision, 0);
+assert.equal(initializedScenario.current.activeApex, '米诺斯');
+assert.deepEqual(initializedScenario.current, initializedScenario.baseline);
+const initializedThroughContinuity = enforceContinuityPolicy(
+    normalizeContinuityState({ chatId: 'scenario-init-chat', turn: 4 }),
+    normalizeContinuityState({
+        chatId: 'scenario-init-chat',
+        turn: 5,
+        scenarioPlan: initialScenarioCandidate,
+    }),
+    { maxThreads: 8 },
+);
+assert.equal(initializedThroughContinuity.scenarioPlan.instanceId, 'SCN-MINOS-01');
+assert.equal(initializedThroughContinuity.lastTick.threadId, 'SCENARIO_PLAN');
+assert.match(initializedThroughContinuity.lastTick.reason, /基线已建立/u);
+
+const rejectedUnfoundedInitialization = enforceScenarioPlanPolicy(
+    emptyScenarioPlan(),
+    {
+        ...initialScenarioCandidate,
+        baselineEvidence: [],
+    },
+    { turn: 5 },
+);
+assert.equal(rejectedUnfoundedInitialization.status, 'inactive');
+
+const matureScenarioThread = normalizeContinuityState({
+    chatId: 'scenario-chat',
+    turn: 8,
+    scenarioPlan: initializedScenario,
+    threads: [{
+        id: 'WE-OUTER-HUNTER-01',
+        title: '界外猎手追踪核心信号',
+        origin: 'setting_linked',
+        relation: 'latent',
+        stage: 'advancing',
+        stageProgress: 4,
+        summary: '猎手已定位迷宫所在区域',
+        offscreenBeat: '信标被核心爆炸进一步放大',
+        seedBasis: '世界书：界外猎手追踪异常能量',
+        createdTurn: 4,
+        lastAdvancedTurn: 7,
+    }],
+}, { maxThreads: 8 });
+const strongerApexAmendment = {
+    amendments: [{
+        id: 'AMEND-OUTER-HUNTER-01',
+        causeType: 'world_chain',
+        impact: 'structural',
+        sourceThreadIds: ['WE-OUTER-HUNTER-01'],
+        trigger: '迷宫核心爆炸将追踪信号放大并暴露了出口',
+        mechanism: '已持续追踪多轮的界外猎手沿信号抵达，接管撤离阶段的终局冲突',
+        evidence: [
+            'WE-OUTER-HUNTER-01已推进至4/9',
+            '迷宫核心爆炸是已发生正文事实',
+        ],
+        changes: [{
+            field: 'activeApex',
+            before: '米诺斯',
+            after: '界外猎手（外部因果介入）',
+        }, {
+            field: 'phase',
+            before: 'exploration',
+            after: 'climax',
+        }],
+        preserves: [
+            '米诺斯已经被击败，胜利与战利品保持有效',
+            '迷宫核心已经失效，不要求重复完成',
+        ],
+        visibility: 'observed',
+        reversible: false,
+    }],
+};
+const amendedScenario = enforceScenarioPlanPolicy(
+    matureScenarioThread.scenarioPlan,
+    strongerApexAmendment,
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 9,
+    },
+);
+assert.equal(amendedScenario.revision, 1);
+assert.equal(amendedScenario.current.activeApex, '界外猎手（外部因果介入）');
+assert.equal(amendedScenario.baseline.activeApex, '米诺斯');
+assert.match(amendedScenario.amendments[0].mechanism, /持续追踪多轮/u);
+const amendedThroughContinuity = enforceContinuityPolicy(
+    matureScenarioThread,
+    normalizeContinuityState({
+        chatId: 'scenario-chat',
+        turn: 9,
+        scenarioPlan: strongerApexAmendment,
+    }),
+    { maxThreads: 8 },
+);
+assert.equal(amendedThroughContinuity.scenarioPlan.revision, 1);
+assert.equal(
+    amendedThroughContinuity.scenarioPlan.current.activeApex,
+    '界外猎手（外部因果介入）',
+);
+const amendedWithSource = attachChangedSourceRefs(
+    matureScenarioThread,
+    amendedThroughContinuity,
+    {
+        chatId: 'scenario-chat',
+        messageId: 'message-9',
+        index: 9,
+        swipeId: 0,
+        hash: 'scenario-hash',
+    },
+);
+assert.equal(
+    amendedWithSource.scenarioPlan.amendments.at(-1).sourceRef.messageId,
+    'message-9',
+);
+
+const sameTurnWorldThread = normalizeContinuityState({
+    turn: 9,
+    threads: [{
+        id: 'WE-SUDDEN-GRINDER-01',
+        title: '临时出现的粉碎机',
+        origin: 'main_derivative',
+        stage: 'seeded',
+        summary: '回复刚刚临时生成了一台拦路粉碎机',
+        seedBasis: '本回合AI回复',
+        createdTurn: 9,
+        lastAdvancedTurn: 9,
+    }],
+}).threads;
+const rejectedSameTurnEscalation = enforceScenarioPlanPolicy(
+    matureScenarioThread.scenarioPlan,
+    {
+        amendments: [{
+            ...strongerApexAmendment.amendments[0],
+            id: 'AMEND-SUDDEN-GRINDER-01',
+            sourceThreadIds: ['WE-SUDDEN-GRINDER-01'],
+            trigger: '排污管道里突然出现粉碎机',
+            mechanism: '临时障碍被口头宣布成更高层最终Boss',
+            evidence: ['本回合回复刚刚写出粉碎机'],
+            changes: [{
+                field: 'activeApex',
+                before: '米诺斯',
+                after: '真正的最终粉碎机',
+            }],
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: [...matureScenarioThread.threads, ...sameTurnWorldThread],
+        turn: 9,
+    },
+);
+assert.equal(rejectedSameTurnEscalation.revision, 0);
+assert.equal(rejectedSameTurnEscalation.current.activeApex, '米诺斯');
+
+const rejectedWithoutPreservation = enforceScenarioPlanPolicy(
+    matureScenarioThread.scenarioPlan,
+    {
+        amendments: [{
+            ...strongerApexAmendment.amendments[0],
+            id: 'AMEND-NO-PRESERVE-01',
+            preserves: [],
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 9,
+    },
+);
+assert.equal(rejectedWithoutPreservation.revision, 0);
+
+const removedApexScenario = enforceScenarioPlanPolicy(
+    matureScenarioThread.scenarioPlan,
+    {
+        amendments: [{
+            id: 'AMEND-REMOVE-APEX-01',
+            causeType: 'world_chain',
+            impact: 'structural',
+            sourceThreadIds: ['WE-OUTER-HUNTER-01'],
+            trigger: '已推进的外部干预切断了米诺斯的能源供给',
+            mechanism: '终局守卫失去维持形体的条件，本副本不再存在固定战斗型Boss',
+            evidence: ['WE-OUTER-HUNTER-01已实际干预核心信号'],
+            changes: [{
+                field: 'activeApex',
+                before: '米诺斯',
+                after: '',
+            }],
+            preserves: ['此前取得的路线与核心情报仍然有效'],
+            visibility: 'observed',
+            reversible: false,
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 9,
+    },
+);
+assert.equal(
+    removedApexScenario.current.activeApex,
+    '',
+    '可追溯修订必须允许取消Boss，而不是只能不断升级威胁',
+);
+
+const invalidEnumScenario = enforceScenarioPlanPolicy(
+    matureScenarioThread.scenarioPlan,
+    {
+        amendments: [{
+            ...strongerApexAmendment.amendments[0],
+            id: 'AMEND-INVALID-PHASE-01',
+            changes: [{
+                field: 'phase',
+                before: 'exploration',
+                after: 'endless-grind',
+            }],
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 9,
+    },
+);
+assert.equal(invalidEnumScenario.revision, 0);
+
+const completedScenario = enforceScenarioPlanPolicy(
+    amendedScenario,
+    {
+        amendments: [{
+            id: 'AMEND-CLOSE-01',
+            causeType: 'world_chain',
+            impact: 'structural',
+            sourceThreadIds: ['WE-OUTER-HUNTER-01'],
+            trigger: '界外猎手已被解决且队伍抵达出口',
+            mechanism: '当前完成条件全部满足，副本进入不可复开的结算终态',
+            evidence: ['正文确认终局冲突结束', '正文确认队伍抵达出口'],
+            changes: [{
+                field: 'closure',
+                before: 'open',
+                after: 'completed',
+            }, {
+                field: 'phase',
+                before: 'climax',
+                after: 'completed',
+            }, {
+                field: 'closureReason',
+                before: '',
+                after: '核心失效、终局冲突结束且队伍已撤离',
+            }],
+            preserves: ['米诺斯与界外猎手的胜利均保留', '所有已取得战利品有效'],
+            visibility: 'observed',
+            reversible: false,
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 10,
+    },
+);
+assert.equal(completedScenario.status, 'completed');
+assert.equal(completedScenario.revision, 2);
+const cannotReopenCompleted = enforceScenarioPlanPolicy(
+    completedScenario,
+    {
+        amendments: [{
+            ...strongerApexAmendment.amendments[0],
+            id: 'AMEND-REOPEN-01',
+            changes: [{
+                field: 'closure',
+                before: 'completed',
+                after: 'open',
+            }],
+        }],
+    },
+    {
+        beforeThreads: matureScenarioThread.threads,
+        afterThreads: matureScenarioThread.threads,
+        turn: 11,
+    },
+);
+assert.deepEqual(cannotReopenCompleted, completedScenario);
+
+const scenarioState = normalizeContinuityState({
+    ...matureScenarioThread,
+    scenarioPlan: amendedScenario,
+});
+const scenarioInjection = buildContinuityInjection(scenarioState);
+assert.match(scenarioInjection, /当前副本\/场景规划/u);
+assert.match(scenarioInjection, /禁止为了延长副本临时追加更强怪物/u);
+assert.match(scenarioInjection, /米诺斯已经被击败/u);
+assert.notEqual(
+    continuityScenarioDigest(matureScenarioThread),
+    continuityScenarioDigest(scenarioState),
+);
+const scenarioLedger = continuityLedgerView(scenarioState);
+assert.equal(scenarioLedger.scenarioPlan.statusLabel, '进行中');
+assert.equal(scenarioLedger.scenarioPlan.latestAmendment.causeLabel, '世界因果链');
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',

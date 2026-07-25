@@ -118,6 +118,42 @@ At 390×844:
 
 Also recheck the default desktop viewport when the repair affects shared layout.
 
+## 5A. Versioned scenario-plan checks
+
+Run this section for every major continuity/world-engine repair. It is also mandatory
+whenever scenario goals, completion/failure conditions, apex threats, routes, time
+limits, stakes, phases, or closure behavior can change.
+
+1. Use a disposable bounded-scenario chat with explicit on-page evidence. A real
+   model world pass may create `scenarioPlan` only when that evidence is sufficient.
+   Require an active v0 plan, at least one baseline evidence item, and a
+   `baselineSourceRef` that resolves to the processed assistant message.
+2. Confirm the event panel exposes the current version and the immutable baseline,
+   including the original goal, completion condition, apex threat, route, evidence,
+   and source floor. The scenario summary target must be at least 42px high.
+3. Produce one genuine main-model turn in which a player decision materially changes
+   the established structure through an existing `main_derivative` event. Run the
+   real world model again and require v1 or later with:
+   `causeType=player_action`, one or more `sourceThreadIds`, a trigger, mechanism,
+   evidence, exact before/after field changes, preserved achievements, and a source
+   pointer back to that genuine assistant turn.
+4. Confirm the current version changes while every v0 baseline field remains
+   unchanged. Expand the revision history and verify the cause, evidence, field
+   deltas, preserved achievements, and source floor are readable at 390x844.
+5. The automated suite must prove the complementary rejection paths: a same-turn
+   improvised `world_chain` cannot rewrite the plan; missing preservation evidence,
+   an incorrect `before` value, invalid phases, and reopening a terminal plan are
+   rejected. It must also prove that a mature pre-existing world chain may amend the
+   plan, and that an apex threat can be removed as well as escalated.
+6. Confirm the final main-chat injection describes the active plan as a soft
+   structure, carries accepted revisions, forbids unsourced extra bosses/goals, and
+   does not force a branch into every reply.
+
+Do not manufacture a stronger boss merely to exercise the gate. A real apex
+escalation is valid only when the selected QC chat already contains a mature,
+pre-existing source chain. Otherwise the deterministic policy test is the required
+evidence for that path.
+
 ## 6. Automated suite
 
 Run the complete suite and wait for the browser runtime file to finish:

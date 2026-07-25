@@ -1191,6 +1191,75 @@
 #mvuad-floating-panel .mvuad-thread-field-label { font-weight: 600; opacity: 0.7; }
 #mvuad-floating-panel .mvuad-thread-field-value { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-plan {
+    display: grid;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-plan[hidden] {
+    display: none;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-card {
+    border: 1px solid color-mix(in srgb, #d6a94f 62%, var(--SmartThemeBorderColor));
+    border-left: 3px solid #d6a94f;
+    border-radius: 9px;
+    background: color-mix(in srgb, #d6a94f 8%, var(--SmartThemeBlurTintColor));
+    overflow: clip;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-card > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 42px;
+    padding: 9px 10px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-card > summary span {
+    flex: 0 0 auto;
+    font-size: 0.78em;
+    opacity: 0.72;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-card[open] > summary {
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-body {
+    display: grid;
+    gap: 7px;
+    padding: 8px 10px 10px;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-history {
+    display: grid;
+    gap: 6px;
+    padding-top: 3px;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-amendment {
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 76%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 3%, transparent);
+    overflow: hidden;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-amendment > summary {
+    min-height: 42px;
+    padding: 8px;
+    cursor: pointer;
+    font-size: 0.84em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) .mvuad-scenario-amendment-body {
+    padding: 0 8px 3px;
+}
+
 #mvuad-floating-panel :is(button, summary):focus-visible {
     outline: 2px solid color-mix(in srgb, var(--mvuad-accent) 60%, transparent);
     outline-offset: -2px;

@@ -79,6 +79,78 @@ const ENEMY_STATES = new Set(['watching', 'preparing', 'acting', 'dormant', 'res
 const SECRET_STATES = new Set(['hidden', 'leaking', 'exposed', 'resolved']);
 const ECONOMY_STATES = ['boom', 'stable', 'strained', 'recession', 'crisis'];
 const REPUTATION_KEYS = ['authority', 'public', 'underworld', 'professional'];
+const SCENARIO_STATUSES = new Set([
+    'inactive',
+    'active',
+    'closing',
+    'completed',
+    'failed',
+]);
+const SCENARIO_PHASES = new Set([
+    'setup',
+    'exploration',
+    'escalation',
+    'climax',
+    'aftermath',
+    'closing',
+    'completed',
+    'failed',
+]);
+const SCENARIO_CLOSURES = new Set(['open', 'ready', 'blocked', 'completed', 'failed']);
+const SCENARIO_CAUSE_TYPES = new Set([
+    'player_action',
+    'world_chain',
+    'setting_fact',
+    'system_rule',
+]);
+const SCENARIO_IMPACTS = new Set(['minor', 'material', 'structural']);
+const SCENARIO_FIELDS = new Set([
+    'goal',
+    'completion',
+    'failure',
+    'activeApex',
+    'route',
+    'timeLimit',
+    'stakes',
+    'phase',
+    'closure',
+    'closureReason',
+]);
+const SCENARIO_TEXT_FIELDS = [
+    'goal',
+    'completion',
+    'failure',
+    'activeApex',
+    'route',
+    'timeLimit',
+    'stakes',
+];
+
+export const SCENARIO_STATUS_LABELS = Object.freeze({
+    inactive: '未建立',
+    active: '进行中',
+    closing: '可收束',
+    completed: '已完成',
+    failed: '已失败',
+});
+
+export const SCENARIO_PHASE_LABELS = Object.freeze({
+    setup: '建立',
+    exploration: '探索',
+    escalation: '发展',
+    climax: '终局',
+    aftermath: '余波',
+    closing: '收束',
+    completed: '完成',
+    failed: '失败',
+});
+
+export const SCENARIO_CAUSE_LABELS = Object.freeze({
+    player_action: '玩家行动',
+    world_chain: '世界因果链',
+    setting_fact: '既有设定事实',
+    system_rule: '系统规则',
+});
 
 export const CONTINUITY_STAGE_LABELS = Object.freeze({
     seeded: '已埋设',
@@ -230,6 +302,153 @@ function boundedInteger(value, minimum, maximum, fallback) {
 function cleanId(value, fallback) {
     return cleanText(value || fallback, 90)
         .replace(/[^\p{L}\p{N}_.:\-]/gu, '-');
+}
+
+function normalizeScenarioField(field, value) {
+    if (field === 'phase') {
+        return SCENARIO_PHASES.has(value) ? value : 'setup';
+    }
+    if (field === 'closure') {
+        return SCENARIO_CLOSURES.has(value) ? value : 'open';
+    }
+    return cleanText(value, field === 'closureReason' ? 700 : 500);
+}
+
+function normalizeScenarioSnapshot(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        ...Object.fromEntries(
+            SCENARIO_TEXT_FIELDS.map((field) => [
+                field,
+                normalizeScenarioField(field, source[field]),
+            ]),
+        ),
+        phase: normalizeScenarioField('phase', source.phase),
+        closure: normalizeScenarioField('closure', source.closure),
+        closureReason: normalizeScenarioField('closureReason', source.closureReason),
+    };
+}
+
+function normalizeScenarioChange(value) {
+    if (!value || typeof value !== 'object' || !SCENARIO_FIELDS.has(value.field)) {
+        return null;
+    }
+    const field = value.field;
+    if (
+        (field === 'phase' && (
+            !SCENARIO_PHASES.has(value.before)
+            || !SCENARIO_PHASES.has(value.after)
+        ))
+        || (field === 'closure' && (
+            !SCENARIO_CLOSURES.has(value.before)
+            || !SCENARIO_CLOSURES.has(value.after)
+        ))
+    ) {
+        return null;
+    }
+    return {
+        field,
+        before: normalizeScenarioField(field, value.before),
+        after: normalizeScenarioField(field, value.after),
+    };
+}
+
+function normalizeScenarioAmendment(value, index, turn) {
+    if (!value || typeof value !== 'object') return null;
+    const id = cleanId(value.id, '');
+    if (!id) return null;
+    const changes = [];
+    const changedFields = new Set();
+    let invalidChanges = 0;
+    for (const raw of Array.isArray(value.changes) ? value.changes : []) {
+        const change = normalizeScenarioChange(raw);
+        if (!change || changedFields.has(change.field)) {
+            invalidChanges += 1;
+            continue;
+        }
+        changedFields.add(change.field);
+        changes.push(change);
+        if (changes.length >= 10) break;
+    }
+    return {
+        id,
+        revision: boundedInteger(value.revision, 1, 999, index + 1),
+        turn: boundedInteger(value.turn, 0, Number.MAX_SAFE_INTEGER, turn),
+        causeType: SCENARIO_CAUSE_TYPES.has(value.causeType) ? value.causeType : '',
+        impact: SCENARIO_IMPACTS.has(value.impact) ? value.impact : '',
+        sourceThreadIds: cleanList(value.sourceThreadIds, 8),
+        trigger: cleanText(value.trigger, 500),
+        mechanism: cleanText(value.mechanism, 700),
+        evidence: cleanList(value.evidence, 8),
+        changes,
+        ...(invalidChanges ? { invalidChanges } : {}),
+        preserves: cleanList(value.preserves, 10),
+        visibility: KNOWLEDGE.has(value.visibility) ? value.visibility : '',
+        reversible: value.reversible !== false,
+        sourceRef: normalizeSourceRef(value.sourceRef),
+    };
+}
+
+export function emptyScenarioPlan() {
+    return {
+        status: 'inactive',
+        instanceId: '',
+        title: '',
+        revision: 0,
+        baselineEvidence: [],
+        baselineSourceRef: null,
+        baseline: normalizeScenarioSnapshot({}),
+        current: normalizeScenarioSnapshot({}),
+        amendments: [],
+        createdTurn: 0,
+        updatedTurn: 0,
+    };
+}
+
+export function normalizeScenarioPlan(value, { turn = 0 } = {}) {
+    const source = value && typeof value === 'object' ? value : {};
+    const amendments = [];
+    const used = new Set();
+    for (const raw of Array.isArray(source.amendments) ? source.amendments : []) {
+        const amendment = normalizeScenarioAmendment(raw, amendments.length, turn);
+        if (!amendment || used.has(amendment.id)) continue;
+        used.add(amendment.id);
+        amendments.push(amendment);
+        if (amendments.length >= 24) break;
+    }
+    const baseline = normalizeScenarioSnapshot(source.baseline);
+    const current = normalizeScenarioSnapshot(source.current || source.baseline);
+    const status = SCENARIO_STATUSES.has(source.status) ? source.status : 'inactive';
+    return {
+        status,
+        instanceId: cleanId(source.instanceId, ''),
+        title: cleanText(source.title, 160),
+        revision: boundedInteger(
+            source.revision,
+            0,
+            999,
+            amendments.length,
+        ),
+        baselineEvidence: cleanList(source.baselineEvidence, 10),
+        baselineSourceRef: normalizeSourceRef(source.baselineSourceRef),
+        ...(
+            source.baseline
+            && (
+                (source.baseline.phase != null && !SCENARIO_PHASES.has(source.baseline.phase))
+                || (
+                    source.baseline.closure != null
+                    && !SCENARIO_CLOSURES.has(source.baseline.closure)
+                )
+            )
+                ? { invalidBaseline: true }
+                : {}
+        ),
+        baseline,
+        current,
+        amendments,
+        createdTurn: boundedInteger(source.createdTurn, 0, Number.MAX_SAFE_INTEGER, turn),
+        updatedTurn: boundedInteger(source.updatedTurn, 0, Number.MAX_SAFE_INTEGER, turn),
+    };
 }
 
 function normalizeWorldItemBase(value, fallbackId, turn) {
@@ -471,7 +690,7 @@ export function normalizeWorldState(value, { turn = 0 } = {}) {
 
 export function emptyContinuityState(chatId = '') {
     return {
-        version: 4,
+        version: 5,
         chatId: cleanText(chatId, 180),
         turn: 0,
         lastTick: {
@@ -483,6 +702,7 @@ export function emptyContinuityState(chatId = '') {
         lastSource: null,
         threads: [],
         world: emptyWorldState(),
+        scenarioPlan: emptyScenarioPlan(),
         updatedAt: 0,
     };
 }
@@ -647,13 +867,14 @@ export function normalizeContinuityState(value, {
         ))
         .slice(0, resolvedLimit);
     return {
-        version: 4,
+        version: 5,
         chatId: cleanText(chatId || source.chatId, 180),
         turn,
         lastTick: normalizeTick(source.lastTick, turn),
         lastSource: normalizeSourceRef(source.lastSource),
         threads: [...active, ...dormant, ...resolved],
         world: normalizeWorldState(source.world, { turn }),
+        scenarioPlan: normalizeScenarioPlan(source.scenarioPlan, { turn }),
         droppedCount: overflow.length,
         deferredCount: dormant.length,
         updatedAt: boundedInteger(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
@@ -819,6 +1040,16 @@ export function continuityLedgerView(value, {
         isSpoiler: thread.isSpoiler,
     }))).slice(0, 16);
     const world = clone(state.world);
+    const scenarioPlan = clone(state.scenarioPlan);
+    scenarioPlan.statusLabel = SCENARIO_STATUS_LABELS[scenarioPlan.status]
+        || scenarioPlan.status;
+    scenarioPlan.phaseLabel = SCENARIO_PHASE_LABELS[scenarioPlan.current.phase]
+        || scenarioPlan.current.phase;
+    scenarioPlan.amendments = scenarioPlan.amendments.map((item) => ({
+        ...item,
+        causeLabel: SCENARIO_CAUSE_LABELS[item.causeType] || item.causeType,
+    }));
+    scenarioPlan.latestAmendment = scenarioPlan.amendments.at(-1) || null;
     const visibleWorldCount = [
         ...world.trends,
         ...world.factions,
@@ -840,6 +1071,7 @@ export function continuityLedgerView(value, {
         resolved,
         echoes,
         world,
+        scenarioPlan,
         worldCount: visibleWorldCount,
         worldCounts: {
             factions: world.factions.length,
@@ -884,12 +1116,30 @@ function stableWorldContent(value) {
     return JSON.stringify(copy);
 }
 
+function stableScenarioContent(value) {
+    const copy = clone(value);
+    delete copy.updatedTurn;
+    delete copy.baselineSourceRef;
+    for (const amendment of copy.amendments || []) {
+        delete amendment.sourceRef;
+    }
+    return JSON.stringify(copy);
+}
+
 export function continuityWorldDigest(state) {
     const normalized = normalizeContinuityState(state, {
         maxThreads: 24,
         maxResolved: 24,
     });
     return stableWorldContent(normalized.world);
+}
+
+export function continuityScenarioDigest(state) {
+    const normalized = normalizeContinuityState(state, {
+        maxThreads: 24,
+        maxResolved: 24,
+    });
+    return stableScenarioContent(normalized.scenarioPlan);
 }
 
 export function continuityLifecycleDigest(state) {
@@ -1186,6 +1436,176 @@ function threadHasMatureConvergence(thread, world) {
     return (thread.propagation || []).some((id) => publicRefs.has(id));
 }
 
+function scenarioStatusFromCurrent(current) {
+    if (current.closure === 'completed' || current.phase === 'completed') return 'completed';
+    if (current.closure === 'failed' || current.phase === 'failed') return 'failed';
+    if (current.closure === 'ready' || current.phase === 'closing') return 'closing';
+    return 'active';
+}
+
+function scenarioPlanIsInitializable(plan) {
+    return (
+        ['active', 'closing'].includes(plan.status)
+        && !plan.invalidBaseline
+        && !!plan.instanceId
+        && !!plan.title
+        && !!plan.baseline.goal
+        && !!plan.baseline.completion
+        && plan.baselineEvidence.length > 0
+    );
+}
+
+function scenarioSourceIsMature(thread) {
+    return !!(
+        thread
+        && (
+            ['manifested', 'resolved'].includes(thread.stage)
+            || Number(thread.stageProgress) >= 2
+            || (thread.sourceRefs || []).length > 0
+        )
+        && !!(thread.seedBasis || thread.summary || thread.offscreenBeat)
+    );
+}
+
+export function enforceScenarioPlanPolicy(previous, candidate, {
+    beforeThreads = [],
+    afterThreads = [],
+    turn = 0,
+} = {}) {
+    const before = normalizeScenarioPlan(previous, { turn });
+    const proposed = normalizeScenarioPlan(candidate, { turn });
+    if (before.status === 'inactive') {
+        if (!scenarioPlanIsInitializable(proposed)) return before;
+        const baseline = normalizeScenarioSnapshot(proposed.baseline);
+        const current = normalizeScenarioSnapshot(baseline);
+        return normalizeScenarioPlan({
+            status: scenarioStatusFromCurrent(current),
+            instanceId: proposed.instanceId,
+            title: proposed.title,
+            revision: 0,
+            baselineEvidence: proposed.baselineEvidence,
+            baselineSourceRef: proposed.baselineSourceRef,
+            baseline,
+            current,
+            amendments: [],
+            createdTurn: turn,
+            updatedTurn: turn,
+        }, { turn });
+    }
+    if (['completed', 'failed'].includes(before.status)) return before;
+
+    const oldAmendmentIds = new Set(before.amendments.map((item) => item.id));
+    const oldThreads = new Map(beforeThreads.map((thread) => [thread.id, thread]));
+    const allThreads = new Map(afterThreads.map((thread) => [thread.id, thread]));
+    for (const thread of beforeThreads) {
+        if (!allThreads.has(thread.id)) allThreads.set(thread.id, thread);
+    }
+    const structuralFields = new Set([
+        'goal',
+        'completion',
+        'failure',
+        'activeApex',
+        'closure',
+    ]);
+    const requested = proposed.amendments
+        .filter((item) => !oldAmendmentIds.has(item.id))
+        .slice(0, 1);
+    if (!requested.length) return before;
+    const amendment = clone(requested[0]);
+    const sources = amendment.sourceThreadIds
+        .map((id) => allThreads.get(id))
+        .filter(Boolean);
+    if (
+        amendment.invalidChanges
+        || !amendment.causeType
+        || !amendment.impact
+        || !amendment.visibility
+        || !amendment.trigger
+        || !amendment.mechanism
+        || !amendment.evidence.length
+        || !amendment.changes.length
+        || !amendment.sourceThreadIds.length
+        || sources.length !== amendment.sourceThreadIds.length
+    ) {
+        return before;
+    }
+    if (amendment.causeType === 'world_chain') {
+        const matureOldSources = amendment.sourceThreadIds
+            .map((id) => oldThreads.get(id))
+            .filter(scenarioSourceIsMature);
+        if (matureOldSources.length !== amendment.sourceThreadIds.length) return before;
+    } else if (amendment.causeType === 'player_action') {
+        const hasDirectPlayerDerivative = sources.some((thread) => (
+            thread.origin === 'main_derivative'
+            && !!thread.seedBasis
+            && (thread.causedBy || []).length > 0
+        ));
+        if (!hasDirectPlayerDerivative) return before;
+    } else {
+        const hasPriorTrace = amendment.sourceThreadIds.some((id) => (
+            scenarioSourceIsMature(oldThreads.get(id))
+        ));
+        if (!hasPriorTrace) return before;
+    }
+
+    const current = clone(before.current);
+    const acceptedChanges = [];
+    const requiredNonEmptyFields = new Set(['goal', 'completion', 'phase', 'closure']);
+    for (const change of amendment.changes) {
+        const actualBefore = normalizeScenarioField(change.field, current[change.field]);
+        if (
+            change.before !== actualBefore
+            || change.after === actualBefore
+            || (
+                requiredNonEmptyFields.has(change.field)
+                && !String(change.after || '').trim()
+            )
+        ) {
+            continue;
+        }
+        current[change.field] = change.after;
+        acceptedChanges.push({ ...change, before: actualBefore });
+    }
+    if (acceptedChanges.length !== amendment.changes.length) return before;
+    const isStructural = acceptedChanges.some((change) => (
+        structuralFields.has(change.field)
+    ));
+    if (
+        (isStructural || amendment.impact === 'structural')
+        && !amendment.preserves.length
+    ) return before;
+    if (
+        ['ready', 'completed', 'failed'].includes(current.closure)
+        && !current.closureReason
+    ) return before;
+    if (
+        (current.closure === 'completed' && current.phase !== 'completed')
+        || (current.closure === 'failed' && current.phase !== 'failed')
+        || (current.phase === 'completed' && current.closure !== 'completed')
+        || (current.phase === 'failed' && current.closure !== 'failed')
+    ) return before;
+    if (
+        before.current.closure === 'completed'
+        || before.current.closure === 'failed'
+        || before.current.phase === 'completed'
+        || before.current.phase === 'failed'
+    ) {
+        return before;
+    }
+
+    amendment.revision = before.revision + 1;
+    amendment.turn = turn;
+    amendment.changes = acceptedChanges;
+    return normalizeScenarioPlan({
+        ...before,
+        status: scenarioStatusFromCurrent(current),
+        revision: amendment.revision,
+        current,
+        amendments: [...before.amendments, amendment],
+        updatedTurn: turn,
+    }, { turn });
+}
+
 export function enforceContinuityPolicy(previous, candidate, {
     autonomy = 'living',
     allowAutonomous = true,
@@ -1341,6 +1761,17 @@ export function enforceContinuityPolicy(previous, candidate, {
         threads.push(fresh);
     }
 
+    const scenarioPlan = enforceScenarioPlanPolicy(
+        before.scenarioPlan,
+        after.scenarioPlan,
+        {
+            beforeThreads: before.threads,
+            afterThreads: threads,
+            turn: before.turn + 1,
+        },
+    );
+    const scenarioChanged = JSON.stringify(before.scenarioPlan)
+        !== JSON.stringify(scenarioPlan);
     let lastTick = clone(before.lastTick);
     if (selectedChangedId) {
         const changed = threads.find((thread) => thread.id === selectedChangedId);
@@ -1369,6 +1800,15 @@ export function enforceContinuityPolicy(previous, candidate, {
             threadId: created.id,
             reason: after.lastTick?.reason || created.seedBasis || '新的持续因果已经成立',
         };
+    } else if (scenarioChanged) {
+        lastTick = {
+            turn: before.turn + 1,
+            action: 'advanced',
+            threadId: 'SCENARIO_PLAN',
+            reason: scenarioPlan.revision > before.scenarioPlan.revision
+                ? `副本/场景规划已通过第 ${scenarioPlan.revision} 次可追溯修订`
+                : '副本/场景规划基线已建立',
+        };
     } else if (
         after.lastTick?.action === 'held'
         && after.lastTick.reason.length >= 8
@@ -1389,6 +1829,7 @@ export function enforceContinuityPolicy(previous, candidate, {
         lastTick,
         threads,
         world: policyWorld,
+        scenarioPlan,
     }, { chatId: before.chatId || after.chatId, maxThreads });
 }
 
@@ -1412,6 +1853,26 @@ export function attachChangedSourceRefs(previous, next, sourceRef) {
         }
         return thread;
     });
+    const previousPlan = normalizeScenarioPlan(previous?.scenarioPlan, {
+        turn: Number(previous?.turn) || 0,
+    });
+    const nextPlan = normalizeScenarioPlan(result.scenarioPlan, {
+        turn: Number(result?.turn) || 0,
+    });
+    if (ref && nextPlan.revision > previousPlan.revision) {
+        const newest = nextPlan.amendments.find(
+            (item) => item.revision === nextPlan.revision,
+        );
+        if (newest) newest.sourceRef = ref;
+    }
+    if (
+        ref
+        && previousPlan.status === 'inactive'
+        && nextPlan.status !== 'inactive'
+    ) {
+        nextPlan.baselineSourceRef = ref;
+    }
+    result.scenarioPlan = nextPlan;
     return result;
 }
 
@@ -1580,6 +2041,24 @@ export function buildContinuityInjection(state, {
         && (thread.effects.length || thread.rumors.length)
         && canReachMain(thread)
     ));
+    const scenario = normalized.scenarioPlan;
+    const hasScenarioPlan = scenario.status !== 'inactive' && !!scenario.instanceId;
+    const scenarioRows = hasScenarioPlan
+        ? [
+            `当前副本/场景规划[${scenario.instanceId}] ${scenario.title}；版本=v${scenario.revision}；状态=${SCENARIO_STATUS_LABELS[scenario.status] || scenario.status}；阶段=${SCENARIO_PHASE_LABELS[scenario.current.phase] || scenario.current.phase}；收束=${scenario.current.closure}`,
+            `当前主目标=${scenario.current.goal}；当前完成条件=${scenario.current.completion}；失败边界=${scenario.current.failure || '未单列'}`,
+            `当前终局冲突/最高威胁=${scenario.current.activeApex || '无固定战斗型终局'}；路线结构=${scenario.current.route || '由玩家选择形成'}；时限=${scenario.current.timeLimit || '无明确时限'}；代价/赌注=${scenario.current.stakes || '以已发生事实为准'}`,
+            scenario.current.closureReason
+                ? `当前收束判定依据=${scenario.current.closureReason}`
+                : '',
+            ...scenario.amendments.slice(-3).map((item) => (
+                `规划修订v${item.revision}[${item.id}]：原因=${SCENARIO_CAUSE_LABELS[item.causeType] || item.causeType}；`
+                + `来源=${item.sourceThreadIds.join('、')}；触发=${item.trigger}；机制=${item.mechanism}；`
+                + `变更=${item.changes.map((change) => `${change.field}:${change.before}→${change.after}`).join('，')}；`
+                + `保留既有成果=${item.preserves.join('；') || '无结构性改写'}`
+            )),
+        ].filter(Boolean)
+        : [];
     const visibleWorldRows = [
         ...normalized.world.trends
             .filter((item) => item.status === 'active' && item.knowledge !== 'hidden')
@@ -1631,7 +2110,12 @@ export function buildContinuityInjection(state, {
                 + `${item.fallout ? `；余波=${item.fallout}` : ''}`
             )),
     ].filter(Boolean).slice(0, 12);
-    if (!active.length && !aftermath.length && !visibleWorldRows.length) return '';
+    if (
+        !active.length
+        && !aftermath.length
+        && !visibleWorldRows.length
+        && !hasScenarioPlan
+    ) return '';
     const tickThread = normalized.threads.find(
         (thread) => thread.id === normalized.lastTick.threadId,
     );
@@ -1720,6 +2204,15 @@ export function buildContinuityInjection(state, {
         `本回合可自然采用0—${Math.max(0, Number(maxVisible) || 1)}条接口；没有合适叙事位置时必须采用0条，禁止为了证明世界引擎存在而生硬插入。`,
         '只可推动NPC、势力、环境、约定与敌方行动；禁止替玩家角色决定、说话、移动、消费资源或追加检定。',
         '外部预设、缝合怪或世界引擎安排的未来桥段都只是条件式导演提案：成功路线只在真实成功后启用，失败路线也必须保留，不得把计划目标当成已发生事实。',
+        hasScenarioPlan
+            ? '副本/场景规划是“当前有效、允许因果修订”的幕后结构，不是要求照演的剧本。玩家仍可自由选路、绕行、谈判、失败或制造意外；主回复不得自行改写规划，只有后续世界调度通过证据门槛并登记新版本后，新的目标、完成条件、终局威胁、路线、时限或赌注才生效。'
+            : '',
+        hasScenarioPlan
+            ? '必须尊重规划中已经取得的胜利与进度。当前完成条件已经满足或closure=ready/completed时，应自然结算或收束；禁止为了延长副本临时追加更强怪物、隐藏阶段、第二个“真正最终Boss”或新主目标。'
+            : '',
+        hasScenarioPlan
+            ? '比原终局威胁更强的新敌人只有在当前版本activeApex已经被可追溯修订时才能成为本副本的新终局；否则只能是另一个有独立因果与边界的后续世界事件。completed/failed的规划不可复开。'
+            : '',
         '裁决与规划必须隔离：先按当前卡/骰子前端规则锁定行动、DC、应消费的唯一骰值与成功等级，再选择匹配的剧情分支。若提供骰池或随机序列，只能按其规定位置/顺序取值，禁止为了配合规划浏览后挑选成功数字；禁止先写结果再补造检定。',
         'hidden信息只能形成符合传播路径的痕迹，不能让不知情角色突然全知。计划、传闻和未来可能性不得写成已经发生的事实。',
         'relation=independent或latent的事件默认只在后台账本推进，禁止为了展示伏笔而强行写入正文；只有传播、人物/势力、地点、资源、时间或因果证据通过账本校验并转为converging后，才会出现在这里。',
@@ -1729,6 +2222,7 @@ export function buildContinuityInjection(state, {
         visibleWorldRows.length
             ? '以下是已经公开或正在产生客观影响的世界表面，不是逐项播报清单；仅当当前人物、地点、资源或行动实际会接触时才自然体现，没有列出的隐藏条目不得泄露：'
             : '',
+        ...scenarioRows,
         ...visibleWorldRows,
         ...rows,
         ...aftermathRows,
