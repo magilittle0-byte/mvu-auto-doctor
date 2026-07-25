@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "1.8.12",
-  "testedAt": "2026-07-25T20:01:53+08:00",
+  "testedAt": "2026-07-25T20:10:10+08:00",
   "result": "pass",
-  "codeFingerprint": "ec0eecddc86596e598b73fa23fb86a2a49c1b5d0faafc572bf94662be060a3ae",
+  "codeFingerprint": "8c17997666437dcb9bdd12950defed0920cab5b65415274b8e0512244db46b09",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -23,7 +23,7 @@
       "total": 26,
       "passed": 26,
       "failed": 0,
-      "durationMs": 126813
+      "durationMs": 126695
     },
     "deepSeek": {
       "model": "deepseek-v4-flash",
