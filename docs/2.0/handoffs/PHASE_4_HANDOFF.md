@@ -6,11 +6,11 @@
 - 交付日期：2026-07-27
 - 仓库：`magilittle0-byte/mvu-auto-doctor`
 - 分支：`codex/v2.0-phase4-domain-transactions`
-- PR：发布后回填；必须为以 `codex/v2.0-phase3-director-core` 为 base 的 Draft PR
+- PR：Draft [`#24`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/24)，base 为 `codex/v2.0-phase3-director-core`
 - 本地基础提交 SHA：`ca8d101121ad7761fb090f513ae674fc2cda7845`
 - 远端堆叠基础提交 SHA：`019b57f10e5b57b29055c4bbe0d4f0f9aa07cab2`
 - 阶段3共同基础 tree：`b7fa688857834599a0f6bd1269694551364127a4`
-- 阶段4实现提交 SHA：提交后回填；本地与远端提交可以因历史父提交不同而不同，但 tree 必须逐对象一致
+- 阶段4实现提交 SHA：本地 `e54ea3ffb4b1992ec7dc967f461b1455da4c9e3a`；远端 `e491fb092e1e2053639f4bf28ff1e681dd87caf9`；两者 tree 均为 `0eb62bc6bb8b027b75dad6c6de52f0f466b55cf6`
 - 阶段4交接/发布提交 SHA：本文件自身承载交接与发布回填，准确最终 SHA 以分支最终 HEAD 和 Draft PR headRefOid 为准，避免在提交内容中伪造自引用 SHA
 - 工作区是否仍有未提交修改：阶段4跟踪文件提交后应只剩10个用户已有、未跟踪的 `dist/*.zip`
 - 未提交修改是否属于用户且已保留：是；未暂存、未删除、未覆盖、未改名
@@ -115,10 +115,12 @@ new-branch
 结论：v1.9.0跟踪真实环境QC报告与当前生产运行时代码指纹通过。
 
 命令：npm.cmd run qc:record
-退出码：提交后执行并回填。
+退出码：0
+结论：为实现提交 e54ea3ffb4b1 记录真实环境QC回执。
 
 命令：npm.cmd run qc:gate
-退出码：提交后执行并回填。
+退出码：0
+结论：实现提交 e54ea3ffb4b1 的真实环境QC gate通过。
 
 命令：node --check（逐个 v2/domain-transaction/*.mjs 和两个阶段4测试）与 git diff --check
 退出码：0
@@ -145,7 +147,7 @@ new-branch
 ## 9. 差异审计
 
 - `git status --short --branch`：提交后应只有10个 `dist/*.zip` 未跟踪；所有阶段4跟踪文件干净。
-- `git diff --stat ca8d1011...HEAD`：阶段4实现/交接暂存范围为16个文件、4628 insertions、25 deletions；提交后以同一基础重核。
+- `git diff --stat ca8d1011...e54ea3f`：16个文件、4628 insertions、25 deletions。
 - 预期文件：`v2/domain-transaction/` 6个运行时/声明入口，2个阶段4测试，fixture激活元数据、阶段4交接，以及2.0协议、矩阵、路线图、索引和CHANGELOG。
 - 无关文件：10个用户已有历史 `dist/*.zip`。
 - 无关文件如何被保留/排除：所有 `git add` 使用明确路径；提交前必须确认 `git diff --cached --name-only -- dist` 为0；未执行删除、reset或checkout覆盖。
@@ -190,9 +192,9 @@ new-branch
 
 ## 13. 发布状态
 
-- 本地提交：实现/交接提交后回填；本文件回填提交以最终 `git log` 为准
-- 远端分支：`codex/v2.0-phase4-domain-transactions`；必须在远端阶段3 HEAD `019b57f10e5b57b29055c4bbe0d4f0f9aa07cab2` 上只叠加阶段4差异，并逐 changed blob/tree SHA 校验
-- PR状态：发布后回填；必须为Draft
+- 本地提交：实现 `e54ea3ffb4b1992ec7dc967f461b1455da4c9e3a`；本文件发布回填提交以最终 `git log` 为准
+- 远端分支：`codex/v2.0-phase4-domain-transactions`；实现提交 `e491fb092e1e2053639f4bf28ff1e681dd87caf9` 以远端阶段3 HEAD `019b57f10e5b57b29055c4bbe0d4f0f9aa07cab2` 为唯一父提交；16/16 changed blob与9/9相关层tree SHA均和本地Git对象一致，根tree为 `0eb62bc6bb8b027b75dad6c6de52f0f466b55cf6`
+- PR状态：Draft [`#24`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/24)，head为阶段4分支，base为阶段3分支
 - 基础分支：`codex/v2.0-phase3-director-core`
 - 是否合并 main：否
-- 外部阻塞：本机 `gh` 凭据无效；HTTPS Git可用性将在发布前复核。若仍不可用，按阶段3发布方式使用GitHub Git对象接口，不把本地分叉提交当远端父提交。
+- 外部阻塞：无；本机 `gh` 凭据无效，沙箱内 HTTPS Git立即拒绝连接，沙箱外 fetch 最终被连接重置。已使用GitHub Git对象接口在远端阶段3 HEAD上只叠加阶段4差异；实现发布比较为 ahead 1 / behind 0，未把本地分叉提交当远端父提交。
