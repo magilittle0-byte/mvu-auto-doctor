@@ -1,8 +1,8 @@
 # MVU Auto Doctor 2.0 数据与事务协议
 
-状态：`2.0-phase1`
+状态：`2.0-phase2`
 
-协议版本：`2.0.0-draft.1`
+协议版本：`2.0.0-draft.2`
 
 本文中的“必须 / 不得”是规范要求，“应该”表示除非适配器提供可审计理由，否则必须遵守。
 
@@ -313,6 +313,7 @@ interface MessageFingerprint {
 比较规则：
 
 - 写入前必须逐项比较 chat、逻辑楼层、稳定消息 ID、swipe、generation、branch 和 contentHash。
+- 宿主只提供候选身份时，阶段2适配器按显式完整指纹、持久医生ID、宿主原生ID、调用方显式启用的 `send_date` 四层依次选择；同层多值或字段冲突必须 unresolved/rejected，不得降级猜测。
 - continue 可以保留逻辑楼层与分支，但内容变化后必须产生新的 contentHash 和 generation。
 - regenerate/new swipe 必须创建新 branchId 或新的明确分支版本。
 - 不得用 `latest` 替代捕获时目标，也不得因消息失配把结果“顺手写到当前最新楼”。
@@ -337,6 +338,7 @@ interface Branch extends V2Record {
 - 每个事务、事实、知识、任务和长任务必须绑定 branchId。
 - abandoned 分支保留审计数据，但不能继续向当前状态提交。
 - 重Roll从分歧点 checkpoint 重算；不得继承被放弃正文产生的资源、世界事件、论坛或数据库内容。
+- normal 前进到下一逻辑楼层时，新指纹的 `parentHash` 指向旧分支头内容；continue 更新同一逻辑楼层和 generation，但保留共同父哈希；regenerate/new swipe 从共同父 checkpoint 建立新分支并退役旧分支。
 - 2.0.0 不执行隐式 merge；`merged` 只为2.1显式协议预留。
 
 ## 12. Transaction
@@ -373,6 +375,9 @@ interface Transaction {
 6. 回读失败只回滚本事务触碰路径，保留外部合法并发变化。
 7. 迟到结果、目标变化或弃用分支只能进入 `stale`，不得提交。
 8. 事务失败不得留下部分资源扣除、孤立装备或半个任务终态。
+9. 幂等键描述逻辑操作、主体、效果和逻辑父输入，允许同一语义操作跨 reroll 保持稳定；唯一提交作用域始终是 `(branchId, idempotencyKey)`。
+10. 写入计划使用显式 JSON Pointer 路径、前置条件和写后值；禁止重叠路径、根路径和需要猜测数组结构的变更。
+11. 回滚前精确回读；仅当当前路径仍等于本事务写后值时恢复该路径的写前值，已被外部合法更新的路径必须保留。
 
 ## 13. 正文稳定与下游协议
 
@@ -492,4 +497,4 @@ interface MigrationState {
 
 阶段0机器语料由 [`replay-fixture.schema.json`](replay-fixture.schema.json) 约束，实例位于 [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)。
 
-当前默认测试只验证 schema、引用、覆盖与隐私。阶段1开始，领域模块实现对应 `operation.kind` 后，fixture 才按 `automation.activateAt` 转为行为断言；未到激活阶段不得在默认 CI 中制造“未来功能尚未实现”的红灯。
+当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API 与阶段2事务 API 已分别激活其 `automation.activateAt` 对应的六个 `unit-active` 行为断言。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。

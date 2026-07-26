@@ -127,11 +127,13 @@ const REQUIRED_CASE_IDS = [
   'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
 ];
 
-const PHASE_1_UNIT_CASE_IDS = new Set([
+const ACTIVE_UNIT_CASE_IDS = new Set([
   'RR-SOCIAL-COERCION-VOLUNTARY',
   'RR-EQUIPMENT-SLOTS',
   'RR-ITEM-CONSUMABLE-EFFECT',
   'RR-SKILL-TEXT-COST',
+  'RR-FINGERPRINT-PREVIOUS-REPLY',
+  'RR-REROLL-IDEMPOTENCY',
 ]);
 
 test('2.0 replay corpus conforms to the checked-in JSON Schema', async () => {
@@ -156,12 +158,18 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
     'future behavior test ids must be unique',
   );
   for (const entry of corpus.cases) {
-    const expectedStatus = PHASE_1_UNIT_CASE_IDS.has(entry.id)
+    const expectedStatus = ACTIVE_UNIT_CASE_IDS.has(entry.id)
       ? 'unit-active'
       : 'structural-only';
     assert.equal(entry.automation.status, expectedStatus, `${entry.id} automation status drifted`);
-    if (PHASE_1_UNIT_CASE_IDS.has(entry.id)) {
-      assert.equal(entry.automation.activateAt, 'phase-1');
+    if (ACTIVE_UNIT_CASE_IDS.has(entry.id)) {
+      const expectedPhase = new Set([
+        'RR-FINGERPRINT-PREVIOUS-REPLY',
+        'RR-REROLL-IDEMPOTENCY',
+      ]).has(entry.id)
+        ? 'phase-2'
+        : 'phase-1';
+      assert.equal(entry.automation.activateAt, expectedPhase);
     }
   }
 });
@@ -242,7 +250,6 @@ test('2.0 authority documents and replay cases cross-reference one another', asy
   assert.match(protocol, /Branch/);
 });
 
-test.todo('phase 2 activates fingerprint and reroll behavior replays');
 test.todo('phase 3 activates agency, adjudication, Fact and Knowledge behavior replays');
 test.todo('phase 4 adds transaction integration and real-replay layers to domain unit replays');
 test.todo('phase 5 activates natural-language and UI parity replays');

@@ -465,7 +465,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-2",
         "futureTestId": "replay.fingerprint.previous_reply"
       }
@@ -942,7 +942,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-2",
         "futureTestId": "replay.reroll.idempotency"
       }

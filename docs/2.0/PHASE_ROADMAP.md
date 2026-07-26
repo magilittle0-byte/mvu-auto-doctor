@@ -1,6 +1,6 @@
 # MVU Auto Doctor 2.0 阶段路线图
 
-状态：`2.0-phase1`
+状态：`2.0-phase2`
 
 交付纪律：一阶段一任务；每阶段必须使用 [`PHASE_HANDOFF_TEMPLATE.md`](PHASE_HANDOFF_TEMPLATE.md)
 
