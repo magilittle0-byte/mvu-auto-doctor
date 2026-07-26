@@ -1,6 +1,6 @@
 # 2.0 真实故障回放验收矩阵
 
-状态：`2.0-phase2`
+状态：`2.0-phase3`
 
 机器语料：[`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)
 
@@ -18,7 +18,7 @@
 | `real-sillytavern` | 候选包在真实酒馆 DOM、事件和持久化链路中正确 | 改动触及运行时或阶段7发布门时 |
 | `release` | 所有要求层均通过，且没有高风险例外 | 阶段7候选发布前 |
 
-`automation.status=structural-only` 表示仍只有结构基线；`unit-active` 表示无宿主领域或事务行为已经进入默认测试，但不宣称 integration、real-replay 或 real-sillytavern 层完成。阶段1激活药剂、技能成本、装备槽位和强制/自愿关系分离；阶段2再激活错轮回复与重Roll幂等的 unit 层。宿主持久化集成与真实回放仍按后续阶段完成门执行。
+`automation.status=structural-only` 表示仍只有结构基线；`unit-active` 表示无宿主领域、事务或导演行为已经进入默认测试，但不宣称 integration、real-replay 或 real-sillytavern 层完成。阶段1激活药剂、技能成本、装备槽位和强制/自愿关系分离；阶段2激活错轮回复与重Roll幂等；阶段3激活玩家负约束、三类口胡与随机暗号的 unit 层，并继续回归错轮回复。宿主持久化集成与真实回放仍按后续阶段完成门执行。
 
 ## 故障到验收映射
 

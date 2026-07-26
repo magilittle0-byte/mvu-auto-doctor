@@ -1,8 +1,8 @@
 # MVU Auto Doctor 2.0 数据与事务协议
 
-状态：`2.0-phase2`
+状态：`2.0-phase3`
 
-协议版本：`2.0.0-draft.2`
+协议版本：`2.0.0-draft.3`
 
 本文中的“必须 / 不得”是规范要求，“应该”表示除非适配器提供可审计理由，否则必须遵守。
 
@@ -497,4 +497,4 @@ interface MigrationState {
 
 阶段0机器语料由 [`replay-fixture.schema.json`](replay-fixture.schema.json) 约束，实例位于 [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)。
 
-当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API 与阶段2事务 API 已分别激活其 `automation.activateAt` 对应的六个 `unit-active` 行为断言。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。
+当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API、阶段2事务 API 与阶段3导演 API 已分别激活其 `automation.activateAt` 对应的十一个 `unit-active` 行为断言。阶段3的正则/文本匹配只输出风险召回候选，最终边界与口胡裁决必须消费结构化语义依据；H2/H3 输出命令但不在本阶段执行领域事务或生产分支写入。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。

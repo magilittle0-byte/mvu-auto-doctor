@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mvu-auto-doctor.local/schemas/2.0/replay-fixture.schema.json",
   "title": "MVU Auto Doctor 2.0 minimal replay corpus",
-  "description": "脱敏最小回放格式。unit-active 表示对应无宿主领域或事务行为已自动化，不表示宿主集成或真实环境层已经实现。",
+  "description": "脱敏最小回放格式。unit-active 表示对应无宿主领域、事务或导演行为已自动化，不表示宿主集成或真实环境层已经实现。",
   "type": "object",
   "additionalProperties": false,
   "required": [

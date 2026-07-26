@@ -128,6 +128,11 @@ const REQUIRED_CASE_IDS = [
 ];
 
 const ACTIVE_UNIT_CASE_IDS = new Set([
+  'RR-AGENCY-NO-MOVE',
+  'RR-BULLSHIT-REASONABLE',
+  'RR-BULLSHIT-ADVANTAGE',
+  'RR-BULLSHIT-REWRITE',
+  'RR-FACT-RANDOM-CODE',
   'RR-SOCIAL-COERCION-VOLUNTARY',
   'RR-EQUIPMENT-SLOTS',
   'RR-ITEM-CONSUMABLE-EFFECT',
@@ -163,12 +168,22 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
       : 'structural-only';
     assert.equal(entry.automation.status, expectedStatus, `${entry.id} automation status drifted`);
     if (ACTIVE_UNIT_CASE_IDS.has(entry.id)) {
-      const expectedPhase = new Set([
+      const phase2Ids = new Set([
         'RR-FINGERPRINT-PREVIOUS-REPLY',
         'RR-REROLL-IDEMPOTENCY',
-      ]).has(entry.id)
-        ? 'phase-2'
-        : 'phase-1';
+      ]);
+      const phase3Ids = new Set([
+        'RR-AGENCY-NO-MOVE',
+        'RR-BULLSHIT-REASONABLE',
+        'RR-BULLSHIT-ADVANTAGE',
+        'RR-BULLSHIT-REWRITE',
+        'RR-FACT-RANDOM-CODE',
+      ]);
+      const expectedPhase = phase3Ids.has(entry.id)
+        ? 'phase-3'
+        : phase2Ids.has(entry.id)
+          ? 'phase-2'
+          : 'phase-1';
       assert.equal(entry.automation.activateAt, expectedPhase);
     }
   }
@@ -250,7 +265,6 @@ test('2.0 authority documents and replay cases cross-reference one another', asy
   assert.match(protocol, /Branch/);
 });
 
-test.todo('phase 3 activates agency, adjudication, Fact and Knowledge behavior replays');
 test.todo('phase 4 adds transaction integration and real-replay layers to domain unit replays');
 test.todo('phase 5 activates natural-language and UI parity replays');
 test.todo('phase 6 activates repair barrier, database and watchdog behavior replays');

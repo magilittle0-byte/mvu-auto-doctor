@@ -81,7 +81,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-3",
         "futureTestId": "replay.agency.no_move"
       }
@@ -151,7 +151,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-3",
         "futureTestId": "replay.adjudication.reasonable"
       }
@@ -221,7 +221,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-3",
         "futureTestId": "replay.adjudication.advantage"
       }
@@ -296,7 +296,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-3",
         "futureTestId": "replay.adjudication.rewrite"
       }
@@ -372,7 +372,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-3",
         "futureTestId": "replay.fact.random_code"
       }
