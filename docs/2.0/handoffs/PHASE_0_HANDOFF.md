@@ -6,10 +6,10 @@
 - 交付日期：2026-07-26
 - 仓库：`mvu-auto-doctor-v1.8-hotfix`
 - 分支：`codex/v2.0-phase0-spec-replay-baseline`
-- PR：以本文件所在分支的远端 draft PR 为准
+- PR：`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/20`（draft）
 - 基础提交 SHA：`7d761ba6af1ceb10ab3ea5947c0bb25ee1b72566`
 - 阶段0产物提交 SHA：`f5d003e777a4f20dcc9d9d410455d9183d3abba6`
-- 交接记录提交 SHA：本文件属于紧随上述产物提交的纯交接提交；用 `git log -1 -- docs/2.0/handoffs/PHASE_0_HANDOFF.md` 获取，避免把内容寻址提交的自身 SHA 写入自身
+- 交接记录提交 SHA：`5c4f225a0e649a909e3884cfc275e4533bcc0b83`；其后的提交只回填远端PR元数据
 - 工作区是否仍有未提交修改：没有属于阶段0的未提交修改
 - 未提交修改是否属于用户且已保留：是；10个历史 `dist/` 离线ZIP保持未跟踪且未暂存
 
@@ -150,9 +150,9 @@
 
 ## 13. 发布状态
 
-- 本地提交：阶段0产物提交已完成；交接提交紧随其后
+- 本地提交：产物 `f5d003e777a4f20dcc9d9d410455d9183d3abba6`；交接 `5c4f225a0e649a909e3884cfc275e4533bcc0b83`
 - 远端分支：`codex/v2.0-phase0-spec-replay-baseline`
-- PR状态：draft
+- PR状态：draft，`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/20`
 - 基础分支：`codex/v1.8.14-versioned-scenario-plan`，以堆叠差异隔离阶段0
 - 是否合并 main：否；只创建可审阅PR
 - 外部阻塞：本地 `gh` 凭据无效；优先使用已连接GitHub应用创建PR
