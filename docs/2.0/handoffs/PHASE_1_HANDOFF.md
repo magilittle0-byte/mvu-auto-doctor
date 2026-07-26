@@ -6,10 +6,10 @@
 - 交付日期：2026-07-26
 - 仓库：`mvu-auto-doctor-v1.8-hotfix`
 - 分支：`codex/v2.0-phase1-domain-core`
-- PR：待创建；发布步骤完成后回填
+- PR：`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/21`（draft）
 - 基础提交 SHA：`f04b68176318286826e53c1548bd6672323bb1bb`
 - 阶段1产物提交 SHA：`a1244f8b4cd55018d375ed605a6fa2793cc70040`
-- 交接记录提交 SHA：`PENDING_PHASE_1_HANDOFF_COMMIT`
+- 交接记录提交 SHA：`2862cd34b57d5cb17e6634de2991186aebe1fee5`；其后的提交只回填远端PR元数据
 - 工作区是否仍有未提交修改：没有属于阶段1的未提交修改
 - 未提交修改是否属于用户且已保留：是；10个历史 `dist/` 离线ZIP保持未跟踪、未修改、未暂存
 
@@ -100,6 +100,14 @@
 退出码：0
 结论：Tracked QC report passed for v1.9.0。
 
+命令：npm.cmd run qc:record
+退出码：0
+结论：为交接提交 2862cd34b57d 记录QC receipt。
+
+命令：npm.cmd run qc:gate
+退出码：0
+结论：Real-environment QC gate passed for 2862cd34b57d。
+
 命令：git diff --cached --check
 退出码：0
 结论：提交前无空白或补丁格式错误。
@@ -169,9 +177,9 @@
 
 ## 13. 发布状态
 
-- 本地提交：阶段1产物 `a1244f8b4cd55018d375ed605a6fa2793cc70040`；交接记录待提交
-- 远端分支：待推送 `codex/v2.0-phase1-domain-core`
-- PR状态（draft/ready）：待创建draft
+- 本地提交：阶段1产物 `a1244f8b4cd55018d375ed605a6fa2793cc70040`；交接记录 `2862cd34b57d5cb17e6634de2991186aebe1fee5`
+- 远端分支：`codex/v2.0-phase1-domain-core`
+- PR状态（draft/ready）：draft，`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/21`
 - 基础分支：`codex/v2.0-phase0-spec-replay-baseline`
 - 是否合并 main：否；只创建可审阅Draft PR
-- 外部阻塞：本地 `gh` 凭据无效；推送后优先使用已连接GitHub应用创建Draft PR
+- 外部阻塞：无；本地 `gh` 凭据无效，但已连接GitHub应用已成功创建Draft PR
