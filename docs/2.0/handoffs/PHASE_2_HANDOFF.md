@@ -6,10 +6,11 @@
 - 交付日期：2026-07-26
 - 仓库：`magilittle0-byte/mvu-auto-doctor`
 - 分支：`codex/v2.0-phase2-transaction-core`
-- PR：发布后回填；base 必须是 `codex/v2.0-phase1-domain-core`
+- PR：Draft [`#22`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/22)，base 为 `codex/v2.0-phase1-domain-core`
 - 基础提交 SHA：`6e37dcc1dbe1e0ac916b179651d14d02e26147ae`
-- 阶段2实现提交 SHA：`2ff0fbb43c87f2030869c4158fc3e014770e7263`
-- 交接/发布元数据提交 SHA：发布后在第13节回填
+- 阶段2实现提交 SHA：本地 `2ff0fbb43c87f2030869c4158fc3e014770e7263`；远端 `151fd99322f37cd70388e90a6692eca6847bf448`；两者 tree 均为 `6c5734b6495510e098080a80fb92eea343c8f259`
+- 阶段2交接提交 SHA：本地 `9348f9334ee6190395cbcf101902c2dfb798608c`；远端 `f410a09b9fe80c855f23fe709fd369ca5e84c408`；两者 tree 均为 `7b622d6dbe5d9071476f24051d80997ca5b490b2`
+- PR元数据回填提交 SHA：本文件自身承载该回填，准确 SHA 以分支最终 HEAD 为准，避免在提交内容中伪造自引用 SHA
 - 工作区是否仍有未提交修改：只有10个用户已有、未跟踪的 `dist/*.zip`
 - 未提交修改是否属于用户且已保留：是；未暂存、未删除、未覆盖、未改名
 
@@ -152,9 +153,9 @@ persistTransaction(transaction)
 
 ## 13. 发布状态
 
-- 本地提交：阶段2实现 `2ff0fbb43c87f2030869c4158fc3e014770e7263`
-- 远端分支：待推送 `codex/v2.0-phase2-transaction-core`
-- PR状态：待创建 Draft
+- 本地提交：实现 `2ff0fbb43c87f2030869c4158fc3e014770e7263`；交接 `9348f9334ee6190395cbcf101902c2dfb798608c`；本文件回填提交以最终 `git log` 为准
+- 远端分支：`codex/v2.0-phase2-transaction-core`；实现/交接树已通过 GitHub Git 对象接口发布并逐个 SHA 校验
+- PR状态：Draft [`#22`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/22)
 - 基础分支：`codex/v2.0-phase1-domain-core`
 - 是否合并 main：否
-- 外部阻塞：无
+- 外部阻塞：无；本机 HTTPS Git 传输通道在发布时不可达，已使用 GitHub Git 对象接口发布完全相同的两层文件树，远端比较为 ahead 2 / behind 0
