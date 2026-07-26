@@ -1,7 +1,11 @@
 # 更新日志
 
-## 2.0.0（规划中：阶段0）
+## 2.0.0（规划中：阶段1）
 
+- **新增无宿主依赖的V2领域核**：`v2/domain/` 提供 ItemV2、EquipmentV2、SkillV2、Fact、Knowledge、SocialState、Quest 的纯函数归一化、验证器、公开类型声明和统一 `valid/unresolved/rejected` 结果，不接 `index.js`、模型、数据库、UI或生产写入。
+- **1.x只读适配保留未知字段**：旧对象未知字段进入 `extensions.legacy`，可通过只读投影往返；歧义类型、数值、槽位、资源单位、事实证据、强制/自愿关系轴或任务状态明确标记 unresolved/quarantined，不猜造。
+- **冻结槽位与技能成本适配边界**：槽位系统与资源别名只由调用方显式配置；技能文本只有在数值、单位、资源、timing 与 refundable 均唯一时才生成类型化成本。
+- **激活四个领域unit回放**：药剂缺少类型化效果、技能只有显示成本、装备槽位冲突、强制/自愿关系混写已进入默认行为测试；阶段4事务集成与真实回放仍保持 todo。
 - **冻结共创式跑团运行层的产品边界**：叙事优先、规则兜底；导演模式支持合理即兴和口胡，但硬边界保护玩家重大行动权、资源与事务一致性、分支隔离、变量结构和知识边界。
 - **建立V2数据与事务协议**：定义 ItemV2、EquipmentV2、SkillV2、Fact、Knowledge、SocialState、Quest、Transaction、Branch、MessageFingerprint 与 TaskLease，并明确硬字段、开放叙事扩展及1.x兼容迁移原则。
 - **建立脱敏真实故障回放基线**：17个最小 fixture 覆盖代行动、口胡裁定、随机暗号、错轮回复、社会关系失真、装备/药剂/技能、重Roll、正文稳定屏障、数据库、Android、看门狗和真实环境发布门。

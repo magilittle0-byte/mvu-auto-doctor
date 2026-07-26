@@ -127,6 +127,13 @@ const REQUIRED_CASE_IDS = [
   'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
 ];
 
+const PHASE_1_UNIT_CASE_IDS = new Set([
+  'RR-SOCIAL-COERCION-VOLUNTARY',
+  'RR-EQUIPMENT-SLOTS',
+  'RR-ITEM-CONSUMABLE-EFFECT',
+  'RR-SKILL-TEXT-COST',
+]);
+
 test('2.0 replay corpus conforms to the checked-in JSON Schema', async () => {
   const [schema, corpus] = await Promise.all([
     readJson(SCHEMA_PATH),
@@ -148,10 +155,15 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
     futureTestIds.length,
     'future behavior test ids must be unique',
   );
-  assert.ok(
-    corpus.cases.every((entry) => entry.automation.status === 'structural-only'),
-    'stage 0 must not claim that future runtime behavior is active',
-  );
+  for (const entry of corpus.cases) {
+    const expectedStatus = PHASE_1_UNIT_CASE_IDS.has(entry.id)
+      ? 'unit-active'
+      : 'structural-only';
+    assert.equal(entry.automation.status, expectedStatus, `${entry.id} automation status drifted`);
+    if (PHASE_1_UNIT_CASE_IDS.has(entry.id)) {
+      assert.equal(entry.automation.activateAt, 'phase-1');
+    }
+  }
 });
 
 test('2.0 replay corpus stays minimal and excludes credentials and private paths', async () => {
@@ -232,7 +244,7 @@ test('2.0 authority documents and replay cases cross-reference one another', asy
 
 test.todo('phase 2 activates fingerprint and reroll behavior replays');
 test.todo('phase 3 activates agency, adjudication, Fact and Knowledge behavior replays');
-test.todo('phase 4 activates item, equipment, skill and social behavior replays');
+test.todo('phase 4 adds transaction integration and real-replay layers to domain unit replays');
 test.todo('phase 5 activates natural-language and UI parity replays');
 test.todo('phase 6 activates repair barrier, database and watchdog behavior replays');
 test.todo('phase 7 activates the real-SillyTavern release gate replay');

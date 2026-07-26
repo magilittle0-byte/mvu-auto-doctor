@@ -632,8 +632,8 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
-        "activateAt": "phase-4",
+        "status": "unit-active",
+        "activateAt": "phase-1",
         "futureTestId": "replay.social.coercion_voluntary"
       }
     },
@@ -722,8 +722,8 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
-        "activateAt": "phase-4",
+        "status": "unit-active",
+        "activateAt": "phase-1",
         "futureTestId": "replay.equipment.slots"
       }
     },
@@ -793,8 +793,8 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
-        "activateAt": "phase-4",
+        "status": "unit-active",
+        "activateAt": "phase-1",
         "futureTestId": "replay.item.consumable_effect"
       }
     },
@@ -863,8 +863,8 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
-        "activateAt": "phase-4",
+        "status": "unit-active",
+        "activateAt": "phase-1",
         "futureTestId": "replay.skill.text_cost"
       }
     },
