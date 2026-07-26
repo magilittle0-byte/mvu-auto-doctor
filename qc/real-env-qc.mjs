@@ -40,7 +40,9 @@ function codeFingerprint() {
     for (const relativePath of runtimeFiles) {
         hash.update(relativePath);
         hash.update('\0');
-        hash.update(fs.readFileSync(path.join(root, relativePath)));
+        const source = fs.readFileSync(path.join(root, relativePath), 'utf8')
+            .replace(/\r\n?/gu, '\n');
+        hash.update(source, 'utf8');
         hash.update('\0');
     }
     return hash.digest('hex');

@@ -1,6 +1,6 @@
 # 2.0 真实故障回放验收矩阵
 
-状态：`2.0-phase0`
+状态：`2.0-phase1`
 
 机器语料：[`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)
 
@@ -18,7 +18,7 @@
 | `real-sillytavern` | 候选包在真实酒馆 DOM、事件和持久化链路中正确 | 改动触及运行时或阶段7发布门时 |
 | `release` | 所有要求层均通过，且没有高风险例外 | 阶段7候选发布前 |
 
-阶段0只验证 schema、覆盖、引用和隐私边界。所有 fixture 的 `automation.status` 固定为 `structural-only`；到达 `activateAt` 所指阶段且对应 API 已存在后，才能把未来行为断言转为默认执行测试。
+`automation.status=structural-only` 表示仍只有结构基线；`unit-active` 表示纯领域行为已经进入默认测试，但不宣称 integration、real-replay 或 real-sillytavern 层完成。阶段1只激活药剂、技能成本、装备槽位和强制/自愿关系分离的 unit 层；事务结算与真实回放仍按后续阶段完成门执行。
 
 ## 故障到验收映射
 
@@ -31,10 +31,10 @@
 | `RR-FACT-RANDOM-CODE` | 随机暗号被连续确认成秘密协议 | 随口短语 + 候选声称“内部联络暗号” | 不得确认世界事实或已验证知识，也不得授予自己人身份 | unit / integration / real-replay / real-sillytavern | 真实QC 5.2，2026-07-25，第19–34行的跨轮模式 | 阶段3：`replay.fact.random_code` |
 | `RR-FINGERPRINT-PREVIOUS-REPLY` | “赤沙八十三”收到上一轮“银杉五十九”回复 | 上一轮、当前轮及旧回复指纹 | 判为过期结果，不显示、不提交 | unit / integration / real-replay / real-sillytavern | 真实QC 5.2，2026-07-25，第25–28行 | 阶段2：`replay.fingerprint.previous_reply` |
 | `RR-SOCIAL-ORDINARY-KINDNESS` | 止痛药、保护、请酒被升级为饲养/狂热并持久化自强化 | 普通善意 + 候选好感127/信任138/极端标签 | 回滚无证据的自愿轴与标签 | unit / integration / real-replay | Gemini 80回合与Opus 140回合对照的结构性结论 | 阶段4：`replay.social.ordinary_kindness` |
-| `RR-SOCIAL-COERCION-VOLUNTARY` | 强制服从与自愿好感混写 | 只有威胁证据，却同时大增好感、信任与强制轴 | 允许有证据的强制轴；回滚自愿好感与信任 | unit / integration / real-replay | 私有5.4.1审计的关系结构最小等价样本 | 阶段4：`replay.social.coercion_voluntary` |
-| `RR-EQUIPMENT-SLOTS` | 防弹背心占腿、风衣占手、胸挂占饰品 | 三件装备的 `allowedSlots` 与 `equippedAt` 冲突 | 整笔装备事务拒绝；状态不变并返回槽位错误 | unit / integration / real-replay | 私有5.4.1最终存档的最小字段摘录 | 阶段4：`replay.equipment.slots` |
-| `RR-ITEM-CONSUMABLE-EFFECT` | 强效治疗药剂只有描述，没有恢复数值 | 消耗品有数量和描述，但 `effects` 为空 | 不猜数值、不扣数量、不改生命；要求迁移或补全 | unit / integration / real-replay | 私有5.4.1最终存档的物品结构 | 阶段4：`replay.item.consumable_effect` |
-| `RR-SKILL-TEXT-COST` | 技能消耗混用“20MP”“15 耐力”等文本 | `costText` 存在、类型化 `costs` 为空 | 不从显示文本直接扣资源；返回未解析成本 | unit / integration / real-replay | 私有5.4.1最终存档的技能结构 | 阶段4：`replay.skill.text_cost` |
+| `RR-SOCIAL-COERCION-VOLUNTARY` | 强制服从与自愿好感混写 | 只有威胁证据，却同时大增好感、信任与强制轴 | 允许有证据的强制轴；回滚自愿好感与信任 | unit / integration / real-replay | 私有5.4.1审计的关系结构最小等价样本 | 阶段1 unit：`replay.social.coercion_voluntary`；阶段4接事务 |
+| `RR-EQUIPMENT-SLOTS` | 防弹背心占腿、风衣占手、胸挂占饰品 | 三件装备的 `allowedSlots` 与 `equippedAt` 冲突 | 整笔装备事务拒绝；状态不变并返回槽位错误 | unit / integration / real-replay | 私有5.4.1最终存档的最小字段摘录 | 阶段1 unit：`replay.equipment.slots`；阶段4接事务 |
+| `RR-ITEM-CONSUMABLE-EFFECT` | 强效治疗药剂只有描述，没有恢复数值 | 消耗品有数量和描述，但 `effects` 为空 | 不猜数值、不扣数量、不改生命；要求迁移或补全 | unit / integration / real-replay | 私有5.4.1最终存档的物品结构 | 阶段1 unit：`replay.item.consumable_effect`；阶段4接事务 |
+| `RR-SKILL-TEXT-COST` | 技能消耗混用“20MP”“15 耐力”等文本 | `costText` 存在、类型化 `costs` 为空 | 不从显示文本直接扣资源；返回未解析成本 | unit / integration / real-replay | 私有5.4.1最终存档的技能结构 | 阶段1 unit：`replay.skill.text_cost`；阶段4接事务 |
 | `RR-REROLL-IDEMPOTENCY` | 重Roll重复发资源，旧任务仍活跃 | 旧分支已结算，新分支使用同一幂等键 | 资源只提交一次；旧分支退役；旧任务取消或取代 | unit / integration / real-replay / real-sillytavern | 既有重Roll污染事故 | 阶段2：`replay.reroll.idempotency` |
 | `RR-REPAIR-DB-BARRIER` | 正文修复未稳定，数据库任务先读取/写入 | 修复仍处于写回验证，数据库同步请求启动 | 下游保持阻塞；正文事务提交先于数据库启动 | unit / integration / real-replay | 既有正文修复与数据库抢跑事故 | 阶段6：`replay.repair.database_barrier` |
 | `RR-TASK-WATCHDOG` | 模型任务运行一小时以上无人检查 | 65分钟运行、55分钟无心跳和进度 | 租约超时、生成诊断、不允许未验证写入 | unit / integration / real-replay | 既有长任务无人看守事故 | 阶段6：`replay.task.watchdog` |
@@ -45,7 +45,7 @@
 ## 激活规则
 
 1. 阶段实现者先在 [`PHASE_ROADMAP.md`](PHASE_ROADMAP.md) 对应阶段的输出中提供被测 API 和最小适配器。
-2. 将 fixture 的结构输入映射到实际 API，不改变原用例的 `id`、历史意图或预期不变量。
+2. 将 fixture 的结构输入映射到实际 API，不改变原用例的 `id`、历史意图或预期不变量；只完成 unit 层时标为 `unit-active`，不得冒充集成或真实环境完成。
 3. 先增加独立行为回放命令；在真实故障由旧实现复现、新实现阻断且结果稳定后，才并入默认 `npm test`。
 4. 涉及 DOM、重Roll、写回、数据库、模型队列或发布的用例，单元通过不等于完成；矩阵要求的 `real-sillytavern` 层不可由模拟替代。
 5. 若真实环境结果与模拟冲突，以真实环境为准并阻断发布；不得删除用例来恢复绿色。

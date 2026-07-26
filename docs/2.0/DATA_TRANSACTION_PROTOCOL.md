@@ -1,8 +1,8 @@
 # MVU Auto Doctor 2.0 数据与事务协议
 
-状态：`2.0-phase0`
+状态：`2.0-phase1`
 
-协议版本：`2.0.0-draft.0`
+协议版本：`2.0.0-draft.1`
 
 本文中的“必须 / 不得”是规范要求，“应该”表示除非适配器提供可审计理由，否则必须遵守。
 
@@ -60,6 +60,21 @@ interface ResourceDelta {
   amount: number;
   reason: string;
 }
+
+interface ValidationIssue {
+  code: string;
+  path: string;
+  severity: 'warning' | 'unresolved' | 'error';
+  message: string;
+  details?: unknown;
+}
+
+interface DomainValidationResult<T> {
+  ok: boolean;
+  status: 'valid' | 'unresolved' | 'rejected';
+  value: T;
+  issues: ValidationIssue[];
+}
 ```
 
 公共不变量：
@@ -69,6 +84,8 @@ interface ResourceDelta {
 3. `extensions` 接受未知字段，但不得覆盖同级硬字段。
 4. `EvidenceRef` 优先保存引用和摘要哈希，不复制完整私人正文。
 5. 机械变化使用有限数字；`NaN`、Infinity、数字字符串和“很多”不是合法数值。
+6. `warning` 不阻断只读投影；`unresolved` 阻断自动结算但保留可诊断值；`error` 产生 `rejected`，不得进入事务准备。
+7. 归一化与验证器必须是无宿主依赖的纯函数，不得修改输入对象。
 
 ## 3. ItemV2
 
@@ -132,6 +149,7 @@ interface EquipmentV2 extends V2Record {
 - `allowedSlots` 属于物品合同，`equippedAt` 属于当前状态；二者不能只靠对象所在路径混为一谈。
 - 所有 `equippedAt` 必须被 `allowedSlots` 接受，并满足 `occupies` 的复合占位。
 - `system/slot/layer` 是开放命名，由当前卡片/规则适配器解释；协议不硬编码某一卡片的头、腿、脚路径。
+- 阶段1不提供内置槽位词表。旧字符串槽位只有在调用方显式提供 `system` 时才能映射为 `SlotRef`；缺少 `system` 或 `allowedSlots` 时保持 `unresolved`。
 - 1.x 只有“当前路径”而没有物品槽位元数据时，可迁移当前穿戴位置，但 `allowedSlots` 必须为 `unresolved`，禁止据此推断物品以后能穿在哪里。
 - 穿戴、卸下和转移必须在同一事务中同时处理来源槽、目标槽和背包数量。
 
@@ -167,6 +185,7 @@ interface SkillV2 extends V2Record {
 - 主动技能必须在规定 timing 发生资源事务；仅提到“可以使用”不构成发动。
 - 多资源成本必须原子提交；任一前置条件失败则全部不扣。
 - 1.x文本只有在单位和数值能唯一映射到当前资源时才可自动迁移，否则进入 `unresolved`。
+- 阶段1资源别名表由调用方显式注入；别名未命中、多重命中，或缺少 `timing/refundable` 规则时都保持 `unresolved`。严格的“数值+单位”解析只做语法拆分，不承担语义裁决。
 
 ## 6. Fact
 

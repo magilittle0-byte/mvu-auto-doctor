@@ -3,7 +3,7 @@
   "version": "1.9.0",
   "testedAt": "2026-07-26T17:23:46+08:00",
   "result": "pass",
-  "codeFingerprint": "778b085a94f7b07ec74339cec3398d25de4dc2a984ee90046c895322c4e0b006",
+  "codeFingerprint": "1b18d73cd5e8a2c100ab3304cd601f1bc96fd2ed2349bc16ee8529bbf7c4798f",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
