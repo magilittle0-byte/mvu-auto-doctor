@@ -15,9 +15,12 @@ Required order:
    API key.
 4. Verify the actual character chat, generated forum content, pointer/touch opening,
    full-text expand/collapse, and the 390×844 mobile layout.
-5. Update the matching structured report in `docs/qc-reports/`.
-6. Run `npm run qc:ci`, commit the complete change, then run `npm run qc:record`.
-7. Run `npm run qc:gate`. Push only when it passes.
+5. For social-motive or relationship changes, run the same-main-model A/B ablation in
+   `docs/REAL_ENV_QC.md`; DeepSeek's own warm tone is not proof that the runtime guard
+   worked.
+6. Update the matching structured report in `docs/qc-reports/`.
+7. Run `npm run qc:ci`, commit the complete change, then run `npm run qc:record`.
+8. Run `npm run qc:gate`. Push only when it passes.
 
 The tracked `.githooks/pre-push` hook enforces the receipt for this clone. Install it
 with `npm run qc:install`. Do not bypass the hook with `--no-verify`. A failing or

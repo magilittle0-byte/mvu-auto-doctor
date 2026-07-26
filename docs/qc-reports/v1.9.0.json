@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 1,
+  "version": "1.9.0",
+  "testedAt": "2026-07-26T17:23:46+08:00",
+  "result": "pass",
+  "codeFingerprint": "778b085a94f7b07ec74339cec3398d25de4dc2a984ee90046c895322c4e0b006",
+  "environment": {
+    "sillyTavernVersion": "1.18.0",
+    "sillyTavernCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browser": "Google Chrome controlled through Codex Browser",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mainModel": {
+      "provider": "OpenCode Zen",
+      "model": "gpt-5.4-mini",
+      "endpoint": "https://opencode.ai/zen/v1",
+      "captureProxy": "http://127.0.0.1:9331/v1",
+      "credentialMode": "SillyTavern secret store; never read back or written to the project",
+      "stream": false,
+      "maxTokens": 12000,
+      "proxyStopped": true
+    },
+    "modelProxy": {
+      "url": "http://127.0.0.1:9328/v1",
+      "credentialMode": "memory-only",
+      "proxyStopped": true
+    }
+  },
+  "checks": {
+    "testSuite": {
+      "total": 33,
+      "passed": 33,
+      "failed": 0,
+      "durationMs": 128810
+    },
+    "deepSeek": {
+      "model": "deepseek-v4-flash",
+      "calls": 12,
+      "httpStatuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "reviewerOnlyForSocialProof": true,
+      "credentialPersisted": false,
+      "proxyStopped": true
+    },
+    "scenarioPlan": {
+      "baselineCreated": true,
+      "baselineImmutable": true,
+      "baselineEvidenceCount": 3,
+      "baselineSourceRefVerified": true,
+      "playerActionAmendmentApplied": true,
+      "revisionAfterAmendment": 1,
+      "amendmentCauseType": "player_action",
+      "sourceThreadCount": 1,
+      "triggerVerified": true,
+      "mechanismVerified": true,
+      "evidenceCount": 4,
+      "changedFieldCount": 4,
+      "exactBeforeAfterVerified": true,
+      "preservedAchievementCount": 5,
+      "amendmentSourceRefVerified": true,
+      "uiTraceVisible": true,
+      "summaryTouchTargetHeight": 42,
+      "sameTurnWorldRewriteRejected": true,
+      "matureWorldChainAccepted": true,
+      "missingPreservesRejected": true,
+      "apexRemovalAllowed": true,
+      "terminalReopenRejected": true,
+      "promptInjectionVerified": true
+    },
+    "continuity": {
+      "activeThreadCount": 2,
+      "resolvedThreadCount": 1,
+      "backgroundComplexityPreserved": true,
+      "forcedMainlineInjection": false,
+      "sourcePointersPreserved": true
+    },
+    "forum": {
+      "generatedPages": 1,
+      "topicCount": 5,
+      "commentCount": 12,
+      "openWithPointerOrTouch": true,
+      "expand": true,
+      "collapse": true,
+      "ariaStateSynchronized": true,
+      "singleWholeThreadControl": true,
+      "controlsPerPost": 1,
+      "legacyBodyControlCount": 0,
+      "legacyReplyControlCount": 0,
+      "opBodyMatchesSource": true,
+      "opFinalTextVisible": true,
+      "opBodyClipped": false,
+      "repliesExpandedTogether": true,
+      "collapsedRepliesHidden": true,
+      "visibleReplyCount": 3,
+      "totalReplyCount": 3
+    },
+    "socialGuard": {
+      "sameMainModelAblation": true,
+      "mainModel": "gpt-5.4-mini",
+      "pairedSamples": 2,
+      "deepSeekExcludedAsMainProof": true,
+      "contractLandedInFinalPrompt": true,
+      "contractSentinelByArm": {
+        "A": [
+          false,
+          false
+        ],
+        "B": [
+          true,
+          true
+        ]
+      },
+      "unselectedOptionsRemovedFromModelHistory": true,
+      "assistantOptionBlockCountInFinalPayload": 0,
+      "storedChatUnchanged": true,
+      "storedOptionBlockVerifiedThroughMessageEditor": true,
+      "systemFormatInstructionsPreserved": true,
+      "actualUserChoicePreserved": true,
+      "ordinaryCareCases": 4,
+      "darkCharacterHelpCaseCovered": true,
+      "limitedSuspicionCaseCovered": true,
+      "coveragePerSample": {
+        "tea": true,
+        "food": true,
+        "medicine": true,
+        "nightShift": true,
+        "darkAllyHelp": true,
+        "limitedSuspicion": true
+      },
+      "unsupportedMotiveAttributionReduced": true,
+      "unhedgedMotiveMarkerCounts": {
+        "A": [
+          3,
+          4
+        ],
+        "B": [
+          4,
+          0
+        ],
+        "meanA": 3.5,
+        "meanB": 2,
+        "meanReductionPercent": 42.86
+      },
+      "npcSuspicionStillAllowed": true,
+      "forcedTrustCount": 0,
+      "ownershipOrControlCount": 0,
+      "mainModelUsage": [
+        {
+          "arm": "A",
+          "promptTokens": 65048,
+          "completionTokens": 7308,
+          "totalTokens": 72356,
+          "httpStatus": 200
+        },
+        {
+          "arm": "B",
+          "promptTokens": 65666,
+          "completionTokens": 10612,
+          "totalTokens": 76278,
+          "httpStatus": 200
+        },
+        {
+          "arm": "A",
+          "promptTokens": 65048,
+          "completionTokens": 7510,
+          "totalTokens": 72558,
+          "httpStatus": 200
+        },
+        {
+          "arm": "B",
+          "promptTokens": 66472,
+          "completionTokens": 7813,
+          "totalTokens": 74285,
+          "httpStatus": 200
+        }
+      ],
+      "relationshipRollbackVerified": true,
+      "rollbackReviewCalls": 1,
+      "rollbackVerdict": "violation",
+      "rollbackDecisionCount": 2,
+      "rollbackRevertedPathCount": 2,
+      "rollbackCorrectionBlockCount": 2,
+      "unrelatedMvuPreserved": true,
+      "auditSourceTraceVisible": true,
+      "explicitDarkCaseAllowed": true,
+      "darkReviewCalls": 1,
+      "darkVerdict": "pass",
+      "darkDecisionCount": 1,
+      "darkAllowedPathCount": 1,
+      "darkCorrectionBlockCount": 1,
+      "deepSeekToneDidNotRollbackValidDarkState": true,
+      "reviewerDidNotRewriteNarrative": true,
+      "noRiskTurnSkippedSemanticCall": true,
+      "noRiskTurnSemanticCalls": 0,
+      "usageAndCostRecorded": true,
+      "perChatMonthlyAccumulationVerified": true,
+      "latestMonthlyCostCny": 0.014642,
+      "softWarningBehaviorVerifiedByAutomatedReplay": true,
+      "hardCapFallbackVerifiedByAutomatedReplay": true,
+      "fixedHostileReplayPassed": true
+    },
+    "mobile": {
+      "screenshotWidth": 390,
+      "screenshotHeight": 844,
+      "touchTargetWidth": 362.9,
+      "touchTargetHeight": 42,
+      "minimumTouchTarget": 42,
+      "floatingPanelLeft": 6,
+      "floatingPanelRight": 384,
+      "floatingPanelTop": 87.921875,
+      "floatingPanelBottom": 780,
+      "nonZeroVisualViewportPageLeft": 41,
+      "forumPanelLeft": 0,
+      "forumPanelRight": 390,
+      "forumPanelTop": 0,
+      "forumPanelBottom": 844,
+      "forumShellClientWidth": 390,
+      "forumShellScrollWidth": 390
+    }
+  },
+  "privacy": {
+    "apiKeyIncluded": false,
+    "privateChatIncluded": false,
+    "userDataIncluded": false,
+    "rawModelPayloadIncluded": false
+  }
+}

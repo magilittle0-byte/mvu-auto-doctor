@@ -147,6 +147,9 @@
 
 #mvu-auto-doctor-settings .mvuad-actions > button {
     min-height: var(--mvuad-touch);
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
 }
 
 #mvu-auto-doctor-settings .mvuad-status {
@@ -1025,6 +1028,13 @@
     font-size: 0.8em;
     line-height: 1.45;
     opacity: 0.76;
+}
+
+#mvuad-floating-panel .mvuad-floating-forum {
+    justify-self: stretch;
+    width: 100%;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 #mvuad-floating-panel .mvuad-floating-forum-empty {

@@ -89,9 +89,10 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], raw: 0, replace: [], prompts: [], extensionPrompts: {}, toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], raw: 0, replace: [], prompts: [], extensionPrompts: {}, toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], socialSystem: '', socialUser: '', socialRuns: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
+let messageMvuData = null;
 let deferredResolve = null;
 let replaceDeferredResolve = null;
 let replaceDelayArmed = false;
@@ -192,11 +193,14 @@ const delayedMvuBoot = delayedMvuParam !== null;
 const delayedMvuDelay = Math.max(100, Number(delayedMvuParam) || 100);
 const mvuApi = {
   isDuringExtraAnalysis: () => mvuAlwaysBusy,
-  getMvuData: (options = {}) => (
-    messageScopedMvuUnavailable && options.message_id !== 'latest'
-      ? null
-      : structuredClone(latestData)
-  ),
+  getMvuData: (options = {}) => {
+    if (messageScopedMvuUnavailable && options.message_id !== 'latest') return null;
+    const key = String(options.message_id);
+    if (messageMvuData && Object.prototype.hasOwnProperty.call(messageMvuData, key)) {
+      return structuredClone(messageMvuData[key]);
+    }
+    return structuredClone(latestData);
+  },
   async parseMessage(block, data) {
     const match = block.match(/<JSONPatch>\s*([\s\S]*?)\s*<\/JSONPatch>/i);
     const ops = match ? JSON.parse(match[1]) : [];
@@ -254,6 +258,9 @@ const mvuApi = {
         replaceDeferredResolve = null;
       }
       latestData = structuredClone(data);
+      if (messageMvuData && options?.message_id !== undefined) {
+        messageMvuData[String(options.message_id)] = structuredClone(data);
+      }
       if (normalizeReplacements) {
         latestData.display_data ||= {};
         latestData.display_data.__mvu_version = ++normalizationVersion;
@@ -284,9 +291,10 @@ window.StoryOracleAPI = {
   context: { getSettings: () => ({ autoDiagnoseEnabled: false }) },
   async run(messages, options = {}) {
     const system = messages[0].content;
+    const isSocial = system.includes('人物动机、人格自主性');
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
-    calls.model.push(isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
+    calls.model.push(isSocial ? 'social' : isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
     if (mode === 'rate-limit') {
       const error = new Error('HTTP 429: rate limit exceeded');
       error.status = 429;
@@ -296,6 +304,29 @@ window.StoryOracleAPI = {
       throw new Error('connection refused');
     }
     if (!isContinuity && !isForum) {
+      if (isSocial) {
+        calls.socialRuns += 1;
+        calls.socialSystem = messages[0].content;
+        calls.socialUser = messages[1].content;
+        const paths = [...messages[1].content.matchAll(/"path"\s*:\s*"([^"]+)"/g)].map((match) => match[1]);
+        const allow = mode === 'social-allow-dark';
+        return JSON.stringify({
+          verdict: allow ? 'pass' : 'violation',
+          summary: allow ? '明确黑暗行为有本轮授权。' : '普通照顾被误写成控制，关系变化缺少自愿证据。',
+          findings: [{
+            type: allow ? 'valid_dark_content' : 'unauthorized_motive',
+            severity: allow ? 'info' : 'error',
+            reason: allow ? '用户明确威胁且正文按机制处理。' : '用户只表达普通照顾。',
+            evidence: allow ? '我明确威胁他' : '我给她带一份晚饭',
+          }],
+          decisions: paths.map((path) => ({
+            path,
+            action: allow ? 'allow' : 'revert',
+            reason: allow ? '有明确授权' : '无自愿关系证据',
+            evidence: allow ? '明确威胁' : '普通照顾',
+          })),
+        });
+      }
       calls.repairSystem = messages[0].content;
       calls.repairUser = messages[1].content;
       calls.repairOptions.push(structuredClone(options));
@@ -502,6 +533,7 @@ window.__TEST__ = {
   calls, context,
   setMode(value) { mode = value; },
   setLatestData(value) { latestData = structuredClone(value); },
+  setMessageMvuData(value) { messageMvuData = structuredClone(value); },
   getLatestData() { return structuredClone(latestData); },
   resolveRepair(value) { deferredResolve?.(value); },
   hasDeferred: () => !!deferredResolve,
@@ -684,7 +716,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.8.14');
+    assert.equal(continuity.version, '1.9.0');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -738,9 +770,9 @@ try {
         const t = window.__TEST__;
         const injection = Object.values(t.calls.extensionPrompts)
             .find((entry) => entry.name === 'mvu-auto-doctor-continuity');
-        const assembledChat = injection?.role === 0 && injection.content
-            ? [{ role: 'system', content: injection.content }]
-            : [];
+        const assembledChat = Object.values(t.calls.extensionPrompts)
+            .filter((entry) => entry?.role === 0 && entry.content)
+            .map((entry) => ({ role: 'system', content: entry.content }));
         await t.context.eventSource.emit('chat_completion_prompt_ready', {
             dryRun: false,
             chat: assembledChat,
@@ -748,7 +780,7 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 850));
         return {
             apiCompatible: window.MvuAutoDoctorAPI.isCompatible(2),
-            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(3),
+            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(4),
             healthItems: document.querySelectorAll('.mvuad-health-item').length,
             promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
             modelCalls: window.MvuAutoDoctorAPI.getModelCallStats(),
@@ -769,6 +801,7 @@ try {
     assert.equal(diagnosticsUi.modelCalls.total, 3, '变量、活世界、手动论坛应分别计为一次模型调用');
     assert.deepEqual(diagnosticsUi.modelCalls.byTask, {
         variable: 1,
+        social: 0,
         continuity: 1,
         forum: 1,
         other: 0,
@@ -782,15 +815,252 @@ try {
     assert.equal(diagnosticsUi.modelCalls.currentRun.total, 3, '本次生成统计应与聊天累计分开保存');
     assert.deepEqual(diagnosticsUi.modelCalls.currentRun.byTask, {
         variable: 1,
+        social: 0,
         continuity: 1,
         forum: 1,
         other: 0,
     });
     assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
+    assert.equal(diagnosticsUi.injection.socialLanded, true, '人物动机合同也必须进入真实最终提示词');
     assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
+
+    const socialPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await socialPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await socialPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const proposalIsolation = await socialPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const eventData = {
+            dryRun: false,
+            chat: [
+                { role: 'system', content: '<options>系统格式说明必须保留</options>' },
+                {
+                    role: 'assistant',
+                    content: '上一轮正文事实。<options>一、控制她\n二、继续任务</options>',
+                },
+                { role: 'user', content: '我选择继续任务' },
+            ],
+        };
+        await t.context.eventSource.emit('chat_completion_prompt_ready', eventData);
+        return {
+            system: eventData.chat[0].content,
+            assistant: eventData.chat[1].content,
+            user: eventData.chat[2].content,
+            registeredContract: t.calls.extensionPrompts['mvu-auto-doctor-social-contract']?.content || '',
+            sanitization: window.MvuAutoDoctorAPI.getSocialPromptSanitization(),
+        };
+    });
+    assert.match(proposalIsolation.system, /系统格式说明必须保留/u);
+    assert.equal(proposalIsolation.assistant, '上一轮正文事实。');
+    assert.match(proposalIsolation.user, /继续任务/u);
+    assert.match(proposalIsolation.registeredContract, /当前动机的最高权威/u);
+    assert.match(proposalIsolation.registeredContract, /不是洗白/u);
+    assert.equal(proposalIsolation.sanitization.assistantMessagesSanitized, 1);
+
+    const socialRollback = await socialPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('social-revert');
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            socialNarrativeGuardEnabled: true,
+            socialAuditMode: 'balanced',
+            fastModelProvider: 'story-oracle',
+            modelRoutingSettingsVersion: 2,
+        });
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: '开场', swipe_id: 0, extra: {} },
+            { is_user: true, is_system: false, mes: '我给她带一份晚饭，问她要不要一起吃。', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: '她意识到你真正的目的在于饲养和控制她，陷入绝望，并成为狂热信徒。\\n<UpdateVariable><Analysis>关系暴涨</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: { 角色: { 她: { 好感度: 5, 关系: '同行者' } } },
+            display_data: {},
+        };
+        const after = {
+            stat_data: { 角色: { 她: { 好感度: 40, 关系: '狂热信徒' } } },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
+        return {
+            result,
+            state: t.getLatestData(),
+            audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+            socialRuns: t.calls.socialRuns,
+            socialSystem: t.calls.socialSystem,
+            socialUser: t.calls.socialUser,
+            message: t.context.chat[2].mes,
+        };
+    });
+    assert.equal(socialRollback.result.status, 'audited');
+    assert.equal(socialRollback.result.correction.status, 'applied');
+    assert.equal(socialRollback.state.stat_data.角色.她.好感度, 5);
+    assert.equal(socialRollback.state.stat_data.角色.她.关系, '同行者');
+    assert.equal(socialRollback.audits[0].verdict, 'violation');
+    assert.deepEqual(
+        socialRollback.audits[0].correction.revertedPaths.sort(),
+        ['/角色/她/关系', '/角色/她/好感度'].sort(),
+    );
+    assert.equal(socialRollback.socialRuns, 1);
+    assert.match(socialRollback.socialSystem, /不负责把故事改成温暖/u);
+    assert.match(socialRollback.socialSystem, /明确威胁、欺骗、洗脑/u);
+    assert.match(socialRollback.socialUser, /我给她带一份晚饭/u);
+    assert.doesNotMatch(socialRollback.socialUser, /系统格式说明必须保留/u);
+    assert.match(socialRollback.message, /普通照顾被误写成控制/u, '撤回补丁必须持久写入当前swipe');
+
+    const explicitDarkAllowed = await socialPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('social-allow-dark');
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: '开场', swipe_id: 0, extra: {} },
+            { is_user: true, is_system: false, mes: '我明确威胁他，要求他交代藏匿点。', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: '威胁检定成功，他的恐惧明显上升，但仍在权衡是否说谎。\\n<UpdateVariable><Analysis>恐惧变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: { 角色: { 他: { 恐惧: 10 } } },
+            display_data: {},
+        };
+        const after = {
+            stat_data: { 角色: { 他: { 恐惧: 25 } } },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const replacementsBefore = t.calls.replace.length;
+        const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
+        return {
+            result,
+            state: t.getLatestData(),
+            audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+            replacementDelta: t.calls.replace.length - replacementsBefore,
+        };
+    });
+    assert.equal(explicitDarkAllowed.result.status, 'audited');
+    assert.equal(explicitDarkAllowed.state.stat_data.角色.他.恐惧, 25);
+    assert.equal(explicitDarkAllowed.replacementDelta, 0, '有证据的黑暗后果不得被温暖基调回滚');
+    assert.equal(explicitDarkAllowed.audits[0].verdict, 'pass');
+    assert.equal(explicitDarkAllowed.audits[0].decisions[0].action, 'allow');
+    await socialPage.close();
+
+    const socialFailurePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await socialFailurePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await socialFailurePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const socialFailure = await socialFailurePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('transport-error');
+        const now = new Date();
+        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const namespace = t.context.chatMetadata.mvu_auto_doctor ||= {};
+        namespace.socialAudits = [{
+            id: 'legacy_failed_audit',
+            month,
+            summary: '二审调用失败：独立 API HTTP 502；持久关系保持本轮前状态并待确认',
+            findings: [],
+            usage: {
+                inputTokens: 3100,
+                outputTokens: 20,
+                cacheHitTokens: 0,
+                cacheMissTokens: 3100,
+                cny: 0.003443,
+                estimated: true,
+            },
+        }];
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            socialNarrativeGuardEnabled: true,
+            socialAuditMode: 'balanced',
+            fastModelProvider: 'story-oracle',
+            modelRoutingSettingsVersion: 2,
+            socialAuditSettingsVersion: 1,
+            socialMonthlySoftCny: 0.001,
+            socialMonthlyHardCny: 0.002,
+        });
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
+            {
+                is_user: true,
+                is_system: false,
+                mes: 'I bring Mia dinner and ask whether she wants to eat together.',
+                swipe_id: 0,
+                extra: {},
+            },
+            {
+                is_user: false,
+                is_system: false,
+                mes: 'Mia realizes the care is ownership and becomes fanatically loyal.\\n<UpdateVariable><Analysis>relationship jump</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: { characters: { Mia: { trust: 5, relationship: 'ally' } } },
+            display_data: {},
+        };
+        const after = {
+            stat_data: { characters: { Mia: { trust: 40, relationship: 'fanatic' } } },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
+        return {
+            result,
+            state: t.getLatestData(),
+            audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+        };
+    });
+    assert.equal(socialFailure.result.status, 'failed');
+    assert.equal(socialFailure.result.correction.status, 'applied');
+    assert.equal(socialFailure.state.stat_data.characters.Mia.trust, 5);
+    assert.equal(socialFailure.state.stat_data.characters.Mia.relationship, 'ally');
+    assert.equal(socialFailure.audits[0].usage.cny, 0);
+    assert.equal(socialFailure.audits[0].usage.estimated, false);
+    assert.deepEqual(socialFailure.audits[0].modelCall, {
+        attempted: true,
+        completed: false,
+        fallback: true,
+        failureReason: '二审调用失败：connection refused',
+    });
+    assert.deepEqual(
+        socialFailure.audits[0].correction.revertedPaths.sort(),
+        ['/characters/Mia/relationship', '/characters/Mia/trust'].sort(),
+    );
+    await socialFailurePage.close();
+    await page.bringToFront();
+
     assert.equal(continuity.hasSettingsLedger, false, '设置页不应再复制完整事件账本');
     assert.equal(continuity.hasWorldPanelButton, true);
     assert.equal(continuity.featureFoldsClosed, true, '设置页功能分区应默认收起');
+    const socialActionLayout = await page.evaluate(() => {
+        const section = document.querySelector('.mvuad-social-section');
+        const actions = section?.querySelector('.mvuad-actions');
+        const button = section?.querySelector('.mvuad-social-run');
+        section.open = true;
+        const actionsRect = actions.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        const result = {
+            actionsWidth: actionsRect.width,
+            buttonWidth: buttonRect.width,
+            buttonHeight: buttonRect.height,
+        };
+        section.open = false;
+        return result;
+    });
+    assert.ok(
+        socialActionLayout.buttonWidth >= socialActionLayout.actionsWidth - 1,
+        '移动端二审按钮必须撑满操作区，不能压成竖排窄条',
+    );
+    assert.ok(socialActionLayout.buttonHeight >= 42, '移动端二审按钮必须保留触控高度');
     if (process.env.MVUAD_SETTINGS_SCREENSHOT) {
         await page.evaluate(() => {
             document.querySelector('.mvuad-connection-manager').open = true;
@@ -851,8 +1121,17 @@ try {
         document.documentElement.appendChild(sidebar);
         document.documentElement.style.overflowX = 'auto';
         window.scrollTo(35, 0);
+        if ((window.visualViewport?.pageLeft ?? window.scrollX) < 35) {
+            document.scrollingElement.scrollLeft = 35;
+            document.documentElement.scrollLeft = 35;
+        }
     });
-    await page.click('#mvuad-floating-orb');
+    await page.waitForFunction(
+        () => (window.visualViewport?.pageLeft ?? window.scrollX) >= 35,
+        null,
+        { timeout: 5000 },
+    );
+    await page.evaluate(() => document.querySelector('#mvuad-floating-orb')?.click());
     const floatingPanel = await page.evaluate(() => {
         const panel = document.querySelector('#mvuad-floating-panel');
         const rect = panel?.getBoundingClientRect();
@@ -956,6 +1235,36 @@ try {
     assert.equal(
         await page.evaluate(() => document.querySelectorAll('#mvuad-floating-panel .mvuad-floating-forum-preview-item').length),
         3,
+    );
+    const floatingForumButton = await page.evaluate(() => {
+        const page = document.querySelector(
+            '#mvuad-floating-panel .mvuad-floating-page[data-page="forum"]',
+        );
+        const preview = page?.querySelector('.mvuad-floating-forum-preview');
+        const button = page?.querySelector('.mvuad-floating-forum');
+        const pageRect = page?.getBoundingClientRect();
+        const previewRect = preview?.getBoundingClientRect();
+        const buttonRect = button?.getBoundingClientRect();
+        return {
+            pageLeft: pageRect?.left ?? -1,
+            pageRight: pageRect?.right ?? Number.MAX_SAFE_INTEGER,
+            previewBottom: previewRect?.bottom ?? Number.MAX_SAFE_INTEGER,
+            left: buttonRect?.left ?? -1,
+            right: buttonRect?.right ?? Number.MAX_SAFE_INTEGER,
+            top: buttonRect?.top ?? -1,
+            width: buttonRect?.width ?? 0,
+            height: buttonRect?.height ?? 0,
+        };
+    });
+    assert.ok(
+        floatingForumButton.width >= 280 && floatingForumButton.height >= 42,
+        `完整论坛入口必须保持横向可读与可触控：${JSON.stringify(floatingForumButton)}`,
+    );
+    assert.ok(
+        floatingForumButton.left >= floatingForumButton.pageLeft
+        && floatingForumButton.right <= floatingForumButton.pageRight
+        && floatingForumButton.top >= floatingForumButton.previewBottom,
+        `完整论坛入口不得覆盖预览卡或超出论坛页：${JSON.stringify(floatingForumButton)}`,
     );
     if (process.env.MVUAD_FLOATING_FORUM_SCREENSHOT) {
         await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_FORUM_SCREENSHOT });
@@ -1390,7 +1699,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.8.14');
+    assert.equal(lifecycle.version, '1.9.0');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2444,6 +2753,7 @@ try {
     assert.equal(replacementAfter.stats.currentRun.total, 2, '重抽界面只应显示本次两次调用');
     assert.deepEqual(replacementAfter.stats.currentRun.byTask, {
         variable: 1,
+        social: 0,
         continuity: 1,
         forum: 0,
         other: 0,

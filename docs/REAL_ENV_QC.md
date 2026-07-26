@@ -40,7 +40,7 @@ loaded.
    `docs/qc-reports/vX.Y.Z.json`.
 3. Copy the release files into the real user extension directory:
    `CHANGELOG.md`, `continuity-core.mjs`, `core.mjs`, `forum-core.mjs`, `index.js`,
-   `LICENSE`, `manifest.json`, `model-queue.mjs`, `protocol-core.mjs`, `README.md`,
+   `LICENSE`, `manifest.json`, `model-queue.mjs`, `protocol-core.mjs`, `social-core.mjs`, `README.md`,
    and `style.css`.
 4. Confirm the served manifest and the in-app version badge match the release.
 
@@ -65,12 +65,17 @@ $env:DS_TEST_PORT = "9328"
 node qc/deepseek-memory-proxy.mjs
 ```
 
-Inject the credential from an approved secret source into
+Either inject the credential from an approved secret source into
 `POST http://127.0.0.1:9328/credential` with JSON `{ "apiKey": "..." }`. The endpoint
 returns only `{ "ok": true }`; the proxy never prints or persists the key. Configure
-the forum/lightweight model route to `http://127.0.0.1:9328/v1`.
+the forum/lightweight model route to `http://127.0.0.1:9328/v1`. When the approved
+credential is already stored in the explicitly selected local QC profile, the proxy
+may instead accept that profile's `Authorization: Bearer ...` header for the current
+request only. It forwards the value without logging, returning, or retaining it.
 
-Before continuing, verify `/health` reports `ok: true` and `credentialLoaded: true`.
+Before continuing, verify `/health` reports `ok: true` and
+`requestCredentialAccepted: true`. If using explicit injection, also require
+`credentialLoaded: true`.
 
 ## 4. Real forum and model checks
 
@@ -153,6 +158,47 @@ Do not manufacture a stronger boss merely to exercise the gate. A real apex
 escalation is valid only when the selected QC chat already contains a mature,
 pre-existing source chain. Otherwise the deterministic policy test is the required
 evidence for that path.
+
+## 5B. Social-motive and relationship ablation checks
+
+Run this section whenever the narrative motive contract, closed-option isolation,
+relationship detection, semantic second review, social audit persistence, or related
+model routing changes.
+
+1. Do not use DeepSeek as the main story model for proof of narrative improvement.
+   Its default tone may already be warmer than the affected main model and cannot
+   demonstrate that the plugin caused the change.
+2. Use the same explicitly selected main model, disposable chat baseline, character,
+   preset, user inputs, generation settings, and branch starting point for an A/B
+   ablation. In A, disable only `socialNarrativeGuardEnabled`; in B, enable it. Keep
+   the relationship second reviewer unchanged. Record only sanitized classifications,
+   never raw private prompts or responses.
+3. Cover at least: buying tea, bringing food, offering medicine, asking about a night
+   shift, a dark character sincerely helping an ally, and an NPC with justified but
+   limited suspicion. B must reduce unsupported omniscient motive attribution without
+   forcing every NPC to trust the player or making the prose uniformly warm.
+4. Inspect the real final chat-completion payload. Require the social contract sentinel
+   to be present. Seed an old assistant message containing an unselected extreme
+   `<options>` or `<branches>` candidate and require that block to be absent from the
+   model-bound assistant history while remaining visible and unchanged in the stored
+   chat. System format instructions and the user's actually submitted choice must
+   remain present.
+5. Use a traceable relationship-change case in which ordinary care was incorrectly
+   persisted as control, fanaticism, ownership, or a comparable major relationship.
+   Require one lightweight semantic review, a decision for every changed relationship
+   path, restoration of rejected paths only, preservation of unrelated MVU values, a
+   persisted correction block, and a source-linked social audit record.
+6. Run a complementary explicit-dark case through the same second reviewer: an
+   authorized threat, coercive ability, or other clearly selected dark action with a
+   rule-supported consequence. Require `allow`, no relationship rollback caused by
+   the reviewer's warm tone, and no narrative rewriting by the reviewer.
+7. Confirm balanced mode makes no semantic call on an ordinary turn without a
+   relationship change or suspicious motive attribution. Confirm usage/cost fields,
+   per-chat monthly accumulation, the ¥5 soft warning behavior, and the configurable
+   ¥10 hard-cap fallback without persisting a credential or raw model payload.
+8. The automated suite must also replay fixed hostile outputs. This separates local
+   enforcement from provider personality and is mandatory even when the live A/B
+   sample appears improved.
 
 ## 6. Automated suite
 

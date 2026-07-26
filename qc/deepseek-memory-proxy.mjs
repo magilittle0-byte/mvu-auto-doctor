@@ -14,6 +14,13 @@ function sendJson(response, status, value) {
     response.end(JSON.stringify(value));
 }
 
+function requestCredential(request) {
+    if (apiKey) return apiKey;
+    const authorization = String(request.headers.authorization || '').trim();
+    const matched = authorization.match(/^Bearer\s+(.+)$/iu);
+    return String(matched?.[1] || '').trim();
+}
+
 async function readJson(request, limit = 16384) {
     const chunks = [];
     let length = 0;
@@ -37,7 +44,11 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && request.url === '/health') {
-        sendJson(response, 200, { ok: true, credentialLoaded: Boolean(apiKey) });
+        sendJson(response, 200, {
+            ok: true,
+            credentialLoaded: Boolean(apiKey),
+            requestCredentialAccepted: true,
+        });
         return;
     }
 
@@ -83,7 +94,8 @@ const server = http.createServer(async (request, response) => {
         return;
     }
 
-    if (!apiKey) {
+    const activeCredential = requestCredential(request);
+    if (!activeCredential) {
         sendJson(response, 401, { error: { message: 'QC credential is not loaded' } });
         return;
     }
@@ -107,7 +119,7 @@ const server = http.createServer(async (request, response) => {
         const upstream = await fetch('https://api.deepseek.com/chat/completions', {
             method: 'POST',
             headers: {
-                authorization: `Bearer ${apiKey}`,
+                authorization: `Bearer ${activeCredential}`,
                 'content-type': 'application/json',
             },
             body: JSON.stringify({

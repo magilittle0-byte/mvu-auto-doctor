@@ -65,13 +65,25 @@ import {
     extractHardContractCorrection,
     verifyHardContractEvidence,
 } from './protocol-core.mjs';
+import {
+    buildSocialNarrativeContract,
+    buildSocialRollbackOps,
+    classifySocialAuditNeed,
+    collectRelationshipChanges,
+    parseSocialAuditOutput,
+    renderSocialPatchBlock,
+    sanitizeClosedProposalMessages,
+    stripClosedProposals,
+} from './social-core.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.8.14';
+const VERSION = '1.9.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 6;
+const CHAT_NAMESPACE_VERSION = 7;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
+const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
+const SOCIAL_INJECTION_SENTINEL = '【MVU医生·人物动机与自主性合同】';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
 const DEFAULTS = Object.freeze({
@@ -110,6 +122,13 @@ const DEFAULTS = Object.freeze({
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
     hardContractCorrectionEnabled: true,
+    socialNarrativeGuardEnabled: true,
+    socialAuditMode: 'balanced',
+    socialAuditMaxTokens: 1024,
+    socialAuditContextMessages: 5,
+    socialMonthlySoftCny: 5,
+    socialMonthlyHardCny: 10,
+    socialAuditSettingsVersion: 1,
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
@@ -157,6 +176,9 @@ let latestStatusKind = '';
 let latestHardContractStatus = '硬合同：等待检查';
 let latestHardContractKind = '';
 let latestHardContractAudit = null;
+let latestSocialStatus = '人物关系：等待检查';
+let latestSocialKind = '';
+let latestSocialAudit = null;
 let latestContinuityStatus = '世界连续性：等待事件';
 let latestContinuityKind = '';
 let latestForumStatus = '论坛：等待世界消息';
@@ -173,6 +195,7 @@ let modelCallStats = {
     rateLimited: 0,
     byTask: {
         variable: 0,
+        social: 0,
         continuity: 0,
         forum: 0,
         other: 0,
@@ -188,6 +211,7 @@ let modelCallStats = {
         rateLimited: 0,
         byTask: {
             variable: 0,
+            social: 0,
             continuity: 0,
             forum: 0,
             other: 0,
@@ -205,9 +229,17 @@ let lastInjectionInspection = {
     checkedAt: 0,
     registered: false,
     landed: false,
+    socialRegistered: false,
+    socialLanded: false,
     apiType: '',
 };
 let lastRegisteredContinuityContent = '';
+let lastRegisteredSocialContent = '';
+let lastSocialPromptSanitization = {
+    checkedAt: 0,
+    assistantMessagesSanitized: 0,
+    apiType: '',
+};
 let lastFocusedBeforeFloatingPanel = null;
 let lastFocusedBeforeForumPanel = null;
 let oracleAutoDisabledNoticeShown = false;
@@ -233,6 +265,7 @@ function getSettings() {
     const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
     const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
     const previousModelRoutingSettingsVersion = Number(settings.modelRoutingSettingsVersion) || 0;
+    const previousSocialAuditSettingsVersion = Number(settings.socialAuditSettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -250,6 +283,36 @@ function getSettings() {
     }
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
         settings.notificationLevel = 'all';
+        changed = true;
+    }
+    if (!['off', 'balanced', 'strict'].includes(settings.socialAuditMode)) {
+        settings.socialAuditMode = 'balanced';
+        changed = true;
+    }
+    settings.socialAuditMaxTokens = Math.min(
+        2048,
+        Math.max(1024, Number(settings.socialAuditMaxTokens) || DEFAULTS.socialAuditMaxTokens),
+    );
+    settings.socialAuditContextMessages = Math.min(
+        5,
+        Math.max(3, Number(settings.socialAuditContextMessages) || DEFAULTS.socialAuditContextMessages),
+    );
+    settings.socialMonthlySoftCny = Math.max(
+        0,
+        Number(settings.socialMonthlySoftCny) || DEFAULTS.socialMonthlySoftCny,
+    );
+    settings.socialMonthlyHardCny = Math.max(
+        settings.socialMonthlySoftCny,
+        Number(settings.socialMonthlyHardCny) || DEFAULTS.socialMonthlyHardCny,
+    );
+    if (previousSocialAuditSettingsVersion < 1) {
+        settings.socialNarrativeGuardEnabled = settings.socialNarrativeGuardEnabled !== false;
+        settings.socialAuditMode = 'balanced';
+        settings.socialAuditMaxTokens = DEFAULTS.socialAuditMaxTokens;
+        settings.socialAuditContextMessages = DEFAULTS.socialAuditContextMessages;
+        settings.socialMonthlySoftCny = DEFAULTS.socialMonthlySoftCny;
+        settings.socialMonthlyHardCny = DEFAULTS.socialMonthlyHardCny;
+        settings.socialAuditSettingsVersion = 1;
         changed = true;
     }
     if (!['tavern', 'direct', 'story-oracle'].includes(settings.strictModelProvider)) {
@@ -434,6 +497,7 @@ function normalizedModelCallStats(value) {
         rateLimited: nonNegative(source.rateLimited),
         byTask: {
             variable: nonNegative(byTask.variable),
+            social: nonNegative(byTask.social),
             continuity: nonNegative(byTask.continuity),
             forum: nonNegative(byTask.forum),
             other: nonNegative(byTask.other),
@@ -449,6 +513,7 @@ function normalizedModelCallStats(value) {
             rateLimited: nonNegative(currentSource.rateLimited),
             byTask: {
                 variable: nonNegative(currentByTask.variable),
+                social: nonNegative(currentByTask.social),
                 continuity: nonNegative(currentByTask.continuity),
                 forum: nonNegative(currentByTask.forum),
                 other: nonNegative(currentByTask.other),
@@ -553,6 +618,7 @@ function recordModelDiagnostic(entry) {
 
 function modelCallTaskKey(task) {
     const text = String(task || '');
+    if (/人物|关系二审|社会语义/iu.test(text)) return 'social';
     if (/变量|MVU/iu.test(text)) return 'variable';
     if (/世界|连续|事件/iu.test(text)) return 'continuity';
     if (/论坛|帖子/iu.test(text)) return 'forum';
@@ -565,6 +631,7 @@ function renderModelCallStats() {
     const text = [
         `本次生成 ${current.total} 次`,
         `变量 ${current.byTask.variable}`,
+        `关系二审 ${current.byTask.social}`,
         `活世界 ${current.byTask.continuity}`,
         `论坛 ${current.byTask.forum}`,
         `失败 ${current.failed}`,
@@ -590,6 +657,7 @@ function resetCurrentModelCallStats(type = 'normal') {
         rateLimited: 0,
         byTask: {
             variable: 0,
+            social: 0,
             continuity: 0,
             forum: 0,
             other: 0,
@@ -747,6 +815,48 @@ function setHardContractStatus(text, kind = '', { record = true } = {}) {
         ui.floatingHardContractStatus.dataset.kind = kind;
     }
     renderHardContractAudit();
+    updateFloatingOrb();
+}
+
+function renderSocialAudit() {
+    const root = ui?.socialAuditList;
+    if (!root) return;
+    root.replaceChildren();
+    const audits = Array.isArray(readChatNamespace().socialAudits)
+        ? readChatNamespace().socialAudits.slice(0, 8)
+        : [];
+    if (!audits.length) {
+        const empty = document.createElement('li');
+        empty.className = 'mvuad-protocol-empty';
+        empty.textContent = '尚无人物关系二审记录。';
+        root.appendChild(empty);
+        return;
+    }
+    for (const audit of audits) {
+        const item = document.createElement('li');
+        const source = audit.sourceRef?.index >= 0 ? `楼层 ${audit.sourceRef.index}` : '未知楼层';
+        const paths = (audit.decisions || [])
+            .filter((decision) => decision.action === 'revert')
+            .map((decision) => decision.path)
+            .slice(0, 4);
+        item.textContent = [
+            `${source} · ${audit.verdict || 'warning'}`,
+            audit.summary || audit.reasons?.join('、') || '已完成审核',
+            paths.length ? `撤回：${paths.join('、')}` : '关系变化未被撤回',
+        ].join(' · ');
+        root.appendChild(item);
+    }
+}
+
+function setSocialStatus(text, kind = '', { record = true } = {}) {
+    latestSocialStatus = String(text || '');
+    latestSocialKind = kind;
+    if (record) recordOperation('人物关系', latestSocialStatus, kind);
+    if (ui?.socialStatus) {
+        ui.socialStatus.textContent = latestSocialStatus;
+        ui.socialStatus.dataset.kind = kind;
+    }
+    renderSocialAudit();
     updateFloatingOrb();
 }
 
@@ -966,6 +1076,7 @@ function promptPayloadContainsSentinel(eventData) {
         return {
             apiType: 'text',
             landed: eventData.prompt.includes(CONTINUITY_INJECTION_SENTINEL),
+            socialLanded: eventData.prompt.includes(SOCIAL_INJECTION_SENTINEL),
         };
     }
     if (Array.isArray(eventData.chat)) {
@@ -973,6 +1084,9 @@ function promptPayloadContainsSentinel(eventData) {
             apiType: 'chat',
             landed: eventData.chat.some((message) => (
                 String(message?.content || '').includes(CONTINUITY_INJECTION_SENTINEL)
+            )),
+            socialLanded: eventData.chat.some((message) => (
+                String(message?.content || '').includes(SOCIAL_INJECTION_SENTINEL)
             )),
         };
     }
@@ -989,12 +1103,39 @@ function inspectContinuityInjectionEvent(eventData) {
             checkedAt: Date.now(),
             registered,
             landed: payload.landed,
+            socialRegistered: !!lastRegisteredSocialContent,
+            socialLanded: payload.socialLanded,
             apiType: payload.apiType,
         };
         renderEnvironmentReport();
     } catch {
         // 注入自检只读且绝不能影响生成。
     }
+}
+
+function sanitizeSocialPromptEvent(eventData) {
+    if (!eventData || eventData.dryRun) return;
+    if (Array.isArray(eventData.chat)) {
+        const sanitized = sanitizeClosedProposalMessages(eventData.chat);
+        lastSocialPromptSanitization = {
+            checkedAt: Date.now(),
+            assistantMessagesSanitized: sanitized,
+            apiType: 'chat',
+        };
+        if (sanitized) {
+            recordOperation(
+                '候选隔离',
+                `已从本次模型上下文移除 ${sanitized} 条旧 assistant 消息中的未选选项；聊天显示原文未改动`,
+                'ok',
+            );
+        }
+        return;
+    }
+    lastSocialPromptSanitization = {
+        checkedAt: Date.now(),
+        assistantMessagesSanitized: 0,
+        apiType: typeof eventData.prompt === 'string' ? 'text' : '',
+    };
 }
 
 function environmentCheck(kind, label, detail) {
@@ -1114,6 +1255,23 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
         '上轮注入落地',
         injectionInspectionText(),
     ));
+    checks.push(environmentCheck(
+        !getSettings().socialNarrativeGuardEnabled
+            ? 'info'
+            : lastInjectionInspection.socialLanded === true
+                ? 'ok'
+                : lastInjectionInspection.checkedAt
+                    ? 'error'
+                    : 'info',
+        '人物动机合同',
+        !getSettings().socialNarrativeGuardEnabled
+            ? '当前已关闭'
+            : lastInjectionInspection.socialLanded === true
+                ? '上轮已进入真实最终提示词'
+                : lastInjectionInspection.checkedAt
+                    ? '已注册但上轮未在最终提示词中找到'
+                    : '已注册，等待下一次真实生成验证',
+    ));
 
     const settings = getSettings();
     for (const [channel, label] of [['strict', '严格模型通道'], ['fast', '轻量模型通道']]) {
@@ -1221,6 +1379,7 @@ function diagnosticPayload() {
             userAgent: navigator.userAgent,
             report: lastEnvironmentReport,
             injection: lastInjectionInspection,
+            socialPromptSanitization: lastSocialPromptSanitization,
             capabilities: {
                 updateChatMetadata: typeof context?.updateChatMetadata === 'function',
                 saveMetadata: typeof context?.saveMetadata === 'function',
@@ -1245,6 +1404,9 @@ function diagnosticPayload() {
             repairJournalCount: Array.isArray(namespace.repairJournal)
                 ? namespace.repairJournal.length
                 : 0,
+            socialAuditCount: Array.isArray(namespace.socialAudits)
+                ? namespace.socialAudits.length
+                : 0,
             continuity: {
                 activeCount: continuity.activeCount,
                 resolvedCount: continuity.resolvedCount,
@@ -1257,6 +1419,7 @@ function diagnosticPayload() {
         latestStatuses: {
             variable: { text: latestStatus, kind: latestStatusKind },
             hardContract: { text: latestHardContractStatus, kind: latestHardContractKind },
+            social: { text: latestSocialStatus, kind: latestSocialKind },
             continuity: { text: latestContinuityStatus, kind: latestContinuityKind },
             forum: { text: latestForumStatus, kind: latestForumKind },
         },
@@ -1271,6 +1434,20 @@ function diagnosticPayload() {
                     path: issue.path || '',
                     message: issue.message,
                 })),
+            }
+            : null,
+        latestSocialAudit: latestSocialAudit
+            ? {
+                createdAt: latestSocialAudit.createdAt,
+                sourceIndex: latestSocialAudit.sourceRef?.index ?? -1,
+                mode: latestSocialAudit.mode,
+                reasons: latestSocialAudit.reasons,
+                verdict: latestSocialAudit.verdict,
+                summary: latestSocialAudit.summary,
+                findings: latestSocialAudit.findings,
+                decisions: latestSocialAudit.decisions,
+                usage: latestSocialAudit.usage,
+                correction: latestSocialAudit.correction,
             }
             : null,
         lastPrompt: lastPromptSnapshot
@@ -1392,6 +1569,7 @@ function readChatNamespace(context = getContext()) {
                 synced: {},
                 suppressed: {},
             },
+            socialAudits: [],
             continuity: emptyContinuityState(context?.chatId || ''),
             continuityCheckpoint: null,
             forum: emptyForumState(context?.chatId || ''),
@@ -2203,11 +2381,11 @@ function sourceRefOf(captured) {
 }
 
 function stripMechanism(text) {
-    return String(text || '')
+    return stripClosedProposals(String(text || '')
         .replace(/<UpdateVariable\b[\s\S]*?<\/UpdateVariable>/giu, '')
         .replace(/<UpdateVariable\b[\s\S]*$/iu, '')
         .split(STATUS_PLACEHOLDER)
-        .join('')
+        .join(''))
         .trim();
 }
 
@@ -2857,6 +3035,9 @@ async function buildAuditMessages({
         '- 根据最新 AI 回复正文判断本回合明确发生了什么。不得根据可能性、计划、比喻或未发生的动作改变量。',
         '- 保留 GM 的合理创作自主权：符合当前设定的额外战利品、NPC反应、场景细节、惊喜与自然延伸，不会仅因玩家没有逐项指定就构成错误。只有 Schema、明确数值公式、枚举、骰子、资源或更新规则能够证明冲突时才修变量。',
         '- 不评价文风、措辞、剧情选择或“是否应该这样写”，也不得为了迎合主观叙事偏好改变量。',
+        '- 但持久人物关系仍受证据约束：普通照顾、送饭、送药、询问工作或一次并肩行动允许不改变关系。好感、信任、亲密、忠诚、依赖、崇拜或关系阶段变化，必须有本轮明确双向选择、标志性事件或可追溯重复模式。',
+        '- 洗脑、契约、威胁、心智控制和被迫服从属于强制状态，不得投影成自愿好感、信任、亲密、忠诚或崇拜；除非另有独立的自愿证据。',
+        '- 最近剧情上下文已经移除未选择的options/branches。未被用户实际发送的候选不是事实、动机、关系证据或未来方向。',
         '- 不只检查叶子值，也要检查动态集合的成员资格与生命周期。集合名和规则若限定为“当前敌人”等特定身份，不得把它擅自当作通用 NPC、同伴或仓库存放区。',
         '- 规则明确规定死亡、逃跑、战斗结束、离队、失效等条件要删除条目时，只有正文或所给历史线索明确证明条件已经发生，才清理过期条目；“近期没提到”本身不是证据。',
         '- 动态条目若放错集合，只能在 Schema、规则或正文明确给出正确目标路径时 move；否则只纠正能够确定的错误，不创造新的收纳字段。',
@@ -3221,12 +3402,28 @@ function directResponseText(payload) {
     return '';
 }
 
+function normalizedProviderUsage(value) {
+    const usage = isPlainObject(value) ? value : {};
+    const nonNegative = (item) => Math.max(0, Math.floor(Number(item) || 0));
+    return {
+        inputTokens: nonNegative(usage.prompt_tokens ?? usage.input_tokens),
+        outputTokens: nonNegative(usage.completion_tokens ?? usage.output_tokens),
+        cacheHitTokens: nonNegative(
+            usage.prompt_cache_hit_tokens
+            ?? usage.input_tokens_details?.cached_tokens
+            ?? usage.prompt_tokens_details?.cached_tokens,
+        ),
+        cacheMissTokens: nonNegative(usage.prompt_cache_miss_tokens),
+    };
+}
+
 async function callDirectModel(messages, {
     channel = 'strict',
     maxTokens = 4096,
     signal = null,
     jsonMode = false,
     profile: capturedProfile = null,
+    usageSink = null,
 } = {}) {
     const profile = capturedProfile || directProfile(getSettings(), channel);
     const url = openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl);
@@ -3278,6 +3475,7 @@ async function callDirectModel(messages, {
         );
         const output = String(result?.content || '');
         if (!output.trim()) throw new Error('酒馆后端转发成功，但模型正文为空');
+        usageSink?.(normalizedProviderUsage(result?.usage));
         return output;
     }
     const response = await fetch(url, {
@@ -3298,6 +3496,7 @@ async function callDirectModel(messages, {
         throw error;
     }
     const payload = await response.json();
+    usageSink?.(normalizedProviderUsage(payload?.usage));
     const output = directResponseText(payload);
     if (!output.trim()) throw new Error('独立 API 返回成功，但正文为空');
     return output;
@@ -3328,6 +3527,7 @@ function modelTaskPriority(task, explicitPriority) {
     const text = String(task || '');
     if (/连接测试/iu.test(text)) return 50;
     if (/变量|MVU/iu.test(text)) return 40;
+    if (/人物|关系二审|社会语义/iu.test(text)) return 35;
     if (/世界|连续|事件/iu.test(text)) return 30;
     if (/论坛|帖子/iu.test(text)) return 10;
     return 20;
@@ -3350,6 +3550,7 @@ async function callModel(messages, options = {}) {
     const connectionKey = modelConnectionKey(profile);
     const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
+    let providerUsage = null;
     const messageCopies = (Array.isArray(messages) ? messages : []).map((message) => ({
         role: String(message?.role || ''),
         content: String(message?.content || ''),
@@ -3390,6 +3591,9 @@ async function callModel(messages, options = {}) {
                             signal: controller.signal,
                             jsonMode: options.jsonMode === true,
                             profile,
+                            usageSink: (usage) => {
+                                providerUsage = usage;
+                            },
                         }),
                         timeoutMs,
                         `${channel === 'fast' ? '轻量' : '严格'}独立 API`,
@@ -3398,6 +3602,7 @@ async function callModel(messages, options = {}) {
                             onTimeout: () => controller.abort('模型请求超时'),
                         },
                     );
+                    options.onUsage?.(providerUsage);
                     return succeed(output);
                 }
                 if (profile.provider === 'story-oracle') {
@@ -3473,6 +3678,355 @@ async function callModel(messages, options = {}) {
         activeModelControllers.delete(controller);
         syncTaskCancelButtons();
     }
+}
+
+function estimateSocialUsageCost(usage, promptChars = 0, outputChars = 0) {
+    const normalized = normalizedProviderUsage(usage);
+    const hasProviderUsage = normalized.inputTokens > 0 || normalized.outputTokens > 0;
+    const inputTokens = hasProviderUsage
+        ? normalized.inputTokens
+        : Math.ceil(Math.max(0, Number(promptChars) || 0) / 2);
+    const outputTokens = hasProviderUsage
+        ? normalized.outputTokens
+        : Math.ceil(Math.max(0, Number(outputChars) || 0) / 2);
+    const cacheHitTokens = Math.min(inputTokens, normalized.cacheHitTokens);
+    const cacheMissTokens = normalized.cacheMissTokens > 0
+        ? Math.min(inputTokens, normalized.cacheMissTokens)
+        : Math.max(0, inputTokens - cacheHitTokens);
+    const cny = (
+        cacheHitTokens * 0.02
+        + cacheMissTokens * 1
+        + outputTokens * 2
+    ) / 1_000_000;
+    return {
+        inputTokens,
+        outputTokens,
+        cacheHitTokens,
+        cacheMissTokens,
+        cny: Number(cny.toFixed(6)),
+        estimated: !hasProviderUsage,
+    };
+}
+
+function socialMonthSpend(namespace = readChatNamespace(), now = Date.now()) {
+    const date = new Date(now);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const cny = (Array.isArray(namespace?.socialAudits) ? namespace.socialAudits : [])
+        .filter((audit) => String(audit.month || '') === key)
+        .reduce((sum, audit) => {
+            const legacyFailureText = [
+                audit.summary,
+                ...(Array.isArray(audit.findings)
+                    ? audit.findings.map((finding) => finding?.reason)
+                    : []),
+            ].filter(Boolean).join(' ');
+            const failedBeforeCompletion = audit.modelCall?.completed === false
+                || (
+                    audit.modelCall?.completed === undefined
+                    && audit.usage?.estimated === true
+                    && /二审调用失败|HTTP\s*[45]\d\d|connection refused|network error|timeout/iu.test(
+                        legacyFailureText,
+                    )
+                );
+            return failedBeforeCompletion
+                ? sum
+                : sum + Math.max(0, Number(audit.usage?.cny) || 0);
+        }, 0);
+    return { key, cny: Number(cny.toFixed(6)) };
+}
+
+async function persistSocialAudit(record, expectedChatId) {
+    const namespace = readChatNamespace();
+    namespace.socialAudits = [
+        deepClone(record),
+        ...(Array.isArray(namespace.socialAudits) ? namespace.socialAudits : [])
+            .filter((item) => item?.id !== record.id),
+    ].slice(0, 30);
+    const saved = await writeChatNamespace(namespace, expectedChatId, {
+        fields: ['socialAudits'],
+    });
+    if (saved) {
+        latestSocialAudit = deepClone(record);
+        renderSocialAudit();
+    }
+    return saved;
+}
+
+function buildSocialAuditMessages({
+    userText,
+    replyText,
+    history,
+    changes,
+    reasons,
+} = {}) {
+    const system = [
+        '你是人物动机、人格自主性与持久关系变更的结构化二级审核器。',
+        '你不负责把故事改成温暖、正能量或善意，也不评价文风。明确威胁、欺骗、洗脑、主奴、黑暗关系与极端情绪，只要有本轮用户授权、设定/机制或连续证据，就必须放行。',
+        '只审核两件事：一，旁白是否把用户未表达的控制、试探、饲养、占有等目的写成全知事实；二，本轮关系字段变化是否有足够证据，以及强制状态是否被误写成自愿好感、信任、亲密或忠诚。',
+        'NPC可以怀疑，但NPC有限视角的怀疑不能作为全知事实；历史恶行可以支持警惕，却不能自动证明本轮善意虚伪。',
+        '普通互动允许不改变持久关系。强烈情绪允许发生，但单次事件不能无依据永久改写人格。',
+        '每个给出的关系路径都必须返回一条decision。action只能是allow或revert。revert表示恢复到本轮前状态；不得提出新值、替代路径或正文改写。',
+        '只返回一个JSON对象，不要代码围栏：',
+        '{"verdict":"pass|warning|violation","summary":"短结论","findings":[{"type":"unauthorized_motive|coercion_conflation|unsupported_relationship|extreme_emotion|valid_dark_content|other","severity":"info|warning|error","reason":"原因","evidence":"给定文本中的短证据"}],"decisions":[{"path":"必须逐字复制给定路径","action":"allow|revert","reason":"原因","evidence":"短证据"}]}',
+    ].join('\n');
+    const user = [
+        '=== 触发原因 ===',
+        (reasons || []).join('、') || '严格模式复核',
+        '',
+        '=== 本轮用户实际输入（动机最高权威）===',
+        cropText(userText || '无', 1400, '本轮用户输入'),
+        '',
+        '=== 本轮AI正文（已移除机制块与未选候选）===',
+        cropText(replyText || '无', 3600, '本轮AI正文'),
+        '',
+        '=== 仅保留的最近相关历史（未选候选已移除）===',
+        cropText(history || '无', 2200, '相关历史'),
+        '',
+        '=== 本轮关系字段变化 ===',
+        cropText(safeJson((changes || []).map((change) => ({
+            path: change.path,
+            before: change.beforeExists ? change.before : '(不存在)',
+            after: change.afterExists ? change.after : '(不存在)',
+        }))), 1800, '关系变化'),
+        '',
+        '逐条审核给定路径。明确黑暗行为有证据时allow；没有自愿关系证据、把强制效果当好感、或仅凭未选选项时revert。',
+    ].join('\n');
+    return [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+    ];
+}
+
+async function runSocialAuditTarget(captured, { manual = false } = {}) {
+    const settings = getSettings();
+    if (settings.socialAuditMode === 'off') {
+        setSocialStatus('人物关系：二审已关闭；正文动机合同仍按单独开关运行', '');
+        return { status: 'disabled' };
+    }
+    const context = getContext();
+    const target = captured || captureTarget(context, latestAiMessage(context).index);
+    if (!target) return { status: 'stale', reason: '人物关系二审目标不可用' };
+    const token = operationToken(target);
+    let guard = targetIsCurrent(target, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const Mvu = await getMvu();
+    if (!Mvu || typeof Mvu.getMvuData !== 'function') {
+        return { status: 'failed', reason: '人物关系二审无法读取MVU' };
+    }
+    const currentData = await mvuDataAtLatestTarget(Mvu, target.index);
+    const previousData = await previousMvuData(Mvu, context, target.index);
+    guard = targetIsCurrent(target, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    const relationship = collectRelationshipChanges(
+        statDataOf(previousData) || {},
+        statDataOf(currentData) || {},
+    );
+    const userText = previousUserMessageText(context, target.index);
+    const replyText = stripMechanism(context.chat[target.index]?.mes || '');
+    const routed = classifySocialAuditNeed({
+        userText,
+        replyText,
+        changes: relationship.changes,
+        mode: settings.socialAuditMode,
+    });
+    if (!routed.needed && !manual) {
+        setSocialStatus('人物关系：本轮没有需要语义二审的关系变化或动机归因', 'ok');
+        return { status: 'nochange', changes: relationship.changes };
+    }
+
+    const namespace = readChatNamespace(context);
+    const monthly = socialMonthSpend(namespace);
+    const overHardCap = monthly.cny >= settings.socialMonthlyHardCny;
+    let output = '';
+    let parsed = null;
+    let usage = null;
+    let failureReason = '';
+    let modelCallCompleted = false;
+    const messages = buildSocialAuditMessages({
+        userText,
+        replyText,
+        history: recentTranscript(context, target.index, settings.socialAuditContextMessages),
+        changes: relationship.changes,
+        reasons: routed.reasons,
+    });
+    setSocialStatus(
+        overHardCap
+            ? `人物关系：本月二审已达硬上限 ¥${settings.socialMonthlyHardCny}，关系变化转为待确认`
+            : '人物关系：正在进行语义二审',
+        overHardCap ? 'error' : 'busy',
+    );
+    if (!overHardCap) {
+        try {
+            output = await callModel(messages, {
+                maxTokens: settings.socialAuditMaxTokens,
+                task: '人物关系二审',
+                channel: 'fast',
+                jsonMode: true,
+                onUsage: (value) => {
+                    usage = value;
+                },
+            });
+            modelCallCompleted = true;
+            parsed = parseSocialAuditOutput(output, relationship.changes);
+            if (parsed.error) failureReason = parsed.error;
+        } catch (error) {
+            failureReason = `二审调用失败：${error.message || error}`;
+        }
+    } else {
+        failureReason = '达到月度费用硬上限';
+    }
+    guard = targetIsCurrent(target, token);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+
+    const reviewFailed = !overHardCap && (!parsed || parsed.error);
+    if (!parsed || parsed.error) {
+        parsed = {
+            verdict: relationship.changes.length ? 'warning' : 'violation',
+            summary: `${failureReason || parsed?.error || '二审结果不确定'}；持久关系保持本轮前状态并待确认`,
+            findings: [{
+                type: 'other',
+                severity: 'warning',
+                reason: failureReason || parsed?.error || '二审结果不确定',
+                evidence: '',
+            }],
+            decisions: relationship.changes.map((change) => ({
+                path: change.path,
+                action: 'revert',
+                reason: '二审不可用时不固化持久关系变化',
+                evidence: '',
+            })),
+        };
+    } else {
+        const byPath = new Map(parsed.decisions.map((decision) => [decision.path, decision]));
+        for (const change of relationship.changes) {
+            if (byPath.has(change.path)) continue;
+            parsed.decisions.push({
+                path: change.path,
+                action: parsed.verdict === 'pass' ? 'allow' : 'revert',
+                reason: parsed.verdict === 'pass'
+                    ? '整体审核通过'
+                    : '二审未逐条说明，保持关系不变并待确认',
+                evidence: '',
+            });
+        }
+    }
+    const zeroUsage = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        cny: 0,
+        estimated: false,
+    };
+    const usageSummary = modelCallCompleted
+        ? estimateSocialUsageCost(
+            usage,
+            messages.reduce((sum, message) => sum + message.content.length, 0),
+            output.length,
+        )
+        : zeroUsage;
+    const record = {
+        id: `social_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: Date.now(),
+        month: monthly.key,
+        mode: settings.socialAuditMode,
+        sourceRef: sourceRefOf(target),
+        reasons: routed.reasons,
+        verdict: parsed.verdict,
+        summary: parsed.summary,
+        findings: parsed.findings,
+        decisions: parsed.decisions,
+        usage: overHardCap ? zeroUsage : usageSummary,
+        modelCall: {
+            attempted: !overHardCap,
+            completed: modelCallCompleted,
+            fallback: overHardCap || reviewFailed,
+            failureReason: reviewFailed ? failureReason : '',
+        },
+        relationshipChangeCount: relationship.changes.length,
+        omittedRelationshipChanges: relationship.omitted,
+        promptProposalSanitization: deepClone(lastSocialPromptSanitization),
+    };
+
+    const rollbackOps = buildSocialRollbackOps(relationship.changes, parsed.decisions);
+    let correction = { status: 'nochange' };
+    if (rollbackOps.length) {
+        const block = renderSocialPatchBlock(rollbackOps, parsed.summary);
+        const prepared = preparePatch(block, currentData);
+        if (prepared.error) {
+            correction = { status: 'failed', reason: prepared.error };
+        } else {
+            try {
+                const newData = await Mvu.parseMessage(prepared.block, deepClone(currentData));
+                const checked = validatePatchResult(currentData, newData, prepared);
+                if (!checked.ok) {
+                    correction = {
+                        status: checked.nochange ? 'nochange' : 'failed',
+                        reason: checked.reason,
+                        details: checked.details,
+                    };
+                } else {
+                    correction = await commitCandidate(Mvu, {
+                        status: 'ready',
+                        block: prepared.block,
+                        prepared,
+                        newData,
+                    }, target, token, {
+                        repairKind: 'social-audit',
+                        socialAuditId: record.id,
+                        socialAuditSummary: parsed.summary,
+                    });
+                }
+            } catch (error) {
+                correction = { status: 'failed', reason: error.message || String(error) };
+            }
+        }
+    }
+    record.correction = {
+        status: correction.status,
+        revertedPaths: rollbackOps.map((op) => op.path),
+        reason: correction.reason || '',
+    };
+    await persistSocialAudit(record, target.chatId);
+    const monthAfter = Number((monthly.cny + record.usage.cny).toFixed(6));
+    if (correction.status === 'failed') {
+        setSocialStatus(`人物关系：二审或安全回退失败：${correction.reason}`, 'error');
+    } else if (reviewFailed) {
+        const safetyOutcome = correction.status === 'applied'
+            ? `；已安全撤回 ${rollbackOps.length} 项关系变化`
+            : '；关系状态保持不变';
+        setSocialStatus(
+            modelCallCompleted
+                ? `人物关系：二审结果无效${safetyOutcome}；本次调用按实际用量记录，本月约 ¥${monthAfter}`
+                : `人物关系：二审调用失败${safetyOutcome}；本次未计费`,
+            'error',
+        );
+    } else if (correction.status === 'applied') {
+        setSocialStatus(
+            `人物关系：已撤回 ${rollbackOps.length} 个无充分证据的持久关系变化；本月约 ¥${monthAfter}`,
+            'ok',
+        );
+    } else {
+        setSocialStatus(
+            `人物关系：${parsed.verdict === 'pass' ? '审核通过' : '已记录提醒'}；本月约 ¥${monthAfter}`,
+            parsed.verdict === 'violation' ? 'error' : 'ok',
+        );
+    }
+    if (monthAfter >= settings.socialMonthlySoftCny) {
+        recordOperation(
+            '人物关系',
+            `本月二审费用约 ¥${monthAfter}，已达到软提醒 ¥${settings.socialMonthlySoftCny}；不会自动降级`,
+            'busy',
+        );
+    }
+    return {
+        status: correction.status === 'failed' || reviewFailed ? 'failed' : 'audited',
+        audit: record,
+        correction,
+        correctedTarget: correction.status === 'applied'
+            ? captureTarget(getContext(), target.index)
+            : target,
+    };
 }
 
 function skillNamesFromState(statData) {
@@ -5095,6 +5649,67 @@ async function activePresetHasContinuityPrompt() {
     }
     presetContinuityCache = { checkedAt: Date.now(), active };
     return active;
+}
+
+function registerSocialInjection(content) {
+    const context = getContext();
+    const registeredContent = String(content || '').trim()
+        ? `${SOCIAL_INJECTION_SENTINEL}\n${String(content).trim()}`
+        : '';
+    try {
+        if (typeof context?.setExtensionPrompt === 'function') {
+            context.setExtensionPrompt(
+                SOCIAL_INJECTION_NAME,
+                registeredContent,
+                IN_CHAT_POSITION,
+                IN_CHAT_DEPTH,
+                false,
+                0,
+            );
+            lastRegisteredSocialContent = registeredContent;
+            return true;
+        }
+        if (typeof context?.registerInjection === 'function') {
+            context.unregisterInjection?.(SOCIAL_INJECTION_NAME);
+            if (registeredContent) {
+                context.registerInjection(SOCIAL_INJECTION_NAME, registeredContent, {
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                    role: 'system',
+                });
+            }
+            lastRegisteredSocialContent = registeredContent;
+            return true;
+        }
+        if (Array.isArray(context?.extensionPrompts)) {
+            context.extensionPrompts = context.extensionPrompts
+                .filter((item) => item?.name !== SOCIAL_INJECTION_NAME);
+            if (registeredContent) {
+                context.extensionPrompts.push({
+                    name: SOCIAL_INJECTION_NAME,
+                    content: registeredContent,
+                    role: 'system',
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                });
+            }
+            lastRegisteredSocialContent = registeredContent;
+            return true;
+        }
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 人物动机合同注入失败：', error);
+    }
+    lastRegisteredSocialContent = '';
+    return false;
+}
+
+function applySocialInjection() {
+    const settings = getSettings();
+    return registerSocialInjection(
+        settings.socialNarrativeGuardEnabled
+            ? buildSocialNarrativeContract()
+            : '',
+    );
 }
 
 function registerContinuityInjection(content) {
@@ -8131,6 +8746,7 @@ function makeCheckbox(label, key) {
         }
         if (key === 'hideContinuitySpoilers') renderContinuityLedger();
         if (key === 'floatingOrbEnabled') syncFloatingUiVisibility();
+        if (key === 'socialNarrativeGuardEnabled') applySocialInjection();
         if (key === 'hardContractAuditEnabled') {
             if (input.checked) enqueueHardContractAudit(null, { manual: true });
             else setHardContractStatus('硬合同：自动检查已关闭');
@@ -8761,6 +9377,37 @@ function buildSettingsPanel() {
                             </details>
                         </div>
                     </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-social-section">
+                        <summary>人物动机、自主性与关系二审</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                正文生成前注入当前动机与活人感合同，并从真实聊天模型上下文移除未选择的候选选项。
+                                只有出现关系变化、极端标签、玩家隐藏动机归因或强制/自愿冲突时，才用轻量通道做结构化二审；
+                                二审不能重写正文文风，只能放行或撤回本轮持久关系变化。
+                            </div>
+                            <div class="mvuad-social-options"></div>
+                            <label class="mvuad-select">
+                                <span>关系二审模式</span>
+                                <select class="text_pole mvuad-social-audit-mode">
+                                    <option value="off">关闭二审（仍可保留正文合同）</option>
+                                    <option value="balanced">平衡·按风险触发（推荐）</option>
+                                    <option value="strict">严格·所有关系变化都审</option>
+                                </select>
+                            </label>
+                            <div class="mvuad-description">
+                                默认月度软提醒 ¥5、硬上限 ¥10。软提醒不会降级；达到硬上限后不再调用API，
+                                有争议的持久关系保持本轮前状态并标记待确认。
+                            </div>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-social-run" type="button">二审最新回复</button>
+                            </div>
+                            <div class="mvuad-status mvuad-social-status" role="status"></div>
+                            <details class="mvuad-protocol-details mvuad-social-details">
+                                <summary>查看最近二审追溯</summary>
+                                <ul class="mvuad-social-audit-list"></ul>
+                            </details>
+                        </div>
+                    </details>
                     <details class="mvuad-settings-fold mvuad-settings-section">
                         <summary>活世界与事件连续性</summary>
                         <div class="mvuad-settings-fold-body">
@@ -8865,6 +9512,21 @@ function buildSettingsPanel() {
         makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
         makeCheckbox('硬错误时用同一次变量诊断生成可撤回修正版', 'hardContractCorrectionEnabled'),
     );
+    wrapper.querySelector('.mvuad-social-options').append(
+        makeCheckbox('启用正文动机与人物自主性合同', 'socialNarrativeGuardEnabled'),
+    );
+    const socialAuditMode = wrapper.querySelector('.mvuad-social-audit-mode');
+    socialAuditMode.value = getSettings().socialAuditMode;
+    socialAuditMode.addEventListener('change', () => {
+        getSettings().socialAuditMode = socialAuditMode.value;
+        saveSettings();
+    });
+    wrapper.querySelector('.mvuad-social-run').addEventListener('click', () => {
+        const context = getContext();
+        const latest = latestAiMessage(context);
+        const captured = captureTarget(context, latest.index);
+        if (captured) runSocialAuditTarget(captured, { manual: true });
+    });
     const variableMaxTokens = wrapper.querySelector('.mvuad-variable-max-tokens');
     variableMaxTokens.value = String(getSettings().maxTokens);
     variableMaxTokens.addEventListener('change', () => {
@@ -8971,6 +9633,8 @@ function buildSettingsPanel() {
         hardContractDetails: wrapper.querySelector('.mvuad-protocol-details'),
         hardContractSummary: wrapper.querySelector('.mvuad-protocol-summary'),
         hardContractList: wrapper.querySelector('.mvuad-protocol-list'),
+        socialStatus: wrapper.querySelector('.mvuad-social-status'),
+        socialAuditList: wrapper.querySelector('.mvuad-social-audit-list'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
         operationLogList: wrapper.querySelector('.mvuad-settings-oplog-list'),
         modelCallStats: wrapper.querySelector('.mvuad-settings-model-call-stats'),
@@ -9020,6 +9684,7 @@ function buildSettingsPanel() {
     ui.forumSettingsOpen = wrapper.querySelector('.mvuad-forum-open');
     setStatus(latestStatus, latestStatusKind, { record: false });
     setHardContractStatus(latestHardContractStatus, latestHardContractKind, { record: false });
+    setSocialStatus(latestSocialStatus, latestSocialKind, { record: false });
     setContinuityStatus(latestContinuityStatus, latestContinuityKind, { record: false });
     setForumStatus(latestForumStatus, latestForumKind, { record: false });
     renderOperationLog();
@@ -9110,6 +9775,7 @@ function bindEvents() {
         types.GENERATE_AFTER_COMBINE_PROMPTS || 'generate_after_combine_prompts',
     ]);
     for (const eventName of injectionInspectionEvents) {
+        context.eventSource.on(eventName, sanitizeSocialPromptEvent);
         context.eventSource.on(eventName, inspectContinuityInjectionEvent);
     }
     context.eventSource.on(
@@ -9143,6 +9809,7 @@ function bindEvents() {
             resetCurrentModelCallStats(generationType);
             invalidateOperations(`开始新的${lastGeneration.type}生成`);
             await restoreBranchCheckpointsForSwipe(undefined);
+            applySocialInjection();
             applyContinuityInjection({
                 isReroll: ['swipe', 'regenerate'].includes(lastGeneration.type),
             });
@@ -9178,14 +9845,19 @@ function bindEvents() {
                     })
                     : result
             ));
-            const repair = settled.then((result) => (
+            const socialAudit = settled.then((result) => (
                 result.status === 'settled'
+                    ? runSocialAuditTarget(result.captured)
+                    : result
+            ));
+            const repair = Promise.all([settled, socialAudit]).then(([result, socialResult]) => (
+                result.status === 'settled' && socialResult?.status !== 'failed'
                     ? enqueue(resolved, {
-                        queuedTarget: result.captured,
+                        queuedTarget: socialResult?.correctedTarget || result.captured,
                         after: hardAudit,
                         skipDelay: true,
                     })
-                    : result
+                    : socialResult?.status === 'failed' ? socialResult : result
             ));
             const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
             const finalReplySettlement = Promise.all([repair, openingSync])
@@ -9199,9 +9871,23 @@ function bindEvents() {
             registerTargetSettlement(captured, finalReplySettlement);
             // 活世界只读正文并写独立元数据。通过本地硬合同门后立即
             // 与变量诊断并发，不再等待变量模型、写回和开局资源同步。
-            const continuity = hardAudit.then(async (hardAuditResult) => {
+            const continuity = Promise.all([hardAudit, socialAudit]).then(async (
+                [hardAuditResult, socialAuditResult],
+            ) => {
+                if (socialAuditResult?.status === 'failed') {
+                    const blockedReason = socialAuditResult.reason
+                        || socialAuditResult.correction?.reason
+                        || '人物关系二审未能安全完成';
+                    setContinuityStatus(
+                        `世界连续性：已跳过本回合（${blockedReason}）；未推进账本`,
+                        '',
+                    );
+                    return { status: 'blocked', reason: blockedReason };
+                }
                 let effectiveHardAudit = hardAuditResult;
-                let continuityExpectedTarget = settledTarget || captured;
+                let continuityExpectedTarget = socialAuditResult?.correctedTarget
+                    || settledTarget
+                    || captured;
                 let hardErrors = (effectiveHardAudit?.issues || [])
                     .filter((issue) => issue?.severity === 'error');
                 // Length is a presentation-quality contract. Keep reporting
@@ -9302,13 +9988,18 @@ function bindEvents() {
                 checkedAt: 0,
                 registered: false,
                 landed: false,
+                socialRegistered: false,
+                socialLanded: false,
                 apiType: '',
             };
             setStatus('等待新的 AI 回复', '', { record: false });
             latestHardContractAudit = null;
             setHardContractStatus('硬合同：等待检查', '', { record: false });
+            latestSocialAudit = null;
+            setSocialStatus('人物关系：等待检查', '', { record: false });
             setForumStatus('论坛：等待世界消息', '', { record: false });
             loadOperationLogFromChat();
+            applySocialInjection();
             applyContinuityInjection();
             renderForum();
             disableStoryOracleAutoIfNeeded();
@@ -9344,6 +10035,7 @@ function initialize() {
     bindEvents();
     disableStoryOracleAutoIfNeeded();
     lastUndo = latestUndoRecord(readChatNamespace());
+    applySocialInjection();
     applyContinuityInjection();
     scheduleOpeningResourceSync();
     scheduleLatestHardContractAudit();
@@ -9351,12 +10043,22 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 2,
-        isCompatible: (required = 1) => Number(required) <= 2,
+        apiVersion: 3,
+        isCompatible: (required = 1) => Number(required) <= 3,
         waitForTargetSettled,
         runLatest: () => enqueue(null, { manual: true }),
         auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
         getHardContractAudit: () => deepClone(latestHardContractAudit),
+        auditSocialRelations: () => {
+            const context = getContext();
+            const latest = latestAiMessage(context);
+            const captured = captureTarget(context, latest.index);
+            return captured
+                ? runSocialAuditTarget(captured, { manual: true })
+                : Promise.resolve({ status: 'stale', reason: '最新回复不可用' });
+        },
+        getSocialAudits: () => deepClone(readChatNamespace().socialAudits || []),
+        getSocialPromptSanitization: () => deepClone(lastSocialPromptSanitization),
         syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),

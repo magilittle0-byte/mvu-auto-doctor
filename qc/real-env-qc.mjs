@@ -19,6 +19,7 @@ const runtimeFiles = [
     'package-lock.json',
     'package.json',
     'protocol-core.mjs',
+    'social-core.mjs',
     'style.css',
 ];
 
@@ -127,6 +128,30 @@ function loadAndValidateReport() {
         || scenarioPlan.terminalReopenRejected !== true
         || scenarioPlan.promptInjectionVerified !== true
     ) fail('versioned scenario-plan evidence is incomplete');
+
+    const socialGuard = report.checks?.socialGuard;
+    if (
+        !socialGuard
+        || socialGuard.sameMainModelAblation !== true
+        || socialGuard.deepSeekExcludedAsMainProof !== true
+        || socialGuard.contractLandedInFinalPrompt !== true
+        || socialGuard.unselectedOptionsRemovedFromModelHistory !== true
+        || socialGuard.storedChatUnchanged !== true
+        || socialGuard.systemFormatInstructionsPreserved !== true
+        || socialGuard.actualUserChoicePreserved !== true
+        || socialGuard.ordinaryCareCases < 4
+        || socialGuard.unsupportedMotiveAttributionReduced !== true
+        || socialGuard.npcSuspicionStillAllowed !== true
+        || socialGuard.relationshipRollbackVerified !== true
+        || socialGuard.unrelatedMvuPreserved !== true
+        || socialGuard.auditSourceTraceVisible !== true
+        || socialGuard.explicitDarkCaseAllowed !== true
+        || socialGuard.deepSeekToneDidNotRollbackValidDarkState !== true
+        || socialGuard.reviewerDidNotRewriteNarrative !== true
+        || socialGuard.noRiskTurnSkippedSemanticCall !== true
+        || socialGuard.usageAndCostRecorded !== true
+        || socialGuard.fixedHostileReplayPassed !== true
+    ) fail('social-motive ablation evidence is incomplete');
 
     const mobile = report.checks?.mobile;
     if (
