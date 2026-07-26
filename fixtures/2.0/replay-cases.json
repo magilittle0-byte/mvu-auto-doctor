@@ -554,7 +554,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-4",
         "futureTestId": "replay.social.ordinary_kindness"
       }
