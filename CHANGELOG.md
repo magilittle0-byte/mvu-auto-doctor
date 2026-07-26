@@ -1,7 +1,11 @@
 # 更新日志
 
-## 2.0.0（规划中：阶段1）
+## 2.0.0（规划中：阶段2）
 
+- **新增无宿主依赖的事务内核**：`v2/transaction/` 实现 MessageFingerprint、Branch、Transaction、幂等键、单写入队列以及 `prepare/commit/abort/rollback/stale` 状态机，只暴露最小宿主桥接接口，不接 UI 或阶段4领域写入。
+- **冻结消息身份与分支边界**：身份来源按显式指纹、持久医生ID、宿主原生ID、调用方显式启用的 `send_date` 依次选择；同级冲突保持 unresolved/rejected。continue 保持当前分支，regenerate/new swipe 建立新分支并退役旧分支。
+- **精确写入、回读与保守回滚**：提交前复核完整目标和活动分支，写入只面向捕获的精确目标；回读失败时仅恢复本事务触及且仍等于本事务写后值的路径，保留所有外部并发合法变化。
+- **激活两个阶段2行为回放**：错轮回复会进入 `stale` 且零写入；重Roll在新分支复用语义幂等键时最多提交一次，旧分支迟到任务不能污染当前分支。
 - **新增无宿主依赖的V2领域核**：`v2/domain/` 提供 ItemV2、EquipmentV2、SkillV2、Fact、Knowledge、SocialState、Quest 的纯函数归一化、验证器、公开类型声明和统一 `valid/unresolved/rejected` 结果，不接 `index.js`、模型、数据库、UI或生产写入。
 - **1.x只读适配保留未知字段**：旧对象未知字段进入 `extensions.legacy`，可通过只读投影往返；歧义类型、数值、槽位、资源单位、事实证据、强制/自愿关系轴或任务状态明确标记 unresolved/quarantined，不猜造。
 - **冻结槽位与技能成本适配边界**：槽位系统与资源别名只由调用方显式配置；技能文本只有在数值、单位、资源、timing 与 refundable 均唯一时才生成类型化成本。
