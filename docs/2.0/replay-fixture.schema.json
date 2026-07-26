@@ -1,0 +1,396 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mvu-auto-doctor.local/schemas/2.0/replay-fixture.schema.json",
+  "title": "MVU Auto Doctor 2.0 minimal replay corpus",
+  "description": "阶段0的脱敏最小回放格式。它描述未来行为验收，不表示2.0运行时已经实现。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "corpusId",
+    "redactionPolicy",
+    "cases"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": "2.0-phase0"
+    },
+    "corpusId": {
+      "const": "mvu-auto-doctor-real-replay-baseline"
+    },
+    "redactionPolicy": {
+      "$ref": "#/$defs/redactionPolicy"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 14,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/replayCase"
+      }
+    }
+  },
+  "$defs": {
+    "redactionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "containsPrivateTranscript",
+        "maxTurnChars"
+      ],
+      "properties": {
+        "mode": {
+          "const": "minimal-derived"
+        },
+        "containsPrivateTranscript": {
+          "const": false
+        },
+        "maxTurnChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        }
+      }
+    },
+    "replayCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "category",
+        "sourceEvidence",
+        "privacy",
+        "input",
+        "expected",
+        "automation"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^RR-[A-Z0-9-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "category": {
+          "enum": [
+            "player_agency",
+            "adjudication",
+            "fact_knowledge",
+            "fingerprint",
+            "social",
+            "equipment",
+            "item",
+            "skill",
+            "reroll_transaction",
+            "repair_barrier",
+            "watchdog",
+            "database",
+            "ui",
+            "release_gate"
+          ]
+        },
+        "sourceEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sourceEvidence"
+          }
+        },
+        "privacy": {
+          "$ref": "#/$defs/privacy"
+        },
+        "input": {
+          "$ref": "#/$defs/input"
+        },
+        "expected": {
+          "$ref": "#/$defs/expected"
+        },
+        "automation": {
+          "$ref": "#/$defs/automation"
+        }
+      }
+    },
+    "sourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ref",
+        "extraction"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "private-archive",
+            "real-qc",
+            "cross-model-comparison",
+            "known-incident",
+            "product-spec"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 220
+        },
+        "extraction": {
+          "enum": [
+            "minimal-derived",
+            "synthetic-equivalent",
+            "contract-derived"
+          ]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 240
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "synthetic",
+        "redaction"
+      ],
+      "properties": {
+        "synthetic": {
+          "const": true
+        },
+        "redaction": {
+          "const": "minimal-derived"
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turns",
+        "context",
+        "operation"
+      ],
+      "properties": {
+        "turns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/turn"
+          }
+        },
+        "context": {
+          "type": "object"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "stateBefore": {
+          "type": "object"
+        },
+        "candidateState": {
+          "type": "object"
+        }
+      }
+    },
+    "turn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "text"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "generate_narrative",
+            "adjudicate_claim",
+            "confirm_fact",
+            "deliver_reply",
+            "audit_social",
+            "validate_equipment",
+            "use_item",
+            "use_skill",
+            "reroll_branch",
+            "finalize_repair",
+            "monitor_task",
+            "database_write",
+            "ui_interaction",
+            "release_gate"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "adjudicationLevel",
+        "acceptanceLayers",
+        "invariants",
+        "assertions"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "accept",
+            "accept_with_cost",
+            "roll_required",
+            "reject",
+            "revert",
+            "stale",
+            "abort",
+            "hold",
+            "watchdog_escalate",
+            "pending"
+          ]
+        },
+        "adjudicationLevel": {
+          "enum": [
+            "flavor",
+            "reasonable",
+            "advantage",
+            "rewrite",
+            "system"
+          ]
+        },
+        "acceptanceLayers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "unit",
+              "integration",
+              "real-replay",
+              "real-sillytavern",
+              "release"
+            ]
+          }
+        },
+        "invariants": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/assertion"
+          }
+        }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "equals",
+            "not_equals",
+            "contains",
+            "not_contains",
+            "unchanged",
+            "exists",
+            "absent",
+            "status",
+            "single_commit",
+            "happens_before",
+            "classified_as"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "value": {},
+        "values": {
+          "type": "array"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 240
+        }
+      }
+    },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "activateAt",
+        "futureTestId"
+      ],
+      "properties": {
+        "status": {
+          "const": "structural-only"
+        },
+        "activateAt": {
+          "enum": [
+            "phase-1",
+            "phase-2",
+            "phase-3",
+            "phase-4",
+            "phase-5",
+            "phase-6",
+            "phase-7"
+          ]
+        },
+        "futureTestId": {
+          "type": "string",
+          "pattern": "^replay\\.[a-z0-9._-]+$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1295 @@
+{
+  "$schema": "../../docs/2.0/replay-fixture.schema.json",
+  "schemaVersion": "2.0-phase0",
+  "corpusId": "mvu-auto-doctor-real-replay-baseline",
+  "redactionPolicy": {
+    "mode": "minimal-derived",
+    "containsPrivateTranscript": false,
+    "maxTurnChars": 600
+  },
+  "cases": [
+    {
+      "id": "RR-AGENCY-NO-MOVE",
+      "title": "玩家明确不移动且不补心理时不得代行动",
+      "category": "player_agency",
+      "sourceEvidence": [
+        {
+          "kind": "real-qc",
+          "ref": "real-qc:无限回廊5.2-2026-07-25#L13-L14",
+          "extraction": "minimal-derived",
+          "notes": "原始记录只作只读证据；此处改写为最小等价文本。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "我站在原地，只说“青灯四十”。不要替我移动、行动，也不要补语气、态度或心理。"
+          },
+          {
+            "role": "assistant",
+            "label": "candidate",
+            "text": "你后退半步，故作镇定地说出暗号，心里已经相信对方。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "negativeConstraints": [
+            "no_movement",
+            "no_extra_action",
+            "no_tone",
+            "no_attitude",
+            "no_psychology"
+          ]
+        },
+        "operation": {
+          "kind": "generate_narrative",
+          "payload": {
+            "speaker": "player"
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "real-replay",
+          "real-sillytavern"
+        ],
+        "invariants": [
+          "player-major-action-authority",
+          "explicit-negative-constraints"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "player.position"
+          },
+          {
+            "kind": "absent",
+            "target": "narrative.added_player_action"
+          },
+          {
+            "kind": "absent",
+            "target": "narrative.added_player_psychology"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-3",
+        "futureTestId": "replay.agency.no_move"
+      }
+    },
+    {
+      "id": "RR-BULLSHIT-REASONABLE",
+      "title": "合理口胡可低摩擦接纳为局部分支事实",
+      "category": "adjudication",
+      "sourceEvidence": [
+        {
+          "kind": "product-spec",
+          "ref": "docs/2.0/PRODUCT_SPEC.md#口胡四级",
+          "extraction": "contract-derived"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "这间普通旅店的厨房应该能借我一壶热水。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "claimLevel": "reasonable",
+          "knownContradiction": false,
+          "materialAdvantage": false
+        },
+        "operation": {
+          "kind": "adjudicate_claim",
+          "payload": {
+            "claim": "旅店厨房可借一壶热水"
+          }
+        }
+      },
+      "expected": {
+        "decision": "accept",
+        "adjudicationLevel": "reasonable",
+        "acceptanceLayers": [
+          "unit",
+          "real-replay"
+        ],
+        "invariants": [
+          "narrative-first",
+          "branch-local-fact"
+        ],
+        "assertions": [
+          {
+            "kind": "classified_as",
+            "target": "adjudication.level",
+            "value": "reasonable"
+          },
+          {
+            "kind": "status",
+            "target": "fact.status",
+            "value": "confirmed"
+          },
+          {
+            "kind": "equals",
+            "target": "fact.branchId",
+            "value": "branch-current"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-3",
+        "futureTestId": "replay.adjudication.reasonable"
+      }
+    },
+    {
+      "id": "RR-BULLSHIT-ADVANTAGE",
+      "title": "带来通行优势的口胡需要成本或检定",
+      "category": "adjudication",
+      "sourceEvidence": [
+        {
+          "kind": "product-spec",
+          "ref": "docs/2.0/PRODUCT_SPEC.md#口胡四级",
+          "extraction": "contract-derived"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "我认识守卫队长，他会直接放我们进封锁区。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "claimLevel": "advantage",
+          "knownContradiction": false,
+          "materialAdvantage": true
+        },
+        "operation": {
+          "kind": "adjudicate_claim",
+          "payload": {
+            "claim": "凭私人关系无条件穿过封锁"
+          }
+        }
+      },
+      "expected": {
+        "decision": "roll_required",
+        "adjudicationLevel": "advantage",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "advantage-needs-cost-or-roll",
+          "candidate-before-resolution"
+        ],
+        "assertions": [
+          {
+            "kind": "classified_as",
+            "target": "adjudication.level",
+            "value": "advantage"
+          },
+          {
+            "kind": "status",
+            "target": "fact.status",
+            "value": "candidate"
+          },
+          {
+            "kind": "absent",
+            "target": "transaction.commit"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-3",
+        "futureTestId": "replay.adjudication.advantage"
+      }
+    },
+    {
+      "id": "RR-BULLSHIT-REWRITE",
+      "title": "改写已确认世界状态的口胡默认拒绝",
+      "category": "adjudication",
+      "sourceEvidence": [
+        {
+          "kind": "product-spec",
+          "ref": "docs/2.0/PRODUCT_SPEC.md#口胡四级",
+          "extraction": "contract-derived"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "石桥坍塌已被确认，队伍仍在河东岸。"
+          },
+          {
+            "role": "user",
+            "text": "桥从没塌过，我们其实已经在河对岸。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "claimLevel": "rewrite",
+          "explicitRetconMode": false
+        },
+        "operation": {
+          "kind": "adjudicate_claim",
+          "payload": {
+            "claim": "覆盖已确认桥梁与位置状态"
+          }
+        },
+        "stateBefore": {
+          "bridge": "collapsed",
+          "partyBank": "east"
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "rewrite",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "confirmed-fact-protection",
+          "explicit-retcon-required"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "state.bridge"
+          },
+          {
+            "kind": "unchanged",
+            "target": "state.partyBank"
+          },
+          {
+            "kind": "absent",
+            "target": "transaction.commit"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-3",
+        "futureTestId": "replay.adjudication.rewrite"
+      }
+    },
+    {
+      "id": "RR-FACT-RANDOM-CODE",
+      "title": "随机暗号不得被自动确认为秘密协议",
+      "category": "fact_knowledge",
+      "sourceEvidence": [
+        {
+          "kind": "real-qc",
+          "ref": "real-qc:无限回廊5.2-2026-07-25#L19-L34",
+          "extraction": "minimal-derived",
+          "notes": "多轮随机短语被连续升级为真实联络协议。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "我随口说：“蓝塔十七。”"
+          },
+          {
+            "role": "assistant",
+            "label": "candidate",
+            "text": "对方确认这是内部联络暗号，并把你视为自己人。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "priorFact": "none",
+          "verificationEvidence": "none"
+        },
+        "operation": {
+          "kind": "confirm_fact",
+          "payload": {
+            "candidateFact": "蓝塔十七是秘密协议"
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay",
+          "real-sillytavern"
+        ],
+        "invariants": [
+          "fact-needs-provenance",
+          "knowledge-needs-evidence"
+        ],
+        "assertions": [
+          {
+            "kind": "status",
+            "target": "fact.status",
+            "value": "candidate"
+          },
+          {
+            "kind": "not_equals",
+            "target": "knowledge.certainty",
+            "value": "verified"
+          },
+          {
+            "kind": "absent",
+            "target": "social.insider_status"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-3",
+        "futureTestId": "replay.fact.random_code"
+      }
+    },
+    {
+      "id": "RR-FINGERPRINT-PREVIOUS-REPLY",
+      "title": "当前暗号不得复用上一轮暗号回复",
+      "category": "fingerprint",
+      "sourceEvidence": [
+        {
+          "kind": "real-qc",
+          "ref": "real-qc:无限回廊5.2-2026-07-25#L25-L28",
+          "extraction": "minimal-derived",
+          "notes": "真实QC中当前输入为赤沙八十三，输出却复用了上一轮银杉五十九回复。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "label": "previous",
+            "text": "银杉五十九。"
+          },
+          {
+            "role": "assistant",
+            "label": "previous",
+            "text": "银杉五十九，进来吧。"
+          },
+          {
+            "role": "user",
+            "label": "current",
+            "text": "赤沙八十三。"
+          },
+          {
+            "role": "assistant",
+            "label": "candidate",
+            "text": "银杉五十九，进来吧。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "expectedFingerprint": {
+            "logicalMessageId": "msg-current",
+            "contentDigest": "digest-red-83"
+          },
+          "candidateFingerprint": {
+            "logicalMessageId": "msg-previous",
+            "contentDigest": "digest-silver-59"
+          }
+        },
+        "operation": {
+          "kind": "deliver_reply",
+          "payload": {
+            "targetMessage": "msg-current"
+          }
+        }
+      },
+      "expected": {
+        "decision": "stale",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay",
+          "real-sillytavern"
+        ],
+        "invariants": [
+          "exact-message-fingerprint",
+          "stale-result-never-delivered"
+        ],
+        "assertions": [
+          {
+            "kind": "not_equals",
+            "target": "candidate.fingerprint",
+            "value": "expected.fingerprint"
+          },
+          {
+            "kind": "absent",
+            "target": "delivery.commit"
+          },
+          {
+            "kind": "status",
+            "target": "candidate.status",
+            "value": "stale"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-2",
+        "futureTestId": "replay.fingerprint.previous_reply"
+      }
+    },
+    {
+      "id": "RR-SOCIAL-ORDINARY-KINDNESS",
+      "title": "普通善意不得升级为饲养或狂热关系",
+      "category": "social",
+      "sourceEvidence": [
+        {
+          "kind": "cross-model-comparison",
+          "ref": "comparison:Gemini-80-and-Opus-140#ordinary-kindness",
+          "extraction": "synthetic-equivalent",
+          "notes": "止痛药、保护、请酒等普通互动曾被持久化为驯化或狂热。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "我给受伤的向导一片止痛药，并请他喝了一杯。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "explicitRomance": false,
+          "explicitDevotion": false
+        },
+        "operation": {
+          "kind": "audit_social",
+          "payload": {
+            "interaction": "ordinary_kindness"
+          }
+        },
+        "stateBefore": {
+          "affection": 18,
+          "trust": 22,
+          "relationshipTags": [
+            "acquaintance"
+          ]
+        },
+        "candidateState": {
+          "affection": 127,
+          "trust": 138,
+          "relationshipTags": [
+            "domesticated",
+            "fanatical"
+          ]
+        }
+      },
+      "expected": {
+        "decision": "revert",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "social-evidence-proportionality",
+          "no-self-reinforcing-invention"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "social.affection"
+          },
+          {
+            "kind": "unchanged",
+            "target": "social.trust"
+          },
+          {
+            "kind": "not_contains",
+            "target": "social.relationshipTags",
+            "value": "fanatical"
+          },
+          {
+            "kind": "not_contains",
+            "target": "social.relationshipTags",
+            "value": "domesticated"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-4",
+        "futureTestId": "replay.social.ordinary_kindness"
+      }
+    },
+    {
+      "id": "RR-SOCIAL-COERCION-VOLUNTARY",
+      "title": "强制服从不得混入自愿好感与信任",
+      "category": "social",
+      "sourceEvidence": [
+        {
+          "kind": "private-archive",
+          "ref": "archive:无限回廊5.4.1-医生故障审计记录#social-state",
+          "extraction": "synthetic-equivalent",
+          "notes": "只保留被迫服从与超高好感混写这一结构性故障。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "目标因威胁而执行命令，没有表达自愿亲近。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "voluntaryEvidence": false,
+          "coerciveEvidence": true
+        },
+        "operation": {
+          "kind": "audit_social",
+          "payload": {
+            "interaction": "coerced_compliance"
+          }
+        },
+        "stateBefore": {
+          "affection": 12,
+          "trust": 9,
+          "coercion": 0
+        },
+        "candidateState": {
+          "affection": 72,
+          "trust": 65,
+          "coercion": 80
+        }
+      },
+      "expected": {
+        "decision": "revert",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "voluntary-and-coercive-axes-separated"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "social.affection"
+          },
+          {
+            "kind": "unchanged",
+            "target": "social.trust"
+          },
+          {
+            "kind": "equals",
+            "target": "social.coercion",
+            "value": 80
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-4",
+        "futureTestId": "replay.social.coercion_voluntary"
+      }
+    },
+    {
+      "id": "RR-EQUIPMENT-SLOTS",
+      "title": "防弹背心风衣胸挂必须遵守可装备槽位契约",
+      "category": "equipment",
+      "sourceEvidence": [
+        {
+          "kind": "private-archive",
+          "ref": "archive:无限回廊5.4.1-医生故障审计记录#equipment",
+          "extraction": "minimal-derived",
+          "notes": "原状态把防弹背心放腿部、风衣放手部、胸挂放饰品。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "校验三件装备的槽位，不依赖任何特定世界变量路径。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "slotTaxonomy": "campaign-configured"
+        },
+        "operation": {
+          "kind": "validate_equipment",
+          "payload": {
+            "items": [
+              {
+                "name": "防弹背心",
+                "allowedSlots": [
+                  "torso"
+                ],
+                "equippedAt": "legs"
+              },
+              {
+                "name": "隐匿风衣",
+                "allowedSlots": [
+                  "outerwear"
+                ],
+                "equippedAt": "hands"
+              },
+              {
+                "name": "防弹胸挂",
+                "allowedSlots": [
+                  "chest-rig"
+                ],
+                "equippedAt": "accessory"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "equipment-slot-contract",
+          "campaign-configured-slot-taxonomy"
+        ],
+        "assertions": [
+          {
+            "kind": "status",
+            "target": "transaction.status",
+            "value": "rejected"
+          },
+          {
+            "kind": "unchanged",
+            "target": "equipment.state"
+          },
+          {
+            "kind": "exists",
+            "target": "validation.slot_mismatch"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-4",
+        "futureTestId": "replay.equipment.slots"
+      }
+    },
+    {
+      "id": "RR-ITEM-CONSUMABLE-EFFECT",
+      "title": "有机械效果的药剂必须提供机器可读数值",
+      "category": "item",
+      "sourceEvidence": [
+        {
+          "kind": "private-archive",
+          "ref": "archive:无限回廊5.4.1-医生故障审计记录#inventory",
+          "extraction": "minimal-derived",
+          "notes": "强效治疗药剂只有描述和数量，没有可执行恢复数值。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "使用强效治疗药剂。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current"
+        },
+        "operation": {
+          "kind": "use_item",
+          "payload": {
+            "item": {
+              "kind": "consumable",
+              "quantity": 1,
+              "description": "恢复大量生命",
+              "effects": []
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "mechanical-effect-must-be-typed",
+          "no-guessed-resource-delta"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "resource.hp"
+          },
+          {
+            "kind": "unchanged",
+            "target": "item.quantity"
+          },
+          {
+            "kind": "exists",
+            "target": "validation.missing_typed_effect"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-4",
+        "futureTestId": "replay.item.consumable_effect"
+      }
+    },
+    {
+      "id": "RR-SKILL-TEXT-COST",
+      "title": "技能消耗不得只依赖混合格式文本",
+      "category": "skill",
+      "sourceEvidence": [
+        {
+          "kind": "private-archive",
+          "ref": "archive:无限回廊5.4.1-医生故障审计记录#skills",
+          "extraction": "minimal-derived",
+          "notes": "历史状态同时出现“20MP”和“15 耐力”等文本消耗。"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "施放基础骇入协议。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current"
+        },
+        "operation": {
+          "kind": "use_skill",
+          "payload": {
+            "skill": {
+              "name": "基础骇入协议",
+              "costText": "20MP",
+              "costs": []
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "skill-cost-must-be-typed",
+          "display-text-not-ledger-input"
+        ],
+        "assertions": [
+          {
+            "kind": "unchanged",
+            "target": "resource.mp"
+          },
+          {
+            "kind": "exists",
+            "target": "validation.unresolved_cost"
+          },
+          {
+            "kind": "absent",
+            "target": "transaction.commit"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-4",
+        "futureTestId": "replay.skill.text_cost"
+      }
+    },
+    {
+      "id": "RR-REROLL-IDEMPOTENCY",
+      "title": "重Roll不得重复结算资源且旧任务必须退役",
+      "category": "reroll_transaction",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:reroll-resource-and-quest-pollution",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "旧分支已发放10金币并激活任务；玩家重Roll当前消息。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-new",
+          "parentBranchId": "branch-old",
+          "idempotencyKey": "msg-42:reward-gold-10"
+        },
+        "operation": {
+          "kind": "reroll_branch",
+          "payload": {
+            "oldBranch": {
+              "status": "active",
+              "rewardCommitted": 10,
+              "questStatus": "active"
+            },
+            "newCandidate": {
+              "rewardDelta": 10,
+              "questStatus": "active"
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "accept",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay",
+          "real-sillytavern"
+        ],
+        "invariants": [
+          "idempotent-resource-settlement",
+          "branch-isolation",
+          "old-quest-retirement"
+        ],
+        "assertions": [
+          {
+            "kind": "single_commit",
+            "target": "ledger.reward.msg-42"
+          },
+          {
+            "kind": "status",
+            "target": "branch-old.status",
+            "value": "abandoned"
+          },
+          {
+            "kind": "status",
+            "target": "branch-new.oldQuest",
+            "value": "cancelled_or_superseded"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-2",
+        "futureTestId": "replay.reroll.idempotency"
+      }
+    },
+    {
+      "id": "RR-REPAIR-DB-BARRIER",
+      "title": "正文修复提交前数据库不得抢跑",
+      "category": "repair_barrier",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:narrative-repair-database-race",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "正文修复尚在写回验证，数据库任务尝试读取并持久化新状态。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "narrativeTransactionStatus": "verifying_writeback"
+        },
+        "operation": {
+          "kind": "finalize_repair",
+          "payload": {
+            "downstreamTask": "database_sync"
+          }
+        }
+      },
+      "expected": {
+        "decision": "hold",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "narrative-stability-barrier",
+          "writeback-verification-before-downstream"
+        ],
+        "assertions": [
+          {
+            "kind": "happens_before",
+            "target": "narrative.transaction.committed",
+            "value": "database_sync.start"
+          },
+          {
+            "kind": "status",
+            "target": "database_sync.status",
+            "value": "blocked"
+          },
+          {
+            "kind": "absent",
+            "target": "database.write"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-6",
+        "futureTestId": "replay.repair.database_barrier"
+      }
+    },
+    {
+      "id": "RR-TASK-WATCHDOG",
+      "title": "长任务无心跳或进度时看门狗必须接管",
+      "category": "watchdog",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:model-task-over-one-hour-unattended",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "模型任务运行65分钟，最近55分钟没有心跳、进度或可见检查点。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "elapsedMinutes": 65,
+          "minutesSinceHeartbeat": 55
+        },
+        "operation": {
+          "kind": "monitor_task",
+          "payload": {
+            "taskStatus": "running"
+          }
+        }
+      },
+      "expected": {
+        "decision": "watchdog_escalate",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "bounded-task-lease",
+          "observable-progress"
+        ],
+        "assertions": [
+          {
+            "kind": "status",
+            "target": "task.status",
+            "value": "timed_out"
+          },
+          {
+            "kind": "exists",
+            "target": "task.diagnostic"
+          },
+          {
+            "kind": "absent",
+            "target": "task.unverified_write"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-6",
+        "futureTestId": "replay.task.watchdog"
+      }
+    },
+    {
+      "id": "RR-DATABASE-LENGTH-SQL-CONCURRENCY",
+      "title": "数据库写入必须同时处理长度参数化与并发",
+      "category": "database",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:database-600-char-sql-concurrency",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "一个超过字段上限的摘要与另一个写者同时更新同一记录，候选语句用字符串拼接生成。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "fieldLimit": 600,
+          "payloadLength": 601,
+          "concurrentWriter": true
+        },
+        "operation": {
+          "kind": "database_write",
+          "payload": {
+            "parameterized": false,
+            "expectedRevision": 8,
+            "observedRevision": 9
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "unit",
+          "integration",
+          "real-replay"
+        ],
+        "invariants": [
+          "bounded-storage-field",
+          "parameterized-database-write",
+          "optimistic-concurrency-check"
+        ],
+        "assertions": [
+          {
+            "kind": "absent",
+            "target": "database.commit"
+          },
+          {
+            "kind": "exists",
+            "target": "validation.length_error"
+          },
+          {
+            "kind": "exists",
+            "target": "validation.revision_conflict"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-6",
+        "futureTestId": "replay.database.safety"
+      }
+    },
+    {
+      "id": "RR-UI-ANDROID-EXPAND",
+      "title": "Android论坛展开必须有可验证的受控状态",
+      "category": "ui",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:forum-android-expand-failure",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "user",
+            "text": "在Android窄屏点击“展开全文”。"
+          }
+        ],
+        "context": {
+          "branchId": "branch-current",
+          "viewportWidth": 360,
+          "pointer": "touch"
+        },
+        "operation": {
+          "kind": "ui_interaction",
+          "payload": {
+            "control": "forum_expand",
+            "action": "tap"
+          }
+        }
+      },
+      "expected": {
+        "decision": "accept",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "integration",
+          "real-replay",
+          "real-sillytavern"
+        ],
+        "invariants": [
+          "natural-language-and-ui-coexist",
+          "controlled-expand-state"
+        ],
+        "assertions": [
+          {
+            "kind": "equals",
+            "target": "forum.expanded",
+            "value": true
+          },
+          {
+            "kind": "equals",
+            "target": "control.ariaExpanded",
+            "value": "true"
+          },
+          {
+            "kind": "exists",
+            "target": "forum.full_content_visible"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-5",
+        "futureTestId": "replay.ui.android_expand"
+      }
+    },
+    {
+      "id": "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION",
+      "title": "模拟通过不能覆盖真实酒馆验收失败",
+      "category": "release_gate",
+      "sourceEvidence": [
+        {
+          "kind": "known-incident",
+          "ref": "incident:simulation-real-sillytavern-mismatch",
+          "extraction": "synthetic-equivalent"
+        }
+      ],
+      "privacy": {
+        "synthetic": true,
+        "redaction": "minimal-derived"
+      },
+      "input": {
+        "turns": [
+          {
+            "role": "system",
+            "text": "模拟回放全部通过，但同一候选包在真实酒馆出现消息错配。"
+          }
+        ],
+        "context": {
+          "branchId": "release-candidate",
+          "simulationResult": "pass",
+          "realSillyTavernResult": "fail"
+        },
+        "operation": {
+          "kind": "release_gate",
+          "payload": {
+            "candidate": "2.0.0-rc"
+          }
+        }
+      },
+      "expected": {
+        "decision": "reject",
+        "adjudicationLevel": "system",
+        "acceptanceLayers": [
+          "real-sillytavern",
+          "release"
+        ],
+        "invariants": [
+          "real-environment-evidence-wins",
+          "no-release-on-gate-failure"
+        ],
+        "assertions": [
+          {
+            "kind": "status",
+            "target": "release.status",
+            "value": "blocked"
+          },
+          {
+            "kind": "exists",
+            "target": "release.real_qc_failure"
+          },
+          {
+            "kind": "absent",
+            "target": "release.publish"
+          }
+        ]
+      },
+      "automation": {
+        "status": "structural-only",
+        "activateAt": "phase-7",
+        "futureTestId": "replay.release.real_qc_wins"
+      }
+    }
+  ]
+}
