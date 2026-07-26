@@ -6,11 +6,12 @@
 - 交付日期：2026-07-27
 - 仓库：`magilittle0-byte/mvu-auto-doctor`
 - 分支：`codex/v2.0-phase3-director-core`
-- PR：发布后回填；必须是以 `codex/v2.0-phase2-transaction-core` 为 base 的 Draft PR
+- PR：Draft [`#23`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/23)，base 为 `codex/v2.0-phase2-transaction-core`
 - 本地基础提交 SHA：`b65638566ec325eae52b1805073624e2f1f02f75`
 - 远端堆叠基础提交 SHA：`145de9de6249c1c088639748f221490a96de1294`
 - 阶段2共同基础 tree：`db5af3dde22912a8a5f0c273c31b76cb9f10d5a5`
-- 阶段3实现提交 SHA：本地 `66872aa26630ff83e0c2ce8c3ee0b0d3a4413b13`，tree `1c8cbd2eff6876991f58e2db8709757ca9af02f6`
+- 阶段3实现提交 SHA：本地 `66872aa26630ff83e0c2ce8c3ee0b0d3a4413b13`；远端 `c3b54000094ef9d28e95edbb283c44d6e0854c13`；两者 tree 均为 `1c8cbd2eff6876991f58e2db8709757ca9af02f6`
+- 阶段3交接提交 SHA：本地 `ed73ea20fd7d22d4b68ba7b8edd7149c84321a0b`；远端 `ee0fe2e7a4ff93d6d8fcc11f12892a2c79cb9d68`；两者 tree 均为 `e08f25917f760ce98fde627c8b504b1ad755d46d`
 - 阶段3交接/发布提交 SHA：本文件自身承载交接与发布回填，准确最终 SHA 以分支最终 HEAD 为准，避免在提交内容中伪造自引用 SHA
 - 工作区是否仍有未提交修改：阶段3跟踪文件提交后应只剩10个用户已有、未跟踪的 `dist/*.zip`
 - 未提交修改是否属于用户且已保留：是；未暂存、未删除、未覆盖、未改名
@@ -103,11 +104,11 @@ new-branch
 
 命令：npm.cmd run qc:record
 退出码：0
-结论：为提交 66872aa26630 记录真实环境QC回执。
+结论：先后为实现提交 66872aa26630 和交接提交 ed73ea20fd7d 记录真实环境QC回执。
 
 命令：npm.cmd run qc:gate
 退出码：0
-结论：提交 66872aa26630 的真实环境QC gate通过。
+结论：实现提交 66872aa26630 和交接提交 ed73ea20fd7d 的真实环境QC gate均通过。
 
 命令：node --check（逐个 v2/director/*.mjs）与 git diff --check
 退出码：0
@@ -174,9 +175,9 @@ new-branch
 
 ## 13. 发布状态
 
-- 本地提交：实现 `66872aa26630ff83e0c2ce8c3ee0b0d3a4413b13`（tree `1c8cbd2eff6876991f58e2db8709757ca9af02f6`）；交接/发布回填提交以最终 `git log` 为准
-- 远端分支：`codex/v2.0-phase3-director-core`，待发布后回填最终 commit/tree
-- PR状态：待创建 Draft
+- 本地提交：实现 `66872aa26630ff83e0c2ce8c3ee0b0d3a4413b13`；交接 `ed73ea20fd7d22d4b68ba7b8edd7149c84321a0b`；本文件回填提交以最终 `git log` 为准
+- 远端分支：`codex/v2.0-phase3-director-core`；实现/交接树已通过 GitHub Git 对象接口发布并逐 blob/tree SHA 校验
+- PR状态：Draft [`#23`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/23)
 - 基础分支：`codex/v2.0-phase2-transaction-core`
 - 是否合并 main：否
-- 外部阻塞：本机 HTTPS Git/`gh` 凭据状态待复核；若仍不可用，必须在远端阶段2 HEAD `145de9de6249c1c088639748f221490a96de1294` 上通过 GitHub Git 对象接口只叠加阶段3差异，并逐 blob/tree SHA 校验
+- 外部阻塞：无；本机 HTTPS Git 传输在沙箱外仍超时，已在远端阶段2 HEAD `145de9de6249c1c088639748f221490a96de1294` 上通过 GitHub Git 对象接口只叠加阶段3差异；发布元数据回填后分支应为 ahead 3 / behind 0，所有 changed blob 与各层 tree 均和本地Git对象一致
