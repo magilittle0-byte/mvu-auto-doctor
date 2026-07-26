@@ -9,7 +9,9 @@
 - PR：`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/21`（draft）
 - 基础提交 SHA：`f04b68176318286826e53c1548bd6672323bb1bb`
 - 阶段1产物提交 SHA：`a1244f8b4cd55018d375ed605a6fa2793cc70040`
-- 交接记录提交 SHA：`2862cd34b57d5cb17e6634de2991186aebe1fee5`；其后的提交只回填远端PR元数据
+- 交接记录提交 SHA：`2862cd34b57d5cb17e6634de2991186aebe1fee5`
+- PR元数据提交 SHA：`7c5532b13c75c3fc8aecd8c55febb087877efb9e`
+- 跨平台QC指纹修复 SHA：`5a8d2a060cc8275deba1922324f9f4d78eb12f56`
 - 工作区是否仍有未提交修改：没有属于阶段1的未提交修改
 - 未提交修改是否属于用户且已保留：是；10个历史 `dist/` 离线ZIP保持未跟踪、未修改、未暂存
 
@@ -17,7 +19,7 @@
 
 - 授权目标：新增无宿主依赖的V2领域核，冻结七类记录的类型、归一化、验证与1.x只读迁移行为，并将四个高优先级回放转为真实领域行为测试。
 - 明确非目标：不接宿主写入、`index.js` 主流程、外部模型、数据库、UI或生产迁移；不实现阶段2事务内核；不合并 `main`。
-- 实际完成：公共V2记录与验证结果、ItemV2、EquipmentV2、SkillV2、Fact、Knowledge、SocialState、Quest、H0–H3结构化结果、七个1.x只读适配器、七个只读投影、迁移输入上限、类型声明、四个 `unit-active` fixture行为回放及权威文档澄清。
+- 实际完成：公共V2记录与验证结果、ItemV2、EquipmentV2、SkillV2、Fact、Knowledge、SocialState、Quest、H0–H3结构化结果、七个1.x只读适配器、七个只读投影、迁移输入上限、类型声明、四个 `unit-active` fixture行为回放及权威文档澄清；同时修复现有真实环境QC指纹受Windows/Linux换行差异影响的问题。
 - 有意未做：没有把H0–H3接入主模型；没有执行物品扣量、资源结算、装备写入、关系持久化或任务迁移；没有声明四个回放的integration、real-replay或真实SillyTavern层完成。
 
 ## 3. 权威文件
@@ -31,7 +33,7 @@
 - fixture schema：`docs/2.0/replay-fixture.schema.json`
 - fixture corpus：`fixtures/2.0/replay-cases.json`
 - 上一阶段交接：`docs/2.0/handoffs/PHASE_0_HANDOFF.md`
-- 其他：`AGENTS.md`、`README.md`、`CHANGELOG.md`、`manifest.json`、`package.json`、`TODO.md`、`docs/2.0/README.md`、`docs/2.0/PHASE_HANDOFF_TEMPLATE.md`
+- 其他：`AGENTS.md`、`README.md`、`CHANGELOG.md`、`manifest.json`、`package.json`、`TODO.md`、`.gitattributes`、`qc/real-env-qc.mjs`、`docs/qc-reports/v1.9.0.json`、`docs/2.0/README.md`、`docs/2.0/PHASE_HANDOFF_TEMPLATE.md`
 - 1.x回归依据：现有 `core.mjs`、`continuity-core.mjs`、`protocol-core.mjs`、`social-core.mjs`、`index.js` 与 `tests/`
 
 ## 4. 产物与接口
@@ -48,6 +50,7 @@
 | 领域行为测试 | `tests/v2-domain-core.test.mjs` | `node --test tests/v2-domain-core.test.mjs` | 覆盖纯函数、开放扩展、七类往返、迁移上限和拒绝/未决语义 |
 | 回放行为测试 | `tests/v2-domain-replays.test.mjs` | `node --test tests/v2-domain-replays.test.mjs` | 直接读取真实fixture并调用领域API，不复制私聊、不特判卡片路径 |
 | 回放激活元数据 | `fixtures/2.0/replay-cases.json`、`docs/2.0/replay-fixture.schema.json` | `automation.status=unit-active` | 只有四个阶段1领域用例激活；后续集成/真实层仍未完成 |
+| QC指纹可移植性 | `qc/real-env-qc.mjs`、`docs/qc-reports/v1.9.0.json` | `$env:QC_BASE_SHA=<base>; npm.cmd run qc:ci` | 哈希前统一文本换行为LF；真实报告时间和检查结果不变，只迁移等价源码的规范指纹 |
 
 ## 5. 数据与迁移
 
@@ -108,6 +111,14 @@
 退出码：0
 结论：Real-environment QC gate passed for 2862cd34b57d。
 
+命令：$env:QC_BASE_SHA='f04b68176318286826e53c1548bd6672323bb1bb'; npm.cmd run qc:ci
+退出码：0
+结论：按GitHub workflow相同base验证，规范LF指纹和报告一致。
+
+命令：npm.cmd run qc:record；npm.cmd run qc:gate
+退出码：0
+结论：跨平台修复提交 5a8d2a060cc8 的receipt已记录，最终gate通过。
+
 命令：git diff --cached --check
 退出码：0
 结论：提交前无空白或补丁格式错误。
@@ -117,7 +128,7 @@
 - 新增行为测试：七类记录验证与1.x往返；物品效果、技能成本、装备槽位、社会强制/自愿四个真实fixture领域行为。
 - 既有相关回归：protocol、social及完整默认套件通过。
 - 浏览器测试：完整 `npm test` 中通过。
-- 真实 SillyTavern QC：未执行；阶段1没有修改打包运行时、宿主桥、DOM、数据库或生产写入，属于无宿主纯领域模块。真实层不能由模拟冒充，按路线图留到后续阶段。
+- 真实 SillyTavern QC：没有为阶段1重新执行；阶段1没有修改打包运行时、宿主桥、DOM、数据库或生产写入，属于无宿主纯领域模块。现有报告的 `testedAt` 与全部真实检查结果保持不变；只将同一源码的Windows CRLF指纹迁移为跨平台LF规范指纹。真实层不能由模拟冒充，按路线图留到后续阶段。
 - fixture 覆盖：17/17历史故障族仍由schema/覆盖/引用/隐私测试验证；4/17为阶段1 `unit-active`，13/17保持 `structural-only`。
 - 未激活的todo/pending行为及激活条件：测试文件保留6个阶段级todo；阶段2激活指纹/重Roll，阶段3激活玩家边界/裁定/Fact/Knowledge，阶段4为四个领域用例补事务integration与real-replay，阶段5–7按路线图继续。
 
@@ -134,7 +145,7 @@
 
 - `git status --short --branch`：产物提交后仅有10个既存、未跟踪的 `dist/` 历史ZIP。
 - `git diff --stat f04b68176318286826e53c1548bd6672323bb1bb...a1244f8b4cd55018d375ed605a6fa2793cc70040`：16个文件，4032行新增，30行删除。
-- 预期文件：`v2/domain/`、两个新增领域测试、阶段0 fixture测试、四个权威/索引文档、schema、fixture和CHANGELOG。
+- 预期文件：`v2/domain/`、两个新增领域测试、阶段0 fixture测试、四个权威/索引文档、schema、fixture、CHANGELOG，以及远端门禁要求的QC指纹换行规范化与报告指纹元数据迁移。
 - 生产运行时差异：`index.js`、`manifest.json`、`package.json` 均无差异。
 - 无关文件：10个 `dist/` 离线ZIP。
 - 无关文件如何被保留/排除：未执行reset或覆盖性checkout；每次只按显式路径 `git add`；暂存文件中二进制和 `dist/` 均为0。
@@ -177,7 +188,7 @@
 
 ## 13. 发布状态
 
-- 本地提交：阶段1产物 `a1244f8b4cd55018d375ed605a6fa2793cc70040`；交接记录 `2862cd34b57d5cb17e6634de2991186aebe1fee5`
+- 本地提交：阶段1产物 `a1244f8b4cd55018d375ed605a6fa2793cc70040`；交接记录 `2862cd34b57d5cb17e6634de2991186aebe1fee5`；PR元数据 `7c5532b13c75c3fc8aecd8c55febb087877efb9e`；QC指纹修复 `5a8d2a060cc8275deba1922324f9f4d78eb12f56`
 - 远端分支：`codex/v2.0-phase1-domain-core`
 - PR状态（draft/ready）：draft，`https://github.com/magilittle0-byte/mvu-auto-doctor/pull/21`
 - 基础分支：`codex/v2.0-phase0-spec-replay-baseline`
