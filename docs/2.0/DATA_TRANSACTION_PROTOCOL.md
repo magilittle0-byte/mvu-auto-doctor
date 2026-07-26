@@ -1,8 +1,8 @@
 # MVU Auto Doctor 2.0 数据与事务协议
 
-状态：`2.0-phase3`
+状态：`2.0-phase4`
 
-协议版本：`2.0.0-draft.3`
+协议版本：`2.0.0-draft.4`
 
 本文中的“必须 / 不得”是规范要求，“应该”表示除非适配器提供可审计理由，否则必须遵守。
 
@@ -497,4 +497,22 @@ interface MigrationState {
 
 阶段0机器语料由 [`replay-fixture.schema.json`](replay-fixture.schema.json) 约束，实例位于 [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)。
 
-当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API、阶段2事务 API 与阶段3导演 API 已分别激活其 `automation.activateAt` 对应的十一个 `unit-active` 行为断言。阶段3的正则/文本匹配只输出风险召回候选，最终边界与口胡裁决必须消费结构化语义依据；H2/H3 输出命令但不在本阶段执行领域事务或生产分支写入。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。
+当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API、阶段2事务 API、阶段3导演 API 与阶段4领域事务 API 已激活十二个 `unit-active` fixture，其中药剂、技能、装备、普通善意和强制/自愿关系五例会直接调用真实阶段4规划入口。阶段3的正则/文本匹配仍只输出风险召回候选，最终边界与口胡裁决必须消费结构化语义依据；H2 cost/check 只有在阶段4复合事务成功时才确认 candidate Fact，H3仍显式交回阶段2建立新分支。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。
+
+## 19. 阶段4领域事务适配合同
+
+阶段4公开入口位于 `v2/domain-transaction/`：
+
+- `validateDirectorDomainCommand` 只接受阶段3真实 valid 命令或已接受 Turn Boundary 授权，复核完整 `MessageFingerprint`、active Branch、命令来源与证据；
+- `validateCampaignDomainConfig` 要求战役显式注册槽位、资源、检定、记录和扩展效果路径，不提供通用猜测回退；
+- `planDirectorDomainTransaction` 是无宿主纯函数，输出每个 effect 的精确 JSON Pointer、写前前置条件、领域 `ValidationResult`、稳定幂等键与 `Transaction` proposal；
+- `preparePlannedDomainTransaction` 与 `executePlannedDomainTransaction` 只把 valid proposal 交给阶段2 `TransactionKernel`，任何 unresolved/rejected/no-op 计划都不能进入提交；
+- `createLazyLegacyDomainProjection` 与 `diagnoseLegacyDomainProjection` 只读调用阶段1适配器，逐记录公开 `pending/mapped/unresolved/quarantined` 诊断，未知字段继续留在 `extensions.legacy`。
+
+适配不变量：
+
+1. 物品数量和全部类型化效果、装备/槽位/背包/加成、技能全部类型化成本、任务终态/替代/资源结算，以及 H2代价或检定成功与 Fact确认必须分别在单个复合事务中完成。
+2. 任务 `completed/failed/cancelled/superseded` 永不复开；替代任务写入路径必须显式证明 absent；`settlementTransactionIds` 记录本次稳定事务ID。
+3. 普通善意缺少证据时恢复自愿轴与极端标签；强制证据只允许对应强制轴，不得旁路提升好感或信任。
+4. 同一逻辑操作的幂等键不含 branchId，但唯一提交作用域仍为 `(branchId, idempotencyKey)`；旧分支、迟到指纹和并发重复提交继续由阶段2内核零写入处理。
+5. 任一记录、路径、数值、资源、槽位、检定结果、事实证据、消息身份或分支信息有歧义时返回 unresolved/rejected，不生成可提交事务。

@@ -133,6 +133,7 @@ const ACTIVE_UNIT_CASE_IDS = new Set([
   'RR-BULLSHIT-ADVANTAGE',
   'RR-BULLSHIT-REWRITE',
   'RR-FACT-RANDOM-CODE',
+  'RR-SOCIAL-ORDINARY-KINDNESS',
   'RR-SOCIAL-COERCION-VOLUNTARY',
   'RR-EQUIPMENT-SLOTS',
   'RR-ITEM-CONSUMABLE-EFFECT',
@@ -179,11 +180,16 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
         'RR-BULLSHIT-REWRITE',
         'RR-FACT-RANDOM-CODE',
       ]);
-      const expectedPhase = phase3Ids.has(entry.id)
-        ? 'phase-3'
-        : phase2Ids.has(entry.id)
-          ? 'phase-2'
-          : 'phase-1';
+      const phase4Ids = new Set([
+        'RR-SOCIAL-ORDINARY-KINDNESS',
+      ]);
+      const expectedPhase = phase4Ids.has(entry.id)
+        ? 'phase-4'
+        : phase3Ids.has(entry.id)
+          ? 'phase-3'
+          : phase2Ids.has(entry.id)
+            ? 'phase-2'
+            : 'phase-1';
       assert.equal(entry.automation.activateAt, expectedPhase);
     }
   }
@@ -265,7 +271,18 @@ test('2.0 authority documents and replay cases cross-reference one another', asy
   assert.match(protocol, /Branch/);
 });
 
-test.todo('phase 4 adds transaction integration and real-replay layers to domain unit replays');
+test('phase 4 activates every replay assigned to the domain-transaction stage', async () => {
+  const corpus = await readJson(CORPUS_PATH);
+  const phase4Cases = corpus.cases.filter((entry) => (
+    entry.automation.activateAt === 'phase-4'
+  ));
+
+  assert.deepEqual(
+    phase4Cases.map((entry) => entry.id),
+    ['RR-SOCIAL-ORDINARY-KINDNESS'],
+  );
+  assert.ok(phase4Cases.every((entry) => entry.automation.status === 'unit-active'));
+});
 test.todo('phase 5 activates natural-language and UI parity replays');
 test.todo('phase 6 activates repair barrier, database and watchdog behavior replays');
 test.todo('phase 7 activates the real-SillyTavern release gate replay');
