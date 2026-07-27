@@ -9,6 +9,24 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'u
 const reportRelativePath = `docs/qc-reports/v${manifest.version}.json`;
 const reportPath = path.join(root, reportRelativePath);
 const receiptPath = path.join(root, '.qc', 'real-env-pass.json');
+function collectRuntimeFiles(relativeDirectory) {
+    const files = [];
+    const visit = (directory) => {
+        for (const entry of fs.readdirSync(path.join(root, directory), {
+            withFileTypes: true,
+        })) {
+            const relativePath = path.posix.join(
+                directory.replaceAll('\\', '/'),
+                entry.name,
+            );
+            if (entry.isDirectory()) visit(relativePath);
+            else if (/\.(?:mjs|mts)$/u.test(entry.name)) files.push(relativePath);
+        }
+    };
+    visit(relativeDirectory);
+    return files;
+}
+
 const runtimeFiles = [
     'continuity-core.mjs',
     'core.mjs',
@@ -21,7 +39,8 @@ const runtimeFiles = [
     'protocol-core.mjs',
     'social-core.mjs',
     'style.css',
-];
+    ...collectRuntimeFiles('v2'),
+].sort();
 
 function fail(message) {
     throw new Error(`Real-environment QC gate failed: ${message}`);
@@ -70,9 +89,40 @@ function loadAndValidateReport() {
     ) fail('report did not use the required 390x844 mobile viewport');
 
     const tests = report.checks?.testSuite;
-    if (!tests || tests.total < 1 || tests.passed !== tests.total || tests.failed !== 0) {
+    if (
+        !tests
+        || tests.total < 1
+        || tests.passed + tests.todo !== tests.total
+        || tests.failed !== 0
+    ) {
         fail('automated suite evidence is incomplete');
     }
+
+    const phase6 = report.checks?.phase6Barrier;
+    if (
+        !phase6
+        || phase6.apiVersion !== 4
+        || phase6.deployedRuntime !== true
+        || phase6.persistentCapturedBeforeWork !== true
+        || phase6.stateSequenceVerified !== true
+        || phase6.exactWriteReadbackBeforeDownstream !== true
+        || phase6.finalFingerprintVerified !== true
+        || phase6.downstreamSettledOnly !== true
+        || phase6.failedOrStaleDownstreamWrites !== 0
+        || phase6.lateResultWrites !== 0
+        || phase6.conservativeRecoveryVerified !== true
+        || phase6.persistentIdempotencyVerified !== true
+        || phase6.softCancelVerified !== true
+        || phase6.hardTimeoutTerminalVerified !== true
+        || phase6.databaseParameterized !== true
+        || phase6.databaseFieldLimit !== 600
+        || phase6.databaseLengthBoundaryVerified !== true
+        || phase6.databaseRevisionConflictRejected !== true
+        || phase6.replayCases !== 17
+        || phase6.replayPassed !== 16
+        || phase6.releaseGateTodo !== 1
+        || phase6.releaseGateDefaultCiFailure !== false
+    ) fail('phase 6 stable-barrier evidence is incomplete');
 
     const deepSeek = report.checks?.deepSeek;
     if (

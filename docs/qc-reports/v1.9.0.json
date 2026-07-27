@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "1.9.0",
-  "testedAt": "2026-07-27T13:10:39+08:00",
+  "testedAt": "2026-07-27T17:42:52+08:00",
   "result": "pass",
-  "codeFingerprint": "3f5416205b9d32ff6c3ec882c1cde421a7a1f85014d73b943184f357c352098e",
+  "codeFingerprint": "86fd0e76c235ed57a2f9f495842295215df2a5ddf87a406fcec636bad5c2e0d3",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -21,7 +21,7 @@
       "credentialMode": "SillyTavern secret store; never read back or written to the project",
       "stream": false,
       "maxTokens": 12000,
-      "proxyStopped": true
+        "proxyStopped": true
     },
     "modelProxy": {
       "url": "http://127.0.0.1:9328/v1",
@@ -31,11 +31,11 @@
   },
   "checks": {
     "testSuite": {
-      "total": 122,
-      "passed": 122,
+      "total": 133,
+      "passed": 132,
       "failed": 0,
-      "todo": 2,
-      "durationMs": 128964
+      "todo": 1,
+      "durationMs": 141600
     },
     "deepSeek": {
       "model": "deepseek-v4-flash",
@@ -68,6 +68,35 @@
       "sensitiveDiagnosticMaterialExcluded": true,
       "keyboardAndFocusRegressionPassed": true,
       "minimumControlSize": 44
+    },
+    "phase6Barrier": {
+      "apiVersion": 4,
+      "deployedRuntime": true,
+      "persistentCapturedBeforeWork": true,
+      "stateSequenceVerified": true,
+      "stateSequence": [
+        "captured",
+        "repairing",
+        "state-committing",
+        "settled"
+      ],
+      "exactWriteReadbackBeforeDownstream": true,
+      "finalFingerprintVerified": true,
+      "downstreamSettledOnly": true,
+      "failedOrStaleDownstreamWrites": 0,
+      "lateResultWrites": 0,
+      "conservativeRecoveryVerified": true,
+      "persistentIdempotencyVerified": true,
+      "softCancelVerified": true,
+      "hardTimeoutTerminalVerified": true,
+      "databaseParameterized": true,
+      "databaseFieldLimit": 600,
+      "databaseLengthBoundaryVerified": true,
+      "databaseRevisionConflictRejected": true,
+      "replayCases": 17,
+      "replayPassed": 16,
+      "releaseGateTodo": 1,
+      "releaseGateDefaultCiFailure": false
     },
     "scenarioPlan": {
       "baselineCreated": true,
@@ -102,9 +131,9 @@
       "sourcePointersPreserved": true
     },
     "forum": {
-      "generatedPages": 1,
-      "topicCount": 4,
-      "commentCount": 8,
+      "generatedPages": 2,
+      "topicCount": 8,
+      "commentCount": 17,
       "openWithPointerOrTouch": true,
       "expand": true,
       "collapse": true,
@@ -231,14 +260,14 @@
     "mobile": {
       "screenshotWidth": 390,
       "screenshotHeight": 844,
-      "touchTargetWidth": 362.9,
+      "touchTargetWidth": 81.5,
       "touchTargetHeight": 42,
       "minimumTouchTarget": 42,
       "floatingPanelLeft": 6,
       "floatingPanelRight": 384,
-      "floatingPanelTop": 87.921875,
+      "floatingPanelTop": 130.09375,
       "floatingPanelBottom": 780,
-      "nonZeroVisualViewportPageLeft": 41,
+      "nonZeroVisualViewportPageLeft": 0,
       "forumPanelLeft": 0,
       "forumPanelRight": 390,
       "forumPanelTop": 0,

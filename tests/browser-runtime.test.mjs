@@ -667,6 +667,32 @@ try {
     assert.equal(finalReplyBarrier.status, 'settled');
     assert.equal(finalReplyBarrier.targetIndex, 2);
     assert.equal(typeof finalReplyBarrier.fingerprint, 'string');
+    const persistedBarrier = await page.evaluate(() => (
+        Object.values(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor
+                ?.phase6Runtime?.records || {},
+        )
+            .map((entry) => entry?.value)
+            .find((entry) => entry?.protocolVersion === '2.0' && entry?.targetIndex === 2)
+    ));
+    assert.equal(persistedBarrier.state, 'settled');
+    assert.equal(
+        persistedBarrier.finalFingerprint,
+        finalReplyBarrier.fingerprint,
+        '持久屏障必须回读并绑定最终正文指纹',
+    );
+    const downstreamRead = await page.evaluate(() => (
+        window.MvuAutoDoctorAPI.runAfterTargetSettled(
+            2,
+            ({ fingerprint, narrative }) => ({
+                fingerprint,
+                narrativeChars: narrative.length,
+            }),
+        )
+    ));
+    assert.equal(downstreamRead.status, 'completed');
+    assert.equal(downstreamRead.value.fingerprint, finalReplyBarrier.fingerprint);
+    assert.ok(downstreamRead.value.narrativeChars > 0);
     const defaultForumMode = await page.evaluate(() => ({
         turn: window.MvuAutoDoctorAPI.getForumState().turn,
         runs: window.__TEST__.calls.forumRuns,
@@ -780,7 +806,7 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 850));
         return {
             apiCompatible: window.MvuAutoDoctorAPI.isCompatible(2),
-            apiRejectsFuture: window.MvuAutoDoctorAPI.isCompatible(4),
+            apiAcceptsBarrierV4: window.MvuAutoDoctorAPI.isCompatible(4),
             healthItems: document.querySelectorAll('.mvuad-health-item').length,
             promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
             modelCalls: window.MvuAutoDoctorAPI.getModelCallStats(),
@@ -795,7 +821,7 @@ try {
         };
     });
     assert.equal(diagnosticsUi.apiCompatible, true);
-    assert.equal(diagnosticsUi.apiRejectsFuture, false);
+    assert.equal(diagnosticsUi.apiAcceptsBarrierV4, true);
     assert.ok(diagnosticsUi.healthItems >= 6, '设置页必须给出可读环境自检清单');
     assert.ok(diagnosticsUi.promptInfo.totalChars > 0, '必须保存上次真实提示词的分段规模');
     assert.equal(diagnosticsUi.modelCalls.total, 3, '变量、活世界、手动论坛应分别计为一次模型调用');
@@ -1767,7 +1793,10 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await doubleWriterPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+        Object.values(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor
+                ?.phase6Runtime?.records || {},
+        ).some((entry) => entry?.value?.state === 'failed')
     ), null, { timeout: 30000 });
     const doubleWriter = await doubleWriterPage.evaluate(() => ({
         replacements: window.__TEST__.calls.replace.length,
@@ -1777,7 +1806,11 @@ try {
     }));
     assert.equal(doubleWriter.replacements, 0, '无法关闭故事神谕 AUTO 时不得写 MVU');
     assert.match(doubleWriter.status, /避免双写/u);
-    assert.equal(doubleWriter.continuityTurn, 1, '只读支线调度仍应继续');
+    assert.equal(
+        doubleWriter.continuityTurn,
+        0,
+        '阶段6 failed屏障必须让连续性放弃目标，不能回退读取旧正文',
+    );
     assert.equal(doubleWriter.forumTurn, 0, '手动论坛不得被其他医生任务暗中触发');
     await doubleWriterPage.close();
 
@@ -1792,12 +1825,21 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await copiedSettingsPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+        Object.values(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor
+                ?.phase6Runtime?.records || {},
+        ).some((entry) => entry?.value?.state === 'failed')
     ), null, { timeout: 30000 });
     assert.equal(
         await copiedSettingsPage.evaluate(() => window.__TEST__.calls.replace.length),
         0,
         '故事神谕每次返回新设置副本且 AUTO 仍开启时不得写 MVU',
+    );
+    assert.equal(
+        await copiedSettingsPage.evaluate(
+            () => window.MvuAutoDoctorAPI.getContinuityState().turn,
+        ),
+        0,
     );
     await copiedSettingsPage.close();
 
@@ -1932,8 +1974,8 @@ try {
     assert.equal(continueInterrupted.replacements, 0, 'continue 开始后，挂起的旧 repair 结果不得写入同一楼层');
     assert.equal(
         continueInterrupted.continuityCalls,
-        1,
-        '低延迟模式下活世界与变量同时启动；continue 只能作废尚未落地的结果，不能假装并发请求从未发出',
+        0,
+        '阶段6要求活世界等待修复提交；continue使旧屏障stale后不得启动下游模型',
     );
     await continueInterruptPage.close();
 
@@ -2357,6 +2399,24 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await directParallelPage.waitForFunction(() => (
+        window.__DIRECT_PARALLEL__?.network?.requests?.length === 1
+    ), null, { timeout: 30000 });
+    const strictStarted = await directParallelPage.evaluate(() => (
+        structuredClone(window.__DIRECT_PARALLEL__.network)
+    ));
+    assert.equal(
+        strictStarted.maxActive,
+        1,
+        '阶段6 settled屏障前只能启动变量修复，不得让活世界抢读正文',
+    );
+    assert.deepEqual(
+        strictStarted.requests.map((request) => request.model),
+        ['strict-3.5f'],
+    );
+    await directParallelPage.evaluate(() => {
+        window.__DIRECT_PARALLEL__.resolve('strict-3.5f');
+    });
+    await directParallelPage.waitForFunction(() => (
         window.__DIRECT_PARALLEL__?.network?.requests?.length === 2
     ), null, { timeout: 30000 });
     const directParallelStarted = await directParallelPage.evaluate(() => (
@@ -2364,12 +2424,12 @@ try {
     ));
     assert.equal(
         directParallelStarted.maxActive,
-        2,
-        '变量与活世界必须在同一回合真正并发发出，而不是先后串行',
+        1,
+        '活世界必须在修复提交、回读和settled发布后串行启动',
     );
     assert.deepEqual(
-        directParallelStarted.requests.map((request) => request.model).sort(),
-        ['deepseek-fast', 'strict-3.5f'],
+        directParallelStarted.requests.map((request) => request.model),
+        ['strict-3.5f', 'deepseek-fast'],
     );
     assert.ok(directParallelStarted.requests.every((request) => request.authorized));
     assert.match(
@@ -2387,7 +2447,6 @@ try {
         'DS 轻量通道必须启用服务端 JSON 输出约束',
     );
     await directParallelPage.evaluate(() => {
-        window.__DIRECT_PARALLEL__.resolve('strict-3.5f');
         window.__DIRECT_PARALLEL__.resolve('deepseek-fast');
     });
     await directParallelPage.waitForFunction(() => (

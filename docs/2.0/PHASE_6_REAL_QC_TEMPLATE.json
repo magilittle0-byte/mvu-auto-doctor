@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "2.0",
+  "phase": 6,
+  "status": "pending",
+  "environment": {
+    "host": "SillyTavern",
+    "hostVersion": "",
+    "pluginTree": "",
+    "browser": "",
+    "viewport": "390x844"
+  },
+  "barrier": {
+    "capturedPersisted": false,
+    "repairingObserved": false,
+    "stateCommittingObserved": false,
+    "settledObserved": false,
+    "finalFingerprintReadBack": false,
+    "downstreamStartedAfterSettled": false,
+    "staleBranchWrites": 0
+  },
+  "watchdog": {
+    "softCancelVisible": false,
+    "progressObservable": false,
+    "hardTimeoutTerminal": false,
+    "lateResultWrites": 0
+  },
+  "database": {
+    "parameterized": false,
+    "fieldLimit": 600,
+    "lengthBoundaryChecked": false,
+    "revisionConflictRejected": false
+  },
+  "model": {
+    "provider": "",
+    "model": "",
+    "httpStatus": 0,
+    "requestCount": 0,
+    "loggedFields": [
+      "requestBytes",
+      "model",
+      "status",
+      "durationMs"
+    ],
+    "credentialCleared": false,
+    "proxyStopped": false
+  },
+  "forum": {
+    "topics": 0,
+    "comments": 0,
+    "persistedAfterReload": false,
+    "singleControlledToggle": false
+  },
+  "visualEvidence": [],
+  "privacy": {
+    "containsCredential": false,
+    "containsRawPayload": false,
+    "containsPrivateNarrative": false,
+    "containsFullPrompt": false
+  }
+}

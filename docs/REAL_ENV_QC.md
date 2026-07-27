@@ -200,6 +200,38 @@ model routing changes.
    enforcement from provider personality and is mandatory even when the live A/B
    sample appears improved.
 
+## 5C. Phase-6 stable-barrier and downstream checks
+
+Run this section whenever narrative repair ordering, the V2 host bridge, task
+leases, recovery persistence, database integration, continuity, memory, or forum
+downstream behavior changes.
+
+1. Before the repair/model task begins, require a durable phase-6 record for the
+   exact chat, logical floor, message identity, swipe, branch, and content
+   fingerprint in `captured`.
+2. Observe the record advance through `repairing` and `state-committing`. No
+   database, memory, continuity, or forum reader may receive the narrative in
+   either state.
+3. Require the state transaction write-ahead record to be durable before the
+   exact write, then require exact readback and a final fingerprint recheck before
+   `settled`.
+4. Call compatibility API v4 `runAfterTargetSettled`. Its reader must receive the
+   final narrative and fingerprint only after `settled`. Repeat with regenerate,
+   new swipe, chat switch, failure, and cancellation; each old target must return
+   `abandoned/stale/failed` and produce zero downstream writes.
+5. Reload the same chat and confirm the barrier, idempotency settlement, recovery
+   record, TaskLease terminal state, and final fingerprint remain available.
+6. Exercise TaskLease progress, a visible soft-cancel path, missed heartbeats, and
+   hard timeout. A timed-out or stale late result must not call any unverified
+   state or database writer.
+7. Exercise the database gate with 600 and 601 Unicode characters, parameterized
+   and concatenated SQL, and matching/conflicting revisions. The 601 +
+   non-parameterized + revision-conflict case must report all three issues and
+   perform zero commits.
+8. Record only barrier states, fingerprints/digests, counts, status codes and
+   durations. Do not record final narrative, a full prompt, raw payload or
+   credential. Use `docs/2.0/PHASE_6_REAL_QC_TEMPLATE.json`.
+
 ## 6. Automated suite
 
 Run the complete suite and wait for the browser runtime file to finish:
