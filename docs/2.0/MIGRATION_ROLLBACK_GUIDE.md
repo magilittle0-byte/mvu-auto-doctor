@@ -4,14 +4,16 @@
 
 ## 在线发布通道
 
-候选尚未合并 `main`，线上测试分支固定为
-`codex/v2.0-phase7-release-candidate`。已有安装从扩展管理器的分支按钮选择
-`origin/codex/v2.0-phase7-release-candidate`；全新安装则在仓库地址
-`https://github.com/magilittle0-byte/mvu-auto-doctor` 之外，把不带 `origin/` 的
-候选分支名填入“分支或标签”。切换完成后普通“更新”会继续跟随当前候选分支。
+候选已由维护者授权发布到默认分支 `main`。已有安装只需点击“MVU 自动医生”
+这一行自己的“更新”并刷新；不需要分支列表或离线 ZIP。全新安装使用仓库地址
+`https://github.com/magilittle0-byte/mvu-auto-doctor`，分支或标签留空。
 
-线上回滚代码时从同一分支按钮选择 `origin/main`。分支切换只针对自动医生代码；
-数据库、骰子前端、缝合怪、推进重roll助手、聊天和角色卡均保持原位。
+更新前 `main` 已固定备份为
+`codex/backup-main-pre-v2.0.0-rc.1-20260727`，对应提交
+`7d761ba6af1ceb10ab3ea5947c0bb25ee1b72566`。若 RC 出现恶性问题，维护者从该
+快照在当前 `main` 之上创建一个“树内容等于旧版”的向前回滚提交；用户随后仍只需
+点击自动医生这一行的“更新”。这避免让只能在线更新的客户端执行历史倒退或依赖
+分支列表。数据库、骰子前端、缝合怪、推进重roll助手、聊天和角色卡均保持原位。
 
 ## 迁移原则
 

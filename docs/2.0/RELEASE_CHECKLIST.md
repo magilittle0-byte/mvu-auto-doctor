@@ -2,7 +2,8 @@
 
 候选：`2.0.0-rc.1`
 
-发布由维护者审阅 Draft PR 后决定；本清单不授权自动合并 `main`。
+发布已由维护者在2026-07-27明确授权；`main` 只允许从已通过全部门禁的候选提交
+非强制快进，并须先保存可核对的更新前备份分支。
 
 ## 自动门
 
@@ -15,8 +16,8 @@
 - [ ] 数据库600/601边界、参数化和revision冲突联合门通过。
 - [ ] 包内容只来自发布白名单，版本在 `index.js`、manifest、package与lock一致。
 - [ ] 离线候选包 SHA-256 已写入 `dist/SHA256SUMS.txt`。
-- [ ] 远端候选分支存在；SillyTavern 1.18.0 可从安装对话框指定候选分支，也可从
-      已安装扩展的分支按钮切换到 `origin/codex/v2.0-phase7-release-candidate`。
+- [ ] 远端候选分支存在；默认分支 `main` 已指向相同候选 tree，已有安装可直接点击
+      自动医生这一行的“更新”，全新安装可将分支或标签留空。
 
 ## 真实环境门
 
@@ -35,8 +36,11 @@
 - [ ] `npm.cmd run qc:ci` 通过。
 - [ ] 实现与报告提交后 `npm.cmd run qc:record` 和 `npm.cmd run qc:gate` 通过。
 - [ ] 远端阶段7提交仅以远端阶段6最终HEAD为父，blob/tree逐对象核对。
-- [ ] 用户在线安装/更新入口指向阶段7候选分支，不要求本地导入 ZIP，也不把 RC
-      伪装为已进入 `main`。
+- [ ] 用户在线安装/更新入口指向 `main` 上的 `2.0.0-rc.1`，不要求本地导入 ZIP
+      或加载分支列表。
 - [ ] Draft PR base 为 `codex/v2.0-phase6-stable-barrier-replay`。
 - [ ] 远端 CI 与真实环境 QC policy 均终态成功。
-- [ ] 未推送或合并 `main`。
+- [ ] 更新前 `main` 已固定在
+      `codex/backup-main-pre-v2.0.0-rc.1-20260727`，且与旧 HEAD/tree 一致。
+- [ ] `main` 仅做非强制快进；若需回滚，以备份 tree 在当前 `main` 上创建向前回滚
+      提交，保证只能在线更新的客户端仍可取得旧版。
