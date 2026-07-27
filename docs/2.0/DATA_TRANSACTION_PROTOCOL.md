@@ -1,8 +1,8 @@
 # MVU Auto Doctor 2.0 数据与事务协议
 
-状态：`2.0-phase4`
+状态：`2.0-phase5`
 
-协议版本：`2.0.0-draft.4`
+协议版本：`2.0.0-draft.5`
 
 本文中的“必须 / 不得”是规范要求，“应该”表示除非适配器提供可审计理由，否则必须遵守。
 
@@ -497,7 +497,7 @@ interface MigrationState {
 
 阶段0机器语料由 [`replay-fixture.schema.json`](replay-fixture.schema.json) 约束，实例位于 [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)。
 
-当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API、阶段2事务 API、阶段3导演 API 与阶段4领域事务 API 已激活十二个 `unit-active` fixture，其中药剂、技能、装备、普通善意和强制/自愿关系五例会直接调用真实阶段4规划入口。阶段3的正则/文本匹配仍只输出风险召回候选，最终边界与口胡裁决必须消费结构化语义依据；H2 cost/check 只有在阶段4复合事务成功时才确认 candidate Fact，H3仍显式交回阶段2建立新分支。未到激活阶段的宿主集成、模型、数据库、UI和真实环境行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。
+当前默认测试验证 schema、引用、覆盖与隐私；阶段1领域 API、阶段2事务 API、阶段3导演 API、阶段4领域事务 API 与阶段5双入口/移动浏览器 API 已激活十三个 `unit-active` fixture，其中药剂、技能、装备、普通善意和强制/自愿关系五例会直接调用真实阶段4规划入口，Android受控展开会调用真实阶段5浏览器入口。阶段3的正则/文本匹配仍只输出风险召回候选，最终边界与口胡裁决必须消费结构化语义依据；H2 cost/check 只有在阶段4复合事务成功时才确认 candidate Fact，H3仍显式交回阶段2建立新分支。未到激活阶段的数据库、下游稳定屏障、看门狗和发布行为不得在默认 CI 中制造“未来功能尚未实现”的红灯。
 
 ## 19. 阶段4领域事务适配合同
 
@@ -516,3 +516,22 @@ interface MigrationState {
 3. 普通善意缺少证据时恢复自愿轴与极端标签；强制证据只允许对应强制轴，不得旁路提升好感或信任。
 4. 同一逻辑操作的幂等键不含 branchId，但唯一提交作用域仍为 `(branchId, idempotencyKey)`；旧分支、迟到指纹和并发重复提交继续由阶段2内核零写入处理。
 5. 任一记录、路径、数值、资源、槽位、检定结果、事实证据、消息身份或分支信息有歧义时返回 unresolved/rejected，不生成可提交事务。
+
+## 20. 阶段5双入口与诊断可见性合同
+
+阶段5公开入口位于 `v2/surface/`，并由生产 `index.js` 安装导演台：
+
+- `adaptNaturalLanguageIntent` 只把注册的精确表达，或带非空 `semanticBasis` 的有界语义动作 ID，转换为候选；它不猜物品、数量、槽位、资源、事实、知识、分支、检定或授权；
+- `adaptUiAction` 读取同一调用方动作目录中的 action ID；UI不拥有另一套领域命令，也不能提供保留字段、绕开导演或直接写状态；
+- `planDualSurfaceDomainAction` 是唯一双源纯编排入口：先生成同一个结构化 DomainCommand candidate，再执行目标绑定确认、阶段3 Turn Boundary裁定、`validateDirectorDomainCommand` 和 `planDirectorDomainTransaction`；
+- `compareDualSurfaceParity` 对规范命令、确认摘要、裁定、稳定幂等键、精确写计划、前置条件和整笔 Transaction proposal 逐项比较；
+- `createDualSurfaceViewModel` 只公开白名单审计投影；默认不回显原始自然语言、EvidenceRef正文、完整提示词、密钥、外部URL、私人路径或宿主异常详情；
+- `installDualSurfaceUI` 展示裁定、事务、分支、证据、迁移缺口与撤销，并提供沉浸/可审计/调试三个可见度。调试模式也只增加哈希和结构元数据，不增加私人原文。
+
+宿主合同：
+
+1. `window.MvuAutoDoctorV2Host.captureSession()` 必须一次捕获同一个动作目录、完整 `MessageFingerprint`、active Branch、Turn Boundary、证据、显式战役配置和领域前值；缺任一项时导演台保持只读 `unresolved`。
+2. `window.MvuAutoDoctorV2Host.executePlannedDomainTransaction(plan)` 是唯一生产提交桥；它必须复用阶段2/4 TransactionKernel。阶段5自身没有任何直接状态写入回退。
+3. 危险领域动作的确认摘要绑定 action、规范命令和完整目标身份；确认前不规划事务，目标变化后旧确认失效。
+4. 自然语言与UI入口只允许阶段4原生物品、装备、技能、社会和任务命令；阶段3 Fact/Knowledge/H2/H3命令继续使用各自证据与分支入口，不能伪装成本目录动作。
+5. 390×844触控视口的可见控件不得小于44px；对话框必须约束横向溢出、捕获Tab焦点、支持Escape关闭，并把焦点归还开启控件。

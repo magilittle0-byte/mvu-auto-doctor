@@ -1067,6 +1067,14 @@ try {
         });
         await page.locator('#mvu-auto-doctor-settings').screenshot({ path: process.env.MVUAD_SETTINGS_SCREENSHOT });
     }
+    await page.evaluate(() => {
+        localStorage.setItem('mvu-auto-doctor-orb-position-v1', JSON.stringify({
+            side: 'right',
+            top: 260,
+            tucked: true,
+        }));
+        window.dispatchEvent(new Event('resize'));
+    });
     const orbBeforeOpen = await page.evaluate(() => {
         const orb = document.querySelector('#mvuad-floating-orb');
         const rect = orb?.getBoundingClientRect();
@@ -1075,7 +1083,11 @@ try {
             hidden: !!orb?.hidden,
             top: rect?.top ?? -1,
             bottom: rect?.bottom ?? Number.MAX_SAFE_INTEGER,
+            right: rect?.right ?? Number.MAX_SAFE_INTEGER,
             count: orb?.querySelector('.mvuad-orb-count')?.textContent,
+            tucked: !!orb?.classList.contains('mvuad-orb-tucked'),
+            documentClientWidth: document.documentElement.clientWidth,
+            documentScrollWidth: document.documentElement.scrollWidth,
         };
     });
     assert.equal(orbBeforeOpen.exists, true, '必须建立游玩时悬浮入口');
@@ -1085,6 +1097,13 @@ try {
         JSON.stringify(orbBeforeOpen),
     );
     assert.equal(orbBeforeOpen.count, '1');
+    assert.equal(orbBeforeOpen.tucked, true);
+    assert.ok(orbBeforeOpen.right <= orbBeforeOpen.documentClientWidth);
+    assert.equal(
+        orbBeforeOpen.documentScrollWidth,
+        orbBeforeOpen.documentClientWidth,
+        `收起的悬浮球不得扩大移动端横向滚动范围：${JSON.stringify(orbBeforeOpen)}`,
+    );
     await page.evaluate(() => {
         /*
          * Reproduce SillyTavern's real root geometry. A transformed zero-height

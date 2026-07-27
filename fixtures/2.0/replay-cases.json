@@ -1219,7 +1219,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-5",
         "futureTestId": "replay.ui.android_expand"
       }

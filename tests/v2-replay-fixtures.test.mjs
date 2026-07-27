@@ -140,6 +140,7 @@ const ACTIVE_UNIT_CASE_IDS = new Set([
   'RR-SKILL-TEXT-COST',
   'RR-FINGERPRINT-PREVIOUS-REPLY',
   'RR-REROLL-IDEMPOTENCY',
+  'RR-UI-ANDROID-EXPAND',
 ]);
 
 test('2.0 replay corpus conforms to the checked-in JSON Schema', async () => {
@@ -183,7 +184,12 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
       const phase4Ids = new Set([
         'RR-SOCIAL-ORDINARY-KINDNESS',
       ]);
-      const expectedPhase = phase4Ids.has(entry.id)
+      const phase5Ids = new Set([
+        'RR-UI-ANDROID-EXPAND',
+      ]);
+      const expectedPhase = phase5Ids.has(entry.id)
+        ? 'phase-5'
+        : phase4Ids.has(entry.id)
         ? 'phase-4'
         : phase3Ids.has(entry.id)
           ? 'phase-3'
@@ -283,6 +289,17 @@ test('phase 4 activates every replay assigned to the domain-transaction stage', 
   );
   assert.ok(phase4Cases.every((entry) => entry.automation.status === 'unit-active'));
 });
-test.todo('phase 5 activates natural-language and UI parity replays');
+test('phase 5 activates natural-language and UI parity replays', async () => {
+  const corpus = await readJson(CORPUS_PATH);
+  const phase5Cases = corpus.cases.filter((entry) => (
+    entry.automation.activateAt === 'phase-5'
+  ));
+
+  assert.deepEqual(
+    phase5Cases.map((entry) => entry.id),
+    ['RR-UI-ANDROID-EXPAND'],
+  );
+  assert.ok(phase5Cases.every((entry) => entry.automation.status === 'unit-active'));
+});
 test.todo('phase 6 activates repair barrier, database and watchdog behavior replays');
 test.todo('phase 7 activates the real-SillyTavern release gate replay');
