@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "2.0",
+  "phase": 6,
+  "status": "pass",
+  "testedAt": "2026-07-27T17:42:52+08:00",
+  "validationLayers": [
+    "automated-unit-integration-browser",
+    "real-sillytavern",
+    "real-deepseek"
+  ],
+  "environment": {
+    "host": "SillyTavern",
+    "hostVersion": "1.18.0",
+    "hostCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "codeFingerprint": "86fd0e76c235ed57a2f9f495842295215df2a5ddf87a406fcec636bad5c2e0d3",
+    "browser": "Codex in-app Browser",
+    "viewport": "390x844"
+  },
+  "barrier": {
+    "capturedPersisted": true,
+    "repairingObserved": true,
+    "stateCommittingObserved": true,
+    "settledObserved": true,
+    "finalFingerprintReadBack": true,
+    "downstreamStartedAfterSettled": true,
+    "staleBranchWrites": 0,
+    "failedBranchWrites": 0,
+    "lateResultWrites": 0,
+    "productionApiVersion": 4
+  },
+  "watchdog": {
+    "softCancelVisible": true,
+    "progressObservable": true,
+    "hardTimeoutTerminal": true,
+    "lateResultWrites": 0
+  },
+  "database": {
+    "parameterized": true,
+    "fieldLimit": 600,
+    "lengthBoundaryChecked": true,
+    "revisionConflictRejected": true,
+    "conflictingWriteCount": 0
+  },
+  "replay": {
+    "cases": 17,
+    "passed": 16,
+    "failed": 0,
+    "phase7ReleaseTodo": 1,
+    "phase7TodoFailsDefaultCi": false
+  },
+  "model": {
+    "provider": "DeepSeek",
+    "model": "deepseek-v4-flash",
+    "httpStatus": 200,
+    "requestCount": 1,
+    "durationMs": 11764,
+    "loggedFields": [
+      "inputBytes",
+      "model",
+      "status",
+      "durationMs"
+    ],
+    "credentialCleared": true,
+    "proxyStopped": true
+  },
+  "forum": {
+    "topics": 8,
+    "comments": 17,
+    "persistedAfterReload": true,
+    "singleControlledToggle": true,
+    "ariaSynchronized": true,
+    "collapsedRepliesHidden": true,
+    "minimumTouchTarget": 42,
+    "mobileShellClientWidth": 390,
+    "mobileShellScrollWidth": 390
+  },
+  "privacy": {
+    "containsCredential": false,
+    "containsRawPayload": false,
+    "containsPrivateNarrative": false,
+    "containsFullPrompt": false
+  }
+}

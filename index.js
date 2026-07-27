@@ -78,11 +78,16 @@ import {
 import {
     installDualSurfaceUI,
 } from './v2/surface/index.mjs';
+import {
+    NarrativeBarrierCoordinator,
+    PersistentIdempotencyStore,
+    PersistentRecoveryStore,
+} from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
 const VERSION = '1.9.0';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 7;
+const CHAT_NAMESPACE_VERSION = 8;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
@@ -159,6 +164,7 @@ let mvuWriteChain = Promise.resolve();
 let hardContractChain = Promise.resolve();
 let continuityChain = Promise.resolve();
 let forumChain = Promise.resolve();
+let runtimePersistenceChain = Promise.resolve();
 const modelConnectionScheduler = new ConnectionTaskScheduler();
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
@@ -1578,6 +1584,10 @@ function readChatNamespace(context = getContext()) {
             continuityCheckpoint: null,
             forum: emptyForumState(context?.chatId || ''),
             forumCheckpoint: null,
+            phase6Runtime: {
+                version: 1,
+                records: {},
+            },
         };
     }
     return deepClone(value);
@@ -1655,6 +1665,50 @@ async function writeChatNamespace(next, expectedChatId, {
         console.warn('[MVU Auto Doctor] 保存聊天内记录失败：', error);
         return false;
     }
+}
+
+function phase6RuntimeState(namespace = readChatNamespace()) {
+    const value = namespace?.phase6Runtime;
+    return {
+        version: 1,
+        records: isPlainObject(value?.records) ? deepClone(value.records) : {},
+    };
+}
+
+function createChatRuntimeAdapter(expectedChatId) {
+    return {
+        async read(key) {
+            const context = getContext();
+            if (!context || context.chatId !== expectedChatId) return null;
+            const record = phase6RuntimeState(readChatNamespace(context))
+                .records[String(key)];
+            return record ? deepClone(record) : null;
+        },
+        async compareAndSwap(key, expectedRevision, value) {
+            const task = runtimePersistenceChain
+                .catch(() => undefined)
+                .then(async () => {
+                    const context = getContext();
+                    if (!context || context.chatId !== expectedChatId) return false;
+                    const namespace = readChatNamespace(context);
+                    const runtime = phase6RuntimeState(namespace);
+                    const storageKey = String(key);
+                    const current = runtime.records[storageKey] ?? null;
+                    if ((current?.revision ?? null) !== expectedRevision) return false;
+                    runtime.records[storageKey] = {
+                        revision: expectedRevision === null ? 1 : expectedRevision + 1,
+                        value: deepClone(value),
+                    };
+                    namespace.phase6Runtime = runtime;
+                    return writeChatNamespace(namespace, expectedChatId, {
+                        fields: ['phase6Runtime'],
+                        durable: true,
+                    });
+                });
+            runtimePersistenceChain = task.then(() => undefined, () => undefined);
+            return task;
+        },
+    };
 }
 
 function currentCharacter(context) {
@@ -5274,7 +5328,46 @@ function safeSettlementResult(record, status, extra = {}) {
     };
 }
 
-function registerTargetSettlement(captured, settlementPromise) {
+async function persistTargetSettlementBarrier(record, state, extra = {}) {
+    const adapter = createChatRuntimeAdapter(record.chatId);
+    const storageKey = `legacy-narrative-barrier:${record.key}`;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+        const current = await adapter.read(storageKey);
+        const value = {
+            ...(current?.value || {}),
+            protocolVersion: '2.0',
+            id: `barrier:${record.serial}`,
+            chatId: record.chatId,
+            targetIndex: record.targetIndex,
+            messageId: record.messageId,
+            initialSwipeId: record.initialSwipeId,
+            initialFingerprint: record.initialFingerprint,
+            state,
+            registeredAt: record.registeredAt,
+            updatedAt: Date.now(),
+            ...deepClone(extra),
+        };
+        if (
+            await adapter.compareAndSwap(
+                storageKey,
+                current?.revision ?? null,
+                value,
+            )
+        ) {
+            return value;
+        }
+    }
+    throw new Error('正文稳定屏障持久化并发重试耗尽。');
+}
+
+async function transitionTargetSettlement(record, state, extra = {}) {
+    record.state = state;
+    const value = await persistTargetSettlementBarrier(record, state, extra);
+    record.persisted = value;
+    return value;
+}
+
+function createTargetSettlementRecord(captured) {
     if (!captured) return null;
     const key = targetSettlementKey(captured.chatId, captured.index);
     const record = {
@@ -5287,12 +5380,21 @@ function registerTargetSettlement(captured, settlementPromise) {
         initialFingerprint: captured.fingerprint,
         registeredAt: Date.now(),
         settledAt: 0,
+        state: 'captured',
         pending: true,
         result: null,
         promise: null,
+        ready: null,
     };
     targetSettlementRecords.set(key, record);
-    record.promise = Promise.resolve(settlementPromise)
+    record.ready = transitionTargetSettlement(record, 'captured');
+    return record;
+}
+
+function attachTargetSettlement(record, settlementPromise) {
+    if (!record) return null;
+    record.promise = Promise.resolve(record.ready)
+        .then(() => settlementPromise)
         .then((workflowResult) => {
             const context = getContext();
             const current = captureTarget(context, record.targetIndex);
@@ -5305,6 +5407,26 @@ function registerTargetSettlement(captured, settlementPromise) {
                     reason: '聊天、楼层或回复分支已经变化',
                 });
             }
+            if (workflowResult?.status === 'stale') {
+                return safeSettlementResult(record, 'stale', {
+                    messageId: current.messageId,
+                    swipeId: current.swipeId,
+                    fingerprint: current.fingerprint,
+                    workflowStatus: workflowResult.status,
+                    reason: workflowResult.reason || '医生流程目标已经失效',
+                });
+            }
+            if (
+                ['failed', 'blocked', 'busy', 'timeout'].includes(workflowResult?.status)
+            ) {
+                return safeSettlementResult(record, 'failed', {
+                    messageId: current.messageId,
+                    swipeId: current.swipeId,
+                    fingerprint: current.fingerprint,
+                    workflowStatus: workflowResult.status,
+                    reason: workflowResult.reason || '医生流程未能安全完成',
+                });
+            }
             return safeSettlementResult(record, 'settled', {
                 messageId: current.messageId,
                 swipeId: current.swipeId,
@@ -5313,7 +5435,7 @@ function registerTargetSettlement(captured, settlementPromise) {
                 reason: workflowResult?.reason || '',
             });
         })
-        .catch((error) => safeSettlementResult(record, 'settled', {
+        .catch((error) => safeSettlementResult(record, 'failed', {
             messageId: captureTarget(getContext(), record.targetIndex)?.messageId || record.messageId,
             swipeId: captureTarget(getContext(), record.targetIndex)?.swipeId ?? record.initialSwipeId,
             fingerprint: captureTarget(getContext(), record.targetIndex)?.fingerprint || '',
@@ -5324,8 +5446,18 @@ function registerTargetSettlement(captured, settlementPromise) {
             record.pending = false;
             record.settledAt = Date.now();
             record.result = result;
+            return transitionTargetSettlement(record, result.status, {
+                settledAt: record.settledAt,
+                messageId: result.messageId || record.messageId,
+                finalSwipeId: result.swipeId,
+                finalFingerprint: result.fingerprint || '',
+                workflowStatus: result.workflowStatus || '',
+                terminalReason: result.reason || '',
+            }).then(() => result);
+        })
+        .then((result) => {
             try {
-                window.dispatchEvent(new CustomEvent('mvu-auto-doctor-target-settled', {
+                window.dispatchEvent(new CustomEvent('mvu-auto-doctor-target-terminal', {
                     detail: {
                         status: result.status,
                         chatId: result.chatId,
@@ -5336,10 +5468,30 @@ function registerTargetSettlement(captured, settlementPromise) {
                         workflowStatus: result.workflowStatus,
                     },
                 }));
+                if (result.status === 'settled') {
+                    window.dispatchEvent(new CustomEvent('mvu-auto-doctor-target-settled', {
+                        detail: {
+                            status: result.status,
+                            chatId: result.chatId,
+                            targetIndex: result.targetIndex,
+                            messageId: result.messageId,
+                            swipeId: result.swipeId,
+                            fingerprint: result.fingerprint,
+                            workflowStatus: result.workflowStatus,
+                        },
+                    }));
+                }
             } catch {}
             return result;
         });
     return record;
+}
+
+function registerTargetSettlement(captured, settlementPromise) {
+    return attachTargetSettlement(
+        createTargetSettlementRecord(captured),
+        settlementPromise,
+    );
 }
 
 async function waitForTargetSettled(
@@ -5398,6 +5550,50 @@ async function waitForTargetSettled(
         chatId: context.chatId,
         targetIndex: resolved,
         reason: '医生任务没有登记',
+    };
+}
+
+async function runAfterTargetSettled(targetIndex, reader, options = {}) {
+    if (typeof reader !== 'function') {
+        return {
+            status: 'unresolved',
+            reason: '下游读取器必须是显式函数。',
+        };
+    }
+    const barrier = await waitForTargetSettled(targetIndex, options);
+    if (barrier.status !== 'settled') {
+        return {
+            ...barrier,
+            status: ['stale', 'failed'].includes(barrier.status)
+                ? 'abandoned'
+                : barrier.status,
+        };
+    }
+    const context = getContext();
+    const current = captureTarget(context, barrier.targetIndex);
+    if (
+        !current
+        || current.messageId !== barrier.messageId
+        || current.swipeId !== barrier.swipeId
+        || current.fingerprint !== barrier.fingerprint
+    ) {
+        return {
+            ...barrier,
+            status: 'abandoned',
+            reason: 'settled 后目标又发生变化；下游不得回退到旧正文。',
+        };
+    }
+    return {
+        ...barrier,
+        status: 'completed',
+        value: await reader({
+            chatId: barrier.chatId,
+            targetIndex: barrier.targetIndex,
+            messageId: barrier.messageId,
+            swipeId: barrier.swipeId,
+            fingerprint: barrier.fingerprint,
+            narrative: String(context.chat[barrier.targetIndex]?.mes || ''),
+        }),
     };
 }
 
@@ -9848,8 +10044,11 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
+            const barrierRecord = createTargetSettlementRecord(captured);
             let settledTarget = null;
-            const settled = waitAutomaticTargetSettled(captured).then((result) => {
+            const settled = barrierRecord.ready
+                .then(() => waitAutomaticTargetSettled(captured))
+                .then((result) => {
                 if (result.status === 'settled') {
                     settledTarget = result.captured;
                     return result;
@@ -9861,7 +10060,13 @@ function bindEvents() {
                 }
                 return result;
             });
-            const hardAudit = settled.then((result) => (
+            const stateCommitting = settled.then(async (result) => {
+                if (result.status !== 'settled') return result;
+                await transitionTargetSettlement(barrierRecord, 'repairing');
+                await transitionTargetSettlement(barrierRecord, 'state-committing');
+                return result;
+            });
+            const hardAudit = stateCommitting.then((result) => (
                 result.status === 'settled'
                     ? enqueueHardContractAudit(resolved, {
                         queuedTarget: result.captured,
@@ -9869,7 +10074,7 @@ function bindEvents() {
                     })
                     : result
             ));
-            const socialAudit = settled.then((result) => (
+            const socialAudit = stateCommitting.then((result) => (
                 result.status === 'settled'
                     ? runSocialAuditTarget(result.captured)
                     : result
@@ -9883,21 +10088,41 @@ function bindEvents() {
                     })
                     : socialResult?.status === 'failed' ? socialResult : result
             ));
-            const openingSync = repair.then(() => enqueueOpeningResourceSync(resolved));
+            const openingSync = repair.then((repairResult) => (
+                ['stale', 'failed', 'blocked', 'busy'].includes(repairResult?.status)
+                    ? repairResult
+                    : enqueueOpeningResourceSync(resolved)
+            ));
             const finalReplySettlement = Promise.all([repair, openingSync])
-                .then(([repairResult, openingResult]) => ({
-                    status: repairResult?.status === 'stale'
+                .then(([repairResult, openingResult]) => {
+                    const statuses = [repairResult?.status, openingResult?.status];
+                    const status = statuses.includes('stale')
                         ? 'stale'
-                        : openingResult?.status || repairResult?.status || 'completed',
-                    reason: repairResult?.reason || openingResult?.reason || '',
-                    correctedTarget: repairResult?.correctedTarget || null,
-                }));
-            registerTargetSettlement(captured, finalReplySettlement);
-            // 活世界只读正文并写独立元数据。通过本地硬合同门后立即
-            // 与变量诊断并发，不再等待变量模型、写回和开局资源同步。
-            const continuity = Promise.all([hardAudit, socialAudit]).then(async (
-                [hardAuditResult, socialAuditResult],
+                        : statuses.find((value) => (
+                            ['failed', 'blocked', 'busy', 'timeout'].includes(value)
+                        )) || 'completed';
+                    return {
+                        status,
+                        reason: repairResult?.reason || openingResult?.reason || '',
+                        correctedTarget: repairResult?.correctedTarget || null,
+                    };
+                });
+            attachTargetSettlement(barrierRecord, finalReplySettlement);
+            // 阶段6起，活世界、记忆、数据库和论坛只能在持久屏障明确
+            // settled 后读取最终正文；failed/stale 不回退到旧正文。
+            const continuity = Promise.all([
+                barrierRecord.promise,
+                hardAudit,
+                socialAudit,
+            ]).then(async (
+                [barrierResult, hardAuditResult, socialAuditResult],
             ) => {
+                if (barrierResult?.status !== 'settled') {
+                    return {
+                        status: barrierResult?.status || 'failed',
+                        reason: barrierResult?.reason || '正文稳定屏障未放行',
+                    };
+                }
                 if (socialAuditResult?.status === 'failed') {
                     const blockedReason = socialAuditResult.reason
                         || socialAuditResult.correction?.reason
@@ -10089,6 +10314,9 @@ async function captureDualSurfaceSession() {
 
 async function executeDualSurfacePlan(planResult) {
     const provider = window.MvuAutoDoctorV2Host;
+    if (typeof provider?.executeBarrieredDomainTransaction === 'function') {
+        return provider.executeBarrieredDomainTransaction(planResult);
+    }
     if (typeof provider?.executePlannedDomainTransaction !== 'function') {
         return {
             ok: false,
@@ -10102,7 +10330,80 @@ async function executeDualSurfacePlan(planResult) {
             }],
         };
     }
-    return provider.executePlannedDomainTransaction(planResult);
+    const expectedChatId = getContext()?.chatId;
+    if (!expectedChatId) {
+        return {
+            ok: false,
+            status: 'unresolved',
+            transaction: planResult?.value?.transaction ?? null,
+            issues: [{
+                code: 'surface.runtime_chat_missing',
+                path: '$.host',
+                severity: 'unresolved',
+                message: '无法绑定持久阶段6屏障到当前聊天。',
+            }],
+        };
+    }
+    const captureCurrent = async () => {
+        const captured = typeof provider.captureCurrent === 'function'
+            ? await provider.captureCurrent()
+            : await provider.captureSession();
+        return {
+            fingerprint: captured?.fingerprint
+                || captured?.currentFingerprint
+                || captured?.target,
+            branch: captured?.branch || captured?.activeBranch,
+        };
+    };
+    const adapter = createChatRuntimeAdapter(expectedChatId);
+    const idempotencyStore = new PersistentIdempotencyStore(adapter, {
+        namespace: 'production-idempotency',
+    });
+    const recoveryStore = new PersistentRecoveryStore(adapter, {
+        namespace: 'production-recovery',
+    });
+    const durableRuntime = Object.freeze({
+        idempotencyStore,
+        recoveryStore,
+        persistRecovery: (record) => recoveryStore.persist(record),
+        persistTransaction: (transaction) => recoveryStore.persist({
+            id: `transaction:${transaction.id}`,
+            kind: 'transaction-audit',
+            transaction,
+            status: transaction.status,
+        }),
+    });
+    const runtime = new NarrativeBarrierCoordinator({
+        adapter,
+        host: {
+            captureCurrent,
+            executePlannedDomainTransaction: (confirmedPlan, execution = {}) => (
+                provider.executePlannedDomainTransaction(
+                    confirmedPlan,
+                    Object.freeze({
+                        ...durableRuntime,
+                        signal: execution.signal,
+                    }),
+                )
+            ),
+            readFinalNarrative: typeof provider.readFinalNarrative === 'function'
+                ? (target) => provider.readFinalNarrative(target)
+                : undefined,
+            publishBarrier: (barrier) => {
+                try {
+                    window.dispatchEvent(new CustomEvent('mvu-auto-doctor-v2-barrier', {
+                        detail: {
+                            id: barrier.id,
+                            state: barrier.state,
+                            branchId: barrier.branchId,
+                            transactionId: barrier.transactionId,
+                        },
+                    }));
+                } catch {}
+            },
+        },
+    });
+    return runtime.execute(planResult);
 }
 
 function installDualSurface() {
@@ -10148,9 +10449,11 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 3,
-        isCompatible: (required = 1) => Number(required) <= 3,
+        apiVersion: 4,
+        isCompatible: (required = 1) => Number(required) <= 4,
         waitForTargetSettled,
+        runAfterTargetSettled,
+        executeBarrieredDomainTransaction: executeDualSurfacePlan,
         runLatest: () => enqueue(null, { manual: true }),
         auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
         getHardContractAudit: () => deepClone(latestHardContractAudit),

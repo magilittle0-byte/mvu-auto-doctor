@@ -1010,7 +1010,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-6",
         "futureTestId": "replay.repair.database_barrier"
       }
@@ -1078,7 +1078,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-6",
         "futureTestId": "replay.task.watchdog"
       }
@@ -1149,7 +1149,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-6",
         "futureTestId": "replay.database.safety"
       }
