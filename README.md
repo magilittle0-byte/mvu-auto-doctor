@@ -2,6 +2,8 @@
 
 这是一个独立的 SillyTavern / TauriTavern 扩展。它包含通用 MVU 审计修复、零模型调用的正文/装备硬合同检查、人物动机与关系证据守卫、分类活世界与事件连续性账本，以及不占正文的内置世界论坛，不会修改角色卡、SP·数据库、预设、缝合怪、Zsd 或 Story Oracle 文件。
 
+2.0阶段5开发线已加入“导演台”：设置页或悬浮工具页都可打开自然语言/可见控件双入口，并查看裁定、事务、分支、证据、迁移缺口和撤销。两入口最终调用同一 `DomainCommand → Turn Boundary → validated plan → Transaction proposal` 链；危险动作必须对当前精确目标确认，UI没有直接写状态的旁路。通用扩展不会猜角色卡的槽位、资源、记录路径或检定规则；只有宿主集成显式提供 `window.MvuAutoDoctorV2Host.captureSession()` 和复用阶段2/4内核的 `executePlannedDomainTransaction()` 后才可提交，否则导演台以可见 `unresolved` 只读模式展示缺口。阶段6数据库/正文稳定下游屏障与看门狗尚未接入。
+
 ## 安装
 
 在 TauriTavern 的扩展安装页面选择“从 Git 仓库安装”，粘贴：

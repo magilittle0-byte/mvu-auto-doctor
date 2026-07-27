@@ -39,7 +39,7 @@
 | `RR-REPAIR-DB-BARRIER` | 正文修复未稳定，数据库任务先读取/写入 | 修复仍处于写回验证，数据库同步请求启动 | 下游保持阻塞；正文事务提交先于数据库启动 | unit / integration / real-replay | 既有正文修复与数据库抢跑事故 | 阶段6：`replay.repair.database_barrier` |
 | `RR-TASK-WATCHDOG` | 模型任务运行一小时以上无人检查 | 65分钟运行、55分钟无心跳和进度 | 租约超时、生成诊断、不允许未验证写入 | unit / integration / real-replay | 既有长任务无人看守事故 | 阶段6：`replay.task.watchdog` |
 | `RR-DATABASE-LENGTH-SQL-CONCURRENCY` | 600字符限制、SQL拼接和并发写入共同失守 | 601字符、非参数化、修订号冲突 | 拒绝提交并同时报告长度与并发冲突 | unit / integration / real-replay | 既有数据库事故族 | 阶段6：`replay.database.safety` |
-| `RR-UI-ANDROID-EXPAND` | Android窄屏论坛“展开全文”无效 | 360px触控视口点击展开 | 受控状态和 `aria-expanded` 同步，全文可见 | integration / real-replay / real-sillytavern | 既有论坛Android展开事故 | 阶段5：`replay.ui.android_expand` |
+| `RR-UI-ANDROID-EXPAND` | Android窄屏论坛“展开全文”无效 | 360px触控视口点击展开 | 受控状态和 `aria-expanded` 同步，全文可见 | integration / real-replay / real-sillytavern | 既有论坛Android展开事故 | 阶段5 unit-active + 浏览器：`replay.ui.android_expand` |
 | `RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION` | 模拟验收通过但真实酒馆失败仍被视为可发布 | 模拟通过、真实酒馆消息错配失败 | 发布门阻断；真实环境证据优先 | real-sillytavern / release | 既有模拟与真实酒馆验收不一致事故 | 阶段7：`replay.release.real_qc_wins` |
 
 ## 激活规则

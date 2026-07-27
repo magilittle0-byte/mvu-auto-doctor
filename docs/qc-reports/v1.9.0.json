@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "1.9.0",
-  "testedAt": "2026-07-26T17:23:46+08:00",
+  "testedAt": "2026-07-27T13:10:39+08:00",
   "result": "pass",
-  "codeFingerprint": "1b18d73cd5e8a2c100ab3304cd601f1bc96fd2ed2349bc16ee8529bbf7c4798f",
+  "codeFingerprint": "3f5416205b9d32ff6c3ec882c1cde421a7a1f85014d73b943184f357c352098e",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -25,37 +25,49 @@
     },
     "modelProxy": {
       "url": "http://127.0.0.1:9328/v1",
-      "credentialMode": "memory-only",
+      "credentialMode": "memory-only proxy; injected from a Windows DPAPI current-user store",
       "proxyStopped": true
     }
   },
   "checks": {
     "testSuite": {
-      "total": 33,
-      "passed": 33,
+      "total": 122,
+      "passed": 122,
       "failed": 0,
-      "durationMs": 128810
+      "todo": 2,
+      "durationMs": 128964
     },
     "deepSeek": {
       "model": "deepseek-v4-flash",
-      "calls": 12,
+      "calls": 1,
       "httpStatuses": [
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
         200
       ],
-      "reviewerOnlyForSocialProof": true,
+      "reviewerOnlyForSocialProof": false,
       "credentialPersisted": false,
       "proxyStopped": true
+    },
+    "directorSurface": {
+      "naturalLanguageAndUiShareCandidatePipeline": true,
+      "parityDomains": [
+        "item",
+        "equipment",
+        "skill",
+        "social",
+        "quest"
+      ],
+      "normalizedCommandEquivalent": true,
+      "stableIdempotencyKeyEquivalent": true,
+      "exactPreconditionsEquivalent": true,
+      "transactionProposalEquivalent": true,
+      "turnBoundaryEnforced": true,
+      "directorValidationEnforced": true,
+      "confirmationDigestBoundToTarget": true,
+      "missingEvidenceVisibleAsUnresolved": true,
+      "directStateWriteBlocked": true,
+      "sensitiveDiagnosticMaterialExcluded": true,
+      "keyboardAndFocusRegressionPassed": true,
+      "minimumControlSize": 44
     },
     "scenarioPlan": {
       "baselineCreated": true,
@@ -91,8 +103,8 @@
     },
     "forum": {
       "generatedPages": 1,
-      "topicCount": 5,
-      "commentCount": 12,
+      "topicCount": 4,
+      "commentCount": 8,
       "openWithPointerOrTouch": true,
       "expand": true,
       "collapse": true,
@@ -106,8 +118,10 @@
       "opBodyClipped": false,
       "repliesExpandedTogether": true,
       "collapsedRepliesHidden": true,
-      "visibleReplyCount": 3,
-      "totalReplyCount": 3
+      "visibleReplyCount": 2,
+      "totalReplyCount": 2,
+      "persistedAfterReload": true,
+      "deepSeekRefreshHttpStatus": 200
     },
     "socialGuard": {
       "sameMainModelAblation": true,

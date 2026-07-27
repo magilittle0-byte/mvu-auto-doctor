@@ -75,6 +75,9 @@ import {
     sanitizeClosedProposalMessages,
     stripClosedProposals,
 } from './social-core.mjs';
+import {
+    installDualSurfaceUI,
+} from './v2/surface/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
 const VERSION = '1.9.0';
@@ -178,6 +181,7 @@ let latestHardContractKind = '';
 let latestHardContractAudit = null;
 let latestSocialStatus = '人物关系：等待检查';
 let latestSocialKind = '';
+let dualSurfaceController = null;
 let latestSocialAudit = null;
 let latestContinuityStatus = '世界连续性：等待事件';
 let latestContinuityKind = '';
@@ -7734,7 +7738,7 @@ function applyFloatingOrbPosition(position = readFloatingOrbPosition()) {
     const top = Math.max(8, Math.min(Number(position.top) || 8, window.innerHeight - size - 8));
     const side = position.side === 'left' ? 'left' : 'right';
     const left = position.tucked
-        ? (side === 'left' ? handle - size : window.innerWidth - handle)
+        ? (side === 'left' ? 0 : window.innerWidth - size)
         : (side === 'left' ? 10 : window.innerWidth - size - 10);
     orb.style.left = `${left + floatingViewportOffsetX()}px`;
     orb.style.top = `${top}px`;
@@ -8644,6 +8648,7 @@ function buildFloatingUi() {
                         <div class="mvuad-floating-forum-status" role="status"></div>
                     </div>
                     <div class="mvuad-floating-actions">
+                        <button class="menu_button mvuad-floating-director" type="button">打开导演台</button>
                         <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
                         <button class="menu_button mvuad-floating-protocol" type="button">检查硬规则</button>
                         <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
@@ -8703,6 +8708,9 @@ function buildFloatingUi() {
     });
     panel.querySelector('.mvuad-floating-protocol').addEventListener('click', () => {
         enqueueHardContractAudit(null, { manual: true });
+    });
+    panel.querySelector('.mvuad-floating-director').addEventListener('click', (event) => {
+        openDualSurfacePanel(event.currentTarget);
     });
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
@@ -9408,6 +9416,19 @@ function buildSettingsPanel() {
                             </details>
                         </div>
                     </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-surface-section">
+                        <summary>2.0 自然语言与 UI 导演台</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                自然语言与可见控件只负责选择同一个战役动作；两种入口都必须经过
+                                Turn Boundary、完整消息指纹、活动分支、证据、显式配置和领域事务门。
+                                缺少槽位、数值、资源、检定或迁移证据时只显示待补充，不会猜测或直接写状态。
+                            </div>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-surface-open" type="button">打开导演台</button>
+                            </div>
+                        </div>
+                    </details>
                     <details class="mvuad-settings-fold mvuad-settings-section">
                         <summary>活世界与事件连续性</summary>
                         <div class="mvuad-settings-fold-body">
@@ -9599,6 +9620,9 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-cancel-task').addEventListener('click', cancelCurrentOperations);
     wrapper.querySelector('.mvuad-protocol-run').addEventListener('click', () => {
         enqueueHardContractAudit(null, { manual: true });
+    });
+    wrapper.querySelector('.mvuad-surface-open').addEventListener('click', (event) => {
+        openDualSurfacePanel(event.currentTarget);
     });
     const continuityMode = wrapper.querySelector('.mvuad-continuity-mode');
     continuityMode.value = getSettings().continuityMode;
@@ -10024,6 +10048,86 @@ function bindEvents() {
     });
 }
 
+function dualSurfaceRollbackSummary() {
+    const record = lastUndo || latestUndoRecord(readChatNamespace());
+    const paths = record?.touchedPaths
+        || record?.paths
+        || record?.touchedRefs
+        || [];
+    return {
+        available: Boolean(record),
+        status: record?.status || (record ? 'available' : 'none'),
+        pathCount: Array.isArray(paths) ? paths.length : 0,
+        recordId: record?.id || record?.targetKey || '',
+    };
+}
+
+async function captureDualSurfaceSession() {
+    const provider = window.MvuAutoDoctorV2Host;
+    if (typeof provider?.captureSession !== 'function') {
+        return {
+            catalog: [],
+            migrations: [],
+            rollback: dualSurfaceRollbackSummary(),
+        };
+    }
+    const captured = await provider.captureSession();
+    if (!captured || typeof captured !== 'object') {
+        return {
+            catalog: [],
+            migrations: [],
+            rollback: dualSurfaceRollbackSummary(),
+        };
+    }
+    return {
+        ...deepClone(captured),
+        rollback: captured.rollback
+            ? deepClone(captured.rollback)
+            : dualSurfaceRollbackSummary(),
+    };
+}
+
+async function executeDualSurfacePlan(planResult) {
+    const provider = window.MvuAutoDoctorV2Host;
+    if (typeof provider?.executePlannedDomainTransaction !== 'function') {
+        return {
+            ok: false,
+            status: 'unresolved',
+            transaction: planResult?.value?.transaction ?? null,
+            issues: [{
+                code: 'surface.transaction_kernel_missing',
+                path: '$.host',
+                severity: 'unresolved',
+                message: '宿主尚未提供阶段2 TransactionKernel执行桥；计划保持只读。',
+            }],
+        };
+    }
+    return provider.executePlannedDomainTransaction(planResult);
+}
+
+function installDualSurface() {
+    if (dualSurfaceController) return dualSurfaceController;
+    dualSurfaceController = installDualSurfaceUI({
+        host: {
+            captureSession: captureDualSurfaceSession,
+            executePlan: executeDualSurfacePlan,
+            undo: async () => {
+                const provider = window.MvuAutoDoctorV2Host;
+                if (typeof provider?.rollbackDomainTransaction === 'function') {
+                    return provider.rollbackDomainTransaction();
+                }
+                return undoLast();
+            },
+        },
+        mount: document.body,
+    });
+    return dualSurfaceController;
+}
+
+function openDualSurfacePanel(trigger) {
+    return installDualSurface().open(trigger);
+}
+
 function initialize() {
     if (window.__MVU_AUTO_DOCTOR_INITIALIZED__) return;
     window.__MVU_AUTO_DOCTOR_INITIALIZED__ = true;
@@ -10032,6 +10136,7 @@ function initialize() {
     buildFloatingUi();
     buildForumUi();
     buildSettingsPanel();
+    installDualSurface();
     bindEvents();
     disableStoryOracleAutoIfNeeded();
     lastUndo = latestUndoRecord(readChatNamespace());
@@ -10067,6 +10172,14 @@ function initialize() {
         getForumState: () => deepClone(readChatNamespace().forum),
         clearForumState,
         openForum: showForumPanel,
+        openDirectorSurface: openDualSurfacePanel,
+        previewNaturalLanguageAction: (text, options) => (
+            installDualSurface().previewNaturalLanguage(text, options)
+        ),
+        previewUiAction: (actionId) => (
+            installDualSurface().previewUiAction(actionId)
+        ),
+        getDirectorSurfaceView: () => installDualSurface().getView(),
         undoLast,
         getStatus: () => latestStatus,
         cancelCurrent: cancelCurrentOperations,
