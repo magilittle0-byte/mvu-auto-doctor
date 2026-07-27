@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-27T21:26:08+08:00",
+  "testedAt": "2026-07-27T23:32:16+08:00",
   "result": "pass",
-  "codeFingerprint": "4555a86839ae5a4a4c0d633acd615b16c63eae1daf3fa1dfba27968924c2fd01",
+  "codeFingerprint": "543b141df501b308558b7895f90bc9a3e297a4c6cffbc378d33c682fdac12947",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -32,7 +32,7 @@
       "passed": 142,
       "failed": 0,
       "todo": 0,
-      "durationMs": 139945
+      "durationMs": 140054
     },
     "phase6Barrier": {
       "apiVersion": 4,
@@ -80,7 +80,7 @@
       "realAndSimulationAgree": true,
       "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
-      "packageSha256": "e3373c4f8eba1d1ac7a51318dc5881f5e628f070387ba4f2358965f8bb20fd0b",
+      "packageSha256": "5b100637b4d5710bda78b6649615ed805c774536dd26c29463f5ab1c8882bf8f",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true
     },
@@ -210,9 +210,13 @@
       "touchTargetWidth": 351,
       "touchTargetHeight": 42,
       "minimumTouchTarget": 42,
+      "tuckedOrbTouchWidth": 44,
+      "tuckedOrbRightRealProbeHit": true,
+      "tuckedOrbLeftAutomatedProbeHit": true,
+      "tuckedOrbClipInset": 6,
       "floatingPanelLeft": 6,
       "floatingPanelRight": 384,
-      "floatingPanelTop": 109.09375,
+      "floatingPanelTop": 464.984375,
       "floatingPanelBottom": 780,
       "forumPanelLeft": 0,
       "forumPanelRight": 390,

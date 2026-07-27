@@ -1142,6 +1142,48 @@ try {
         orbBeforeOpen.documentClientWidth,
         `收起的悬浮球不得扩大移动端横向滚动范围：${JSON.stringify(orbBeforeOpen)}`,
     );
+    const tuckedOrbHitTargets = await page.evaluate(() => {
+        const storageKey = 'mvu-auto-doctor-orb-position-v1';
+        const orb = document.querySelector('#mvuad-floating-orb');
+        const probe = (side) => {
+            localStorage.setItem(storageKey, JSON.stringify({
+                side,
+                top: 260,
+                tucked: true,
+            }));
+            window.dispatchEvent(new Event('resize'));
+            const rect = orb.getBoundingClientRect();
+            const x = side === 'right' ? rect.right - 43 : rect.left + 43;
+            const y = rect.top + (rect.height / 2);
+            return {
+                side,
+                x,
+                y,
+                hit: orb.contains(document.elementFromPoint(x, y)),
+            };
+        };
+        const result = {
+            right: probe('right'),
+            left: probe('left'),
+        };
+        localStorage.setItem(storageKey, JSON.stringify({
+            side: 'right',
+            top: 260,
+            tucked: true,
+        }));
+        window.dispatchEvent(new Event('resize'));
+        return result;
+    });
+    assert.equal(
+        tuckedOrbHitTargets.right.hit,
+        true,
+        `右侧缩边悬浮球必须保留至少44px触控宽度：${JSON.stringify(tuckedOrbHitTargets)}`,
+    );
+    assert.equal(
+        tuckedOrbHitTargets.left.hit,
+        true,
+        `左侧缩边悬浮球必须保留至少44px触控宽度：${JSON.stringify(tuckedOrbHitTargets)}`,
+    );
     await page.evaluate(() => {
         /*
          * Reproduce SillyTavern's real root geometry. A transformed zero-height

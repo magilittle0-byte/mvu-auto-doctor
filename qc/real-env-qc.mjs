@@ -235,6 +235,10 @@ function loadAndValidateReport() {
         !mobile
         || mobile.touchTargetWidth < 42
         || mobile.touchTargetHeight < 42
+        || mobile.tuckedOrbTouchWidth < 42
+        || mobile.tuckedOrbRightRealProbeHit !== true
+        || mobile.tuckedOrbLeftAutomatedProbeHit !== true
+        || mobile.tuckedOrbClipInset > 8
         || mobile.floatingPanelTop < 0
         || mobile.floatingPanelBottom > report.environment.viewport.height
         || mobile.forumPanelTop < 0

@@ -67,8 +67,8 @@
 - 确定性候选包：
   `dist/05_MVU自动医生_v2.0.0-rc.1_离线候选.zip`
 - SHA-256：
-  `e3373c4f8eba1d1ac7a51318dc5881f5e628f070387ba4f2358965f8bb20fd0b`
-- 连续构建两次字节级SHA一致；62个白名单文件、1345873字节。
+  `5b100637b4d5710bda78b6649615ed805c774536dd26c29463f5ab1c8882bf8f`
+- 连续构建两次字节级SHA一致；62个白名单文件、1346427字节。
 - 新增：
   - `docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`
   - `docs/2.0/USER_GUIDE_2.0_RC.md`
