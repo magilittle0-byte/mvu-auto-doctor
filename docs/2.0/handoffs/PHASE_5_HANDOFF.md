@@ -10,7 +10,13 @@
 - 本地阶段4起点：`18abfc4005246a5d8b5c0f36851d0f9ab5e0d5f8`
 - 远端阶段4起点：`715de8e13f15ab3498557064c395df6bce6ba768`
 - 阶段4共同最终 tree：`8bfc0172346530a4f58a14c13a355803c16f3e9f`
-- 阶段5最终本地/远端 HEAD、tree、Draft PR：真实模型 QC 门解除并完成发布后回填；不得伪造
+- 阶段5实现提交：本地 `1804cc4aae28c89de4e8e3c4ed76d70e75be4a86`；
+  远端 `00256dc60719624cc54a46873f0b3630b7933dc2`；共同 tree
+  `fa7631e69f8949612ce9d3dca1efd0ae8ee4c83c`
+- 阶段5交接/发布提交：本文件自身承载最终发布回填；准确最终本地/远端 HEAD 与
+  tree 以分支和 Draft PR headRefOid 为准，避免在提交内容中伪造自引用 SHA
+- Draft PR：[`#25`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/25)，
+  base 为 `codex/v2.0-phase4-domain-transactions`
 - 用户已有未跟踪修改：10 个 `dist/*.zip`，均保留，未暂存、删除、覆盖、改名或重置
 
 ## 2. 本阶段范围
@@ -117,6 +123,14 @@ window.MvuAutoDoctorV2Host.rollbackDomainTransaction()             // 可选
 命令：npm.cmd run qc:ci
 退出码：0
 结论：阶段5运行时指纹、完整自动化、真实模型、论坛和移动端证据均与报告一致。
+
+命令：npm.cmd run qc:record
+退出码：0
+结论：为实现提交 1804cc4aae28 记录真实环境 QC 回执。
+
+命令：npm.cmd run qc:gate
+退出码：0
+结论：实现提交 1804cc4aae28 的真实环境 QC gate 通过。
 ```
 
 - 核心等价：物品、装备、技能、社会和任务从两入口得到完全相同的规范化命令、
@@ -207,9 +221,15 @@ PHASE_6_HANDOFF.md、独立远端堆叠 Draft PR 和远端 CI 终态成功。完
 
 ## 13. 发布状态
 
-- 本地提交：待本地提交后回填
-- 远端分支：`codex/v2.0-phase5-natural-language-ui`，尚未发布
-- Draft PR：尚未创建；base 必须为 `codex/v2.0-phase4-domain-transactions`
+- 本地提交：实现 `1804cc4aae28c89de4e8e3c4ed76d70e75be4a86`；
+  本文件发布回填提交以最终 `git log` 为准
+- 远端分支：`codex/v2.0-phase5-natural-language-ui`；实现提交
+  `00256dc60719624cc54a46873f0b3630b7933dc2` 以远端阶段4 HEAD
+  `715de8e13f15ab3498557064c395df6bce6ba768` 为唯一父提交；20/20 changed blob
+  与根 tree `fa7631e69f8949612ce9d3dca1efd0ae8ee4c83c` 均和本地实现提交一致
+- Draft PR：[`#25`](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/25)，
+  head 为阶段5分支，base 为 `codex/v2.0-phase4-domain-transactions`
 - 是否合并 main：否
-- 外部阻塞：无；真实模型、浏览器和 QC 门均已通过
+- 外部阻塞：无；本机 `gh` 凭据无效，按授权使用 GitHub Git 对象接口发布，
+  未把本地分叉提交当成远端堆叠父提交
 - 阶段6任务：未创建；只有阶段5真正完成后才允许自动接力
