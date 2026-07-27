@@ -144,6 +144,7 @@ const ACTIVE_UNIT_CASE_IDS = new Set([
   'RR-TASK-WATCHDOG',
   'RR-DATABASE-LENGTH-SQL-CONCURRENCY',
   'RR-UI-ANDROID-EXPAND',
+  'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
 ]);
 
 test('2.0 replay corpus conforms to the checked-in JSON Schema', async () => {
@@ -195,7 +196,12 @@ test('2.0 replay corpus covers every stage-0 historical fault exactly once', asy
         'RR-TASK-WATCHDOG',
         'RR-DATABASE-LENGTH-SQL-CONCURRENCY',
       ]);
-      const expectedPhase = phase6Ids.has(entry.id)
+      const phase7Ids = new Set([
+        'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
+      ]);
+      const expectedPhase = phase7Ids.has(entry.id)
+        ? 'phase-7'
+        : phase6Ids.has(entry.id)
         ? 'phase-6'
         : phase5Ids.has(entry.id)
         ? 'phase-5'
@@ -327,4 +333,15 @@ test('phase 6 activates repair barrier, database and watchdog behavior replays',
   );
   assert.ok(phase6Cases.every((entry) => entry.automation.status === 'unit-active'));
 });
-test.todo('phase 7 activates the real-SillyTavern release gate replay');
+test('phase 7 activates the real-SillyTavern release gate replay', async () => {
+  const corpus = await readJson(CORPUS_PATH);
+  const phase7Cases = corpus.cases.filter((entry) => (
+    entry.automation.activateAt === 'phase-7'
+  ));
+
+  assert.deepEqual(
+    phase7Cases.map((entry) => entry.id),
+    ['RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION'],
+  );
+  assert.ok(phase7Cases.every((entry) => entry.automation.status === 'unit-active'));
+});

@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "version": "2.0.0-rc.1",
+  "testedAt": "2026-07-27T19:09:47+08:00",
+  "result": "pass",
+  "codeFingerprint": "fb2d0388afb487840cfd0776685049665779b7da436f9274e034dcd01b840464",
+  "environment": {
+    "sillyTavernVersion": "1.18.0",
+    "sillyTavernCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browser": "Codex in-app Browser",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "mainModel": {
+      "provider": "OpenCode Zen",
+      "model": "gpt-5.4-mini",
+      "credentialMode": "Windows DPAPI current-user broker to memory-only proxy",
+      "proxyStopped": true
+    },
+    "modelProxy": {
+      "provider": "DeepSeek",
+      "model": "deepseek-v4-flash",
+      "credentialMode": "Windows DPAPI current-user broker to memory-only proxy",
+      "proxyStopped": true
+    }
+  },
+  "checks": {
+    "testSuite": {
+      "total": 141,
+      "passed": 141,
+      "failed": 0,
+      "todo": 0,
+      "durationMs": 140804
+    },
+    "phase6Barrier": {
+      "apiVersion": 4,
+      "deployedRuntime": true,
+      "persistentCapturedBeforeWork": true,
+      "stateSequenceVerified": true,
+      "stateSequence": [
+        "captured",
+        "repairing",
+        "state-committing",
+        "settled"
+      ],
+      "exactWriteReadbackBeforeDownstream": true,
+      "finalFingerprintVerified": true,
+      "downstreamSettledOnly": true,
+      "failedOrStaleDownstreamWrites": 0,
+      "lateResultWrites": 0,
+      "conservativeRecoveryVerified": true,
+      "persistentIdempotencyVerified": true,
+      "softCancelVerified": true,
+      "hardTimeoutTerminalVerified": true,
+      "databaseParameterized": true,
+      "databaseFieldLimit": 600,
+      "databaseLengthBoundaryVerified": true,
+      "databaseRevisionConflictRejected": true,
+      "replayCases": 17,
+      "replayPassed": 17,
+      "releaseGateTodo": 0,
+      "releaseGateDefaultCiFailure": true
+    },
+    "phase7Release": {
+      "candidate": "2.0.0-rc.1",
+      "fixtureCases": 17,
+      "fixturePasses": 17,
+      "fixtureTodos": 0,
+      "legacyReadable": true,
+      "legacyRollbackVerified": true,
+      "capacityFallbackVerified": true,
+      "sameMainModelAblation": true,
+      "candidateGuardLogicUnchanged": true,
+      "longSessionTurns": 33,
+      "realAndSimulationAgree": true,
+      "releaseStatus": "ready-for-maintainer-review",
+      "automaticMainMerge": false,
+      "packageSha256": "fd847d9dc9314e72b17f4efe0cf9a5ad659ec161a6b558959e0867bb0bba7c9a",
+      "packageAllowlistVerified": true,
+      "deterministicPackageVerified": true
+    },
+    "migration": {
+      "recordCount": 256,
+      "serializedBytes": 136502,
+      "durationMs": 20.599,
+      "unknownFieldsPreserved": true,
+      "sourceChatUnchanged": true,
+      "fallbackHasNoPartialSidecar": true,
+      "rollbackDigestVerified": true
+    },
+    "hardening": {
+      "capacityBudgetPassed": true,
+      "dependencyAuditVulnerabilities": 0,
+      "parameterizedDatabase": true,
+      "restartRecoveryVerified": true,
+      "lateWrites": 0,
+      "staleDownstreamWrites": 0,
+      "watchdogTerminalVerified": true
+    },
+    "deepSeek": {
+      "model": "deepseek-v4-flash",
+      "calls": 1,
+      "httpStatuses": [
+        200
+      ],
+      "inputBytes": [
+        21851
+      ],
+      "durationMs": [
+        7312
+      ],
+      "failedRestrictedProxyAttemptBlockedWithoutWrite": true,
+      "credentialPersisted": false,
+      "proxyStopped": true
+    },
+    "forum": {
+      "generatedPages": 5,
+      "topicCount": 21,
+      "commentCount": 53,
+      "openWithPointerOrTouch": true,
+      "expand": true,
+      "collapse": true,
+      "ariaStateSynchronized": true,
+      "singleWholeThreadControl": true,
+      "controlsPerPost": 1,
+      "legacyBodyControlCount": 0,
+      "legacyReplyControlCount": 0,
+      "opBodyMatchesSource": true,
+      "opFinalTextVisible": true,
+      "opBodyClipped": false,
+      "repliesExpandedTogether": true,
+      "collapsedRepliesHidden": true,
+      "visibleReplyCount": 2,
+      "totalReplyCount": 2,
+      "persistedAfterReload": true,
+      "deepSeekRefreshHttpStatus": 200
+    },
+    "scenarioPlan": {
+      "baselineCreated": true,
+      "baselineImmutable": true,
+      "baselineEvidenceCount": 3,
+      "baselineSourceRefVerified": true,
+      "playerActionAmendmentApplied": true,
+      "revisionAfterAmendment": 1,
+      "amendmentCauseType": "player_action",
+      "sourceThreadCount": 1,
+      "triggerVerified": true,
+      "mechanismVerified": true,
+      "evidenceCount": 4,
+      "changedFieldCount": 4,
+      "exactBeforeAfterVerified": true,
+      "preservedAchievementCount": 5,
+      "amendmentSourceRefVerified": true,
+      "uiTraceVisible": true,
+      "summaryTouchTargetHeight": 42,
+      "sameTurnWorldRewriteRejected": true,
+      "matureWorldChainAccepted": true,
+      "missingPreservesRejected": true,
+      "apexRemovalAllowed": true,
+      "terminalReopenRejected": true,
+      "promptInjectionVerified": true
+    },
+    "socialGuard": {
+      "sameMainModelAblation": true,
+      "mainModel": "gpt-5.4-mini",
+      "pairedSamples": 2,
+      "phase7SyntheticPairCalls": 3,
+      "phase7SyntheticPairStatuses": [
+        200,
+        200,
+        200
+      ],
+      "phase7BoundedRetryUsed": true,
+      "phase7StoredChatMutations": 0,
+      "deepSeekExcludedAsMainProof": true,
+      "contractLandedInFinalPrompt": true,
+      "unselectedOptionsRemovedFromModelHistory": true,
+      "storedChatUnchanged": true,
+      "systemFormatInstructionsPreserved": true,
+      "actualUserChoicePreserved": true,
+      "ordinaryCareCases": 4,
+      "unsupportedMotiveAttributionReduced": true,
+      "npcSuspicionStillAllowed": true,
+      "relationshipRollbackVerified": true,
+      "unrelatedMvuPreserved": true,
+      "auditSourceTraceVisible": true,
+      "explicitDarkCaseAllowed": true,
+      "deepSeekToneDidNotRollbackValidDarkState": true,
+      "reviewerDidNotRewriteNarrative": true,
+      "noRiskTurnSkippedSemanticCall": true,
+      "usageAndCostRecorded": true,
+      "fixedHostileReplayPassed": true
+    },
+    "mobile": {
+      "screenshotWidth": 390,
+      "screenshotHeight": 844,
+      "touchTargetWidth": 351,
+      "touchTargetHeight": 42,
+      "minimumTouchTarget": 42,
+      "floatingPanelLeft": 6,
+      "floatingPanelRight": 384,
+      "floatingPanelTop": 109.09375,
+      "floatingPanelBottom": 780,
+      "forumPanelLeft": 0,
+      "forumPanelRight": 390,
+      "forumPanelTop": 0,
+      "forumPanelBottom": 844,
+      "forumShellClientWidth": 390,
+      "forumShellScrollWidth": 390
+    },
+    "companionScripts": {
+      "databaseCoexistence": true,
+      "rerollHelperAnalyzed": true,
+      "rerollSourceSha256": "ffc93ebefd15c695a011b528433476e779164df3c863766aab849fac58933e2f",
+      "rerollLifecycleCompatible": true,
+      "rerollEvent": "chat_id_changed",
+      "rerollStorageNamespaceIsolated": true,
+      "rerollControlNamespaceIsolated": true,
+      "rerollDirectMessageMutationDoesNotBypassDoctorBarrier": true,
+      "otherScriptsPreserved": true,
+      "loadedExtensionScriptCount": 12,
+      "runtimeConsoleErrorCount": 0
+    }
+  },
+  "privacy": {
+    "apiKeyIncluded": false,
+    "privateChatIncluded": false,
+    "userDataIncluded": false,
+    "rawModelPayloadIncluded": false
+  }
+}

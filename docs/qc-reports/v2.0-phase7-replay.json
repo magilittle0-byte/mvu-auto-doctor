@@ -1,0 +1,236 @@
+{
+  "schemaVersion": "2.0",
+  "phase": 7,
+  "generatedAt": "2026-07-27T11:02:53.601Z",
+  "environment": "node-unit-integration-browser-release",
+  "totals": {
+    "cases": 17,
+    "pass": 17,
+    "fail": 0,
+    "coveredByPhaseSuite": 0
+  },
+  "cases": [
+    {
+      "id": "RR-AGENCY-NO-MOVE",
+      "category": "player_agency",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "real-replay",
+        "real-sillytavern"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-BULLSHIT-REASONABLE",
+      "category": "adjudication",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-BULLSHIT-ADVANTAGE",
+      "category": "adjudication",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-BULLSHIT-REWRITE",
+      "category": "adjudication",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-FACT-RANDOM-CODE",
+      "category": "fact_knowledge",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay",
+        "real-sillytavern"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-FINGERPRINT-PREVIOUS-REPLY",
+      "category": "fingerprint",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay",
+        "real-sillytavern"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-SOCIAL-ORDINARY-KINDNESS",
+      "category": "social",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-SOCIAL-COERCION-VOLUNTARY",
+      "category": "social",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-EQUIPMENT-SLOTS",
+      "category": "equipment",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-ITEM-CONSUMABLE-EFFECT",
+      "category": "item",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-SKILL-TEXT-COST",
+      "category": "skill",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-REROLL-IDEMPOTENCY",
+      "category": "reroll_transaction",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay",
+        "real-sillytavern"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-REPAIR-DB-BARRIER",
+      "category": "repair_barrier",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-TASK-WATCHDOG",
+      "category": "watchdog",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-DATABASE-LENGTH-SQL-CONCURRENCY",
+      "category": "database",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "unit",
+        "integration",
+        "real-replay"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-UI-ANDROID-EXPAND",
+      "category": "ui",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "integration",
+        "real-replay",
+        "real-sillytavern"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION",
+      "category": "release_gate",
+      "automation": "unit-active",
+      "acceptanceLayers": [
+        "real-sillytavern",
+        "release"
+      ],
+      "status": "pass"
+    }
+  ],
+  "candidate": "2.0.0-rc.1",
+  "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-release-core.test.mjs tests\\v2-release-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
+  "testFiles": [
+    "tests\\v2-director-core.test.mjs",
+    "tests\\v2-director-replays.test.mjs",
+    "tests\\v2-domain-core.test.mjs",
+    "tests\\v2-domain-replays.test.mjs",
+    "tests\\v2-domain-transaction-core.test.mjs",
+    "tests\\v2-domain-transaction-replays.test.mjs",
+    "tests\\v2-release-core.test.mjs",
+    "tests\\v2-release-replays.test.mjs",
+    "tests\\v2-replay-fixtures.test.mjs",
+    "tests\\v2-runtime-core.test.mjs",
+    "tests\\v2-runtime-replays.test.mjs",
+    "tests\\v2-surface-browser.test.mjs",
+    "tests\\v2-surface-core.test.mjs",
+    "tests\\v2-transaction-core.test.mjs",
+    "tests\\v2-transaction-replays.test.mjs"
+  ],
+  "phase7OwnedCases": [
+    "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION"
+  ],
+  "releaseGate": {
+    "id": "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION",
+    "status": "pass",
+    "realEnvironmentEvidenceWins": true,
+    "automaticMainMerge": false
+  },
+  "privacy": {
+    "syntheticFixturesOnly": true,
+    "containsCredentials": false,
+    "containsPrivateNarrative": false,
+    "containsRawPayload": false
+  }
+}

@@ -742,7 +742,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.9.0');
+    assert.equal(continuity.version, '2.0.0-rc.1');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -1744,7 +1744,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.9.0');
+    assert.equal(lifecycle.version, '2.0.0-rc.1');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

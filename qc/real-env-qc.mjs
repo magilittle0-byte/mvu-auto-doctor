@@ -91,9 +91,10 @@ function loadAndValidateReport() {
     const tests = report.checks?.testSuite;
     if (
         !tests
-        || tests.total < 1
-        || tests.passed + tests.todo !== tests.total
+        || tests.total < 140
+        || tests.passed !== tests.total
         || tests.failed !== 0
+        || tests.todo !== 0
     ) {
         fail('automated suite evidence is incomplete');
     }
@@ -119,10 +120,31 @@ function loadAndValidateReport() {
         || phase6.databaseLengthBoundaryVerified !== true
         || phase6.databaseRevisionConflictRejected !== true
         || phase6.replayCases !== 17
-        || phase6.replayPassed !== 16
-        || phase6.releaseGateTodo !== 1
-        || phase6.releaseGateDefaultCiFailure !== false
+        || phase6.replayPassed !== 17
+        || phase6.releaseGateTodo !== 0
+        || phase6.releaseGateDefaultCiFailure !== true
     ) fail('phase 6 stable-barrier evidence is incomplete');
+
+    const phase7 = report.checks?.phase7Release;
+    if (
+        !phase7
+        || phase7.candidate !== '2.0.0-rc.1'
+        || phase7.fixtureCases !== 17
+        || phase7.fixturePasses !== 17
+        || phase7.fixtureTodos !== 0
+        || phase7.legacyReadable !== true
+        || phase7.legacyRollbackVerified !== true
+        || phase7.capacityFallbackVerified !== true
+        || phase7.sameMainModelAblation !== true
+        || phase7.candidateGuardLogicUnchanged !== true
+        || phase7.longSessionTurns < 24
+        || phase7.realAndSimulationAgree !== true
+        || phase7.releaseStatus !== 'ready-for-maintainer-review'
+        || phase7.automaticMainMerge !== false
+        || !/^[a-f0-9]{64}$/u.test(String(phase7.packageSha256 || ''))
+        || phase7.packageAllowlistVerified !== true
+        || phase7.deterministicPackageVerified !== true
+    ) fail('phase 7 release-candidate evidence is incomplete');
 
     const deepSeek = report.checks?.deepSeek;
     if (
@@ -216,6 +238,21 @@ function loadAndValidateReport() {
         || mobile.forumPanelBottom > report.environment.viewport.height
         || mobile.forumShellScrollWidth > mobile.forumShellClientWidth
     ) fail('mobile touch-target or overflow evidence failed');
+
+    const companion = report.checks?.companionScripts;
+    if (
+        !companion
+        || companion.databaseCoexistence !== true
+        || companion.rerollHelperAnalyzed !== true
+        || companion.rerollLifecycleCompatible !== true
+        || companion.rerollEvent !== 'chat_id_changed'
+        || companion.rerollStorageNamespaceIsolated !== true
+        || companion.rerollControlNamespaceIsolated !== true
+        || companion.otherScriptsPreserved !== true
+        || companion.loadedExtensionScriptCount < 12
+        || companion.runtimeConsoleErrorCount !== 0
+        || !/^[a-f0-9]{64}$/u.test(String(companion.rerollSourceSha256 || ''))
+    ) fail('companion-script coexistence evidence is incomplete');
 
     const privacy = report.privacy;
     if (

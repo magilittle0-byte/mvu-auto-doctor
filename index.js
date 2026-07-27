@@ -85,7 +85,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.9.0';
+const VERSION = '2.0.0-rc.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 8;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
