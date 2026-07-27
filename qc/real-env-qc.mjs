@@ -135,6 +135,9 @@ function loadAndValidateReport() {
         || phase7.legacyReadable !== true
         || phase7.legacyRollbackVerified !== true
         || phase7.capacityFallbackVerified !== true
+        || phase7.realLegacyMigrationVerified !== true
+        || phase7.diagnosticRegistrationReceiptVerified !== true
+        || phase7.diagnosticTargetIndexReceiptVerified !== true
         || phase7.sameMainModelAblation !== true
         || phase7.candidateGuardLogicUnchanged !== true
         || phase7.longSessionTurns < 24

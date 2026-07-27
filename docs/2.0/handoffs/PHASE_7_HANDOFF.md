@@ -27,11 +27,19 @@
 - `v2/release/migration.mjs` 提供只读 `prepareLegacyUpgradeDrill()`：
   - 不重写1.x源聊天；
   - 保留未知作者字段；
-  - 默认上限256条领域记录、1 MiB序列化输入；
+  - 默认上限256条领域记录、8 MiB序列化输入；
   - 歧义、隔离或超限时进入 `fallback`，不生成部分权威 sidecar。
 - `rollbackLegacyUpgrade()` 验证只读快照 SHA-256 后移除V2权威，
   恢复1.x可读视图；摘要不匹配时阻断覆盖。
 - 256条容量演练：136502字节、20.599ms，旧聊天可读、摘要回滚通过。
+- 用户授权的更新前最终真实记录只读演练：
+  - 57条消息、44个swipe、29个唯一医生来源ID；
+  - 迁移投影3321711字节，默认8 MiB有界窗口内为 `ready`；
+  - 迁移156.712ms、摘要回滚148.232ms，恢复后仍为57条消息；
+  - 私人正文、提示词、密钥、原始payload、文件名和绝对路径均未写入仓库。
+- 该记录的1.9.0脱敏诊断还暴露出两个收据可读性缺口：注入已注册但在最终提示词
+  事件前显示为false，以及目标型模型调用楼层均为-1。候选已分别改为即时记录注册
+  状态、传递脱敏楼层索引；两项均由浏览器回归覆盖，不改变硬边界或正文。
 
 ### 发布硬化与候选门
 
@@ -56,10 +64,11 @@
 - 确定性候选包：
   `dist/05_MVU自动医生_v2.0.0-rc.1_离线候选.zip`
 - SHA-256：
-  `fd847d9dc9314e72b17f4efe0cf9a5ad659ec161a6b558959e0867bb0bba7c9a`
-- 连续构建两次字节级SHA一致；61个白名单文件、1334607字节。
+  `5c9db5f360c33a8954c0532eb33abe9864a095db6d940ce2a0c48f606d981345`
+- 连续构建两次字节级SHA一致；62个白名单文件、1343137字节。
 - 新增：
   - `docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`
+  - `docs/2.0/USER_GUIDE_2.0_RC.md`
   - `docs/2.0/RELEASE_CHECKLIST.md`
   - `docs/2.0/2.1_OPEN_ITEMS.md`
   - `docs/qc-reports/v2.0.0-rc.1.json`
@@ -68,7 +77,7 @@
 
 ```text
 npm.cmd test
-141 total / 141 pass / 0 fail / 0 todo
+142 total / 142 pass / 0 fail / 0 todo
 
 npm.cmd run qc:phase7:replay
 17 cases / 17 pass / 0 fail / 0 todo
@@ -86,7 +95,7 @@ pass
 候选运行时源码指纹：
 
 ```text
-fb2d0388afb487840cfd0776685049665779b7da436f9274e034dcd01b840464
+4555a86839ae5a4a4c0d633acd615b16c63eae1daf3fa1dfba27968924c2fd01
 ```
 
 发布门实算结果：

@@ -2,9 +2,13 @@
 
 这是一个独立的 SillyTavern / TauriTavern 扩展。它包含通用 MVU 审计修复、零模型调用的正文/装备硬合同检查、人物动机与关系证据守卫、分类活世界与事件连续性账本，以及不占正文的内置世界论坛，不会修改角色卡、SP·数据库、预设、缝合怪、Zsd 或 Story Oracle 文件。
 
-2.0.0-rc.1 候选已在阶段5“导演台”和阶段6持久正文稳定屏障之上加入1.x惰性升级/回滚演练，以及真实QC优先于模拟的发布门。设置页或悬浮工具页的自然语言/可见控件双入口仍调用同一 `DomainCommand → Turn Boundary → validated plan → Transaction proposal` 链；危险动作必须对当前精确目标确认，UI没有直接写状态的旁路。确认后的 `DomainTransactionPlan` 会先进入持久、可取消、可恢复的 `captured → repairing → state-committing → settled` 宿主屏障，精确写入和回读完成后才放行数据库、记忆、活世界和论坛。`failed/stale` 下游直接放弃目标，不回退旧正文。通用扩展不会猜角色卡的槽位、资源、记录路径或检定规则；宿主应提供 `window.MvuAutoDoctorV2Host.captureSession()` 和复用阶段2/4内核的 `executePlannedDomainTransaction(plan, durableRuntime)`，其中 `durableRuntime` 提供持久幂等、恢复和取消信号；缺接口时导演台以可见 `unresolved` 只读模式展示缺口。迁移与回滚步骤见 [`docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`](docs/2.0/MIGRATION_ROLLBACK_GUIDE.md)，维护者发布门见 [`docs/2.0/RELEASE_CHECKLIST.md`](docs/2.0/RELEASE_CHECKLIST.md)。
+2.0.0-rc.1 候选已在阶段5“导演台”和阶段6持久正文稳定屏障之上加入1.x惰性升级/回滚演练，以及真实QC优先于模拟的发布门。设置页或悬浮工具页的自然语言/可见控件双入口仍调用同一 `DomainCommand → Turn Boundary → validated plan → Transaction proposal` 链；危险动作必须对当前精确目标确认，UI没有直接写状态的旁路。确认后的 `DomainTransactionPlan` 会先进入持久、可取消、可恢复的 `captured → repairing → state-committing → settled` 宿主屏障，精确写入和回读完成后才放行数据库、记忆、活世界和论坛。`failed/stale` 下游直接放弃目标，不回退旧正文。通用扩展不会猜角色卡的槽位、资源、记录路径或检定规则；宿主应提供 `window.MvuAutoDoctorV2Host.captureSession()` 和复用阶段2/4内核的 `executePlannedDomainTransaction(plan, durableRuntime)`，其中 `durableRuntime` 提供持久幂等、恢复和取消信号；缺接口时导演台以可见 `unresolved` 只读模式展示缺口。RC安装、日常使用和伴生脚本共存测试见 [`docs/2.0/USER_GUIDE_2.0_RC.md`](docs/2.0/USER_GUIDE_2.0_RC.md)，迁移与回滚步骤见 [`docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`](docs/2.0/MIGRATION_ROLLBACK_GUIDE.md)，维护者发布门见 [`docs/2.0/RELEASE_CHECKLIST.md`](docs/2.0/RELEASE_CHECKLIST.md)。
 
 ## 安装
+
+> 当前 `2.0.0-rc.1` 仍位于 Draft PR。测试候选时请按
+> [`2.0 RC 使用说明`](docs/2.0/USER_GUIDE_2.0_RC.md) 下载候选分支的离线 ZIP；
+> 下面的默认仓库地址会安装 `main` 上的稳定版。
 
 在 TauriTavern 的扩展安装页面选择“从 Git 仓库安装”，粘贴：
 

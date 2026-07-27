@@ -30,6 +30,7 @@ const rootFiles = [
     'social-core.mjs',
     'style.css',
     'docs/2.0/MIGRATION_ROLLBACK_GUIDE.md',
+    'docs/2.0/USER_GUIDE_2.0_RC.md',
     'docs/2.0/RELEASE_CHECKLIST.md',
     'docs/2.0/2.1_OPEN_ITEMS.md',
 ];

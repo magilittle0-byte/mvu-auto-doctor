@@ -794,6 +794,7 @@ try {
     assert.match(continuity.calls.forumSystem, /不可信引用数据/u);
     const diagnosticsUi = await page.evaluate(async () => {
         const t = window.__TEST__;
+        const registrationBeforeInspection = window.MvuAutoDoctorAPI.getInjectionInspection();
         const injection = Object.values(t.calls.extensionPrompts)
             .find((entry) => entry.name === 'mvu-auto-doctor-continuity');
         const assembledChat = Object.values(t.calls.extensionPrompts)
@@ -814,6 +815,7 @@ try {
                 t.context.chatMetadata.mvu_auto_doctor?.modelCallStats || {},
             ),
             hostPrompt: structuredClone(injection || null),
+            registrationBeforeInspection,
             injection: window.MvuAutoDoctorAPI.getInjectionInspection(),
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
@@ -837,6 +839,16 @@ try {
         diagnosticsUi.hostPrompt.role,
         0,
         'SillyTavern setExtensionPrompt 必须使用数值 SYSTEM=0；字符串system会变成NaN并被最终提示词过滤',
+    );
+    assert.equal(
+        diagnosticsUi.registrationBeforeInspection.registered,
+        true,
+        '诊断必须区分已注册但尚未观察最终提示词的注入',
+    );
+    assert.equal(
+        diagnosticsUi.registrationBeforeInspection.socialRegistered,
+        true,
+        '人物动机合同注册状态不能在提示词事件前误报为 false',
     );
     assert.equal(diagnosticsUi.modelCalls.currentRun.total, 3, '本次生成统计应与聊天累计分开保存');
     assert.deepEqual(diagnosticsUi.modelCalls.currentRun.byTask, {
@@ -3458,6 +3470,14 @@ try {
     assert.equal(missingCloseDiagnosticResult.calls, 1);
     const recoveredDiagnostic = missingCloseDiagnosticResult.diagnostics.find(
         (entry) => entry.status === 'recovered' && entry.rootType === 'object',
+    );
+    const transportDiagnostic = missingCloseDiagnosticResult.diagnostics.find(
+        (entry) => entry.phase === 'transport' && entry.task === '变量诊断',
+    );
+    assert.equal(
+        transportDiagnostic?.targetIndex,
+        2,
+        '目标型模型调用的脱敏诊断必须保留楼层索引',
     );
     assert.ok(recoveredDiagnostic, 'local structured-output recovery must create a diagnostic entry');
     assert.deepEqual(

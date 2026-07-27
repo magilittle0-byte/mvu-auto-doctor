@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    DEFAULT_MIGRATION_LIMITS,
     evaluateReleaseCandidate,
     evaluateReleaseHardening,
     prepareLegacyUpgradeDrill,
@@ -88,6 +89,53 @@ test('oversized 1.x chat falls back to readable legacy state without partial mig
     assert.equal(drill.v2Sidecar, undefined);
 });
 
+test('real-shaped 57-message 1.x chat fits the bounded production migration window', () => {
+    const chat = {
+        header: {
+            chat_metadata: {
+                mvu_auto_doctor: {
+                    version: 5,
+                    unknownAuthorLedger: { kept: true },
+                },
+                variables: {
+                    stat_data: {
+                        角色: {
+                            装备: {},
+                            背包: {},
+                            当前副本任务: {},
+                        },
+                    },
+                },
+            },
+        },
+        messages: Array.from({ length: 57 }, (_, index) => ({
+            is_user: index % 2 === 0,
+            mes: '合成脱敏正文'.repeat(4_800),
+            extra: {
+                mvu_auto_doctor_source_id: `synthetic-${index}`,
+                unknownScriptField: { kept: true },
+            },
+            ...(index % 2 === 0
+                ? {}
+                : {
+                    swipes: ['合成脱敏正文'],
+                    swipe_info: [{ extra: {} }],
+                }),
+        })),
+    };
+    const before = structuredClone(chat);
+    const drill = prepareLegacyUpgradeDrill({ chat, entries: [] });
+    assert.equal(DEFAULT_MIGRATION_LIMITS.maxChatBytes, 8 * 1024 * 1024);
+    assert.ok(drill.serializedBytes > 3 * 1024 * 1024);
+    assert.equal(drill.ok, true);
+    assert.equal(drill.status, 'ready');
+    assert.equal(drill.v2Sidecar?.authority, 'v2-sidecar');
+    assert.deepEqual(chat, before);
+    const rolledBack = rollbackLegacyUpgrade(drill);
+    assert.equal(rolledBack.ok, true);
+    assert.deepEqual(rolledBack.chat, before);
+});
+
 test('hardening gate enforces capacity, privacy, security and recovery budgets', () => {
     const result = evaluateReleaseHardening({
         performance: {
@@ -124,6 +172,7 @@ test('hardening gate enforces capacity, privacy, security and recovery budgets',
     });
     assert.equal(result.ok, true);
     assert.equal(result.status, 'pass');
+    assert.equal(result.limits.serializedBytes, 8 * 1024 * 1024);
 });
 
 test('hardening gate blocks a companion-script lifecycle collision', () => {

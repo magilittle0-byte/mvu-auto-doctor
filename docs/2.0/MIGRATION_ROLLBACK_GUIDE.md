@@ -20,8 +20,10 @@
 4. 只对 mapped 记录启用 V2 sidecar；不得把 unresolved 记录手工改成已结算。
 5. 刷新并重载同一聊天，确认 barrier、幂等、恢复和最终指纹仍可读取。
 
-自动演练入口是 `prepareLegacyUpgradeDrill()`。默认上限为 256 条领域记录和 1 MiB
-合成聊天投影；超过上限会进入 `fallback`，保留旧聊天，不产生部分 V2 sidecar。
+自动演练入口是 `prepareLegacyUpgradeDrill()`。默认上限为 256 条领域记录和 8 MiB
+聊天投影；该边界已用用户授权的57消息、3,321,711字节更新前真实记录做只读演练，
+迁移和摘要回滚均通过。超过上限仍会进入 `fallback`，保留旧聊天，不产生部分 V2
+sidecar。
 
 ## 回滚
 

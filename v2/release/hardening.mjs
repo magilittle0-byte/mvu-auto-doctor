@@ -1,6 +1,6 @@
 const DEFAULT_LIMITS = Object.freeze({
     migrationDurationMs: 2_000,
-    serializedBytes: 1024 * 1024,
+    serializedBytes: 8 * 1024 * 1024,
     recordCount: 256,
     longSessionTurns: 24,
 });

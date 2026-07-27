@@ -7,7 +7,10 @@ import { hashCanonical } from '../transaction/index.mjs';
 
 export const DEFAULT_MIGRATION_LIMITS = Object.freeze({
     maxEntries: 256,
-    maxChatBytes: 1024 * 1024,
+    // A user-authorized 57-message 1.x production record occupied 3.17 MiB
+    // after JSON projection. Keep a bounded margin without turning migration
+    // into an unbounded whole-history copy.
+    maxChatBytes: 8 * 1024 * 1024,
 });
 
 function issue(code, path, message, details = undefined) {

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-27T19:09:47+08:00",
+  "testedAt": "2026-07-27T21:26:08+08:00",
   "result": "pass",
-  "codeFingerprint": "fb2d0388afb487840cfd0776685049665779b7da436f9274e034dcd01b840464",
+  "codeFingerprint": "4555a86839ae5a4a4c0d633acd615b16c63eae1daf3fa1dfba27968924c2fd01",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -28,11 +28,11 @@
   },
   "checks": {
     "testSuite": {
-      "total": 141,
-      "passed": 141,
+      "total": 142,
+      "passed": 142,
       "failed": 0,
       "todo": 0,
-      "durationMs": 140804
+      "durationMs": 139945
     },
     "phase6Barrier": {
       "apiVersion": 4,
@@ -71,13 +71,16 @@
       "legacyReadable": true,
       "legacyRollbackVerified": true,
       "capacityFallbackVerified": true,
+      "realLegacyMigrationVerified": true,
+      "diagnosticRegistrationReceiptVerified": true,
+      "diagnosticTargetIndexReceiptVerified": true,
       "sameMainModelAblation": true,
       "candidateGuardLogicUnchanged": true,
       "longSessionTurns": 33,
       "realAndSimulationAgree": true,
       "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
-      "packageSha256": "fd847d9dc9314e72b17f4efe0cf9a5ad659ec161a6b558959e0867bb0bba7c9a",
+      "packageSha256": "5c9db5f360c33a8954c0532eb33abe9864a095db6d940ce2a0c48f606d981345",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true
     },
@@ -85,6 +88,13 @@
       "recordCount": 256,
       "serializedBytes": 136502,
       "durationMs": 20.599,
+      "defaultLimitBytes": 8388608,
+      "realRecordMessageCount": 57,
+      "realRecordSwipeCount": 44,
+      "realRecordSerializedBytes": 3321711,
+      "realRecordMigrationMs": 156.712,
+      "realRecordRollbackMs": 148.232,
+      "realRecordReady": true,
       "unknownFieldsPreserved": true,
       "sourceChatUnchanged": true,
       "fallbackHasNoPartialSidecar": true,
@@ -92,6 +102,7 @@
     },
     "hardening": {
       "capacityBudgetPassed": true,
+      "realLegacyCapacityVerified": true,
       "dependencyAuditVulnerabilities": 0,
       "parameterizedDatabase": true,
       "restartRecoveryVerified": true,
