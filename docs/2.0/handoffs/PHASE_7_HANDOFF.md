@@ -10,6 +10,11 @@
 - 远端唯一父提交：阶段6最终远端 HEAD
   `6b97fbd4670a1028c22fe9e3b94c9eda61b5a587`
 - 远端堆叠 base：`codex/v2.0-phase6-stable-barrier-replay`
+- Draft PR：[#27](https://github.com/magilittle0-byte/mvu-auto-doctor/pull/27)
+- 阶段7实现提交：
+  - 本地：`374e317bc94809108dfc6a748f8984bbba903c51`
+  - 远端：`c7c8926bab252b2b5d5186bd2e55e47cd6bc65b9`
+  - 共同 tree：`c8ab0ab212831fa30e8c18fa773d76ab949ce6ff`
 - 未推送或合并 `main`；候选只能由维护者审阅 Draft PR 后决定。
 - 本交接不在自身内容中伪造自引用 commit/tree；最终值以分支和 Draft PR
   `headRefOid` 为准。
@@ -157,3 +162,17 @@ automaticMainMerge=false
 - 维护者决定的正式2.0.0发布与签名策略。
 
 这些项目不改变 `2.0.0-rc.1` 的完成门，也不授权自动合并 `main`。
+
+## 8. 远端发布证据
+
+- 32/32个阶段7远端 blob SHA 与本地实现提交一致。
+- 远端实现 tree 与本地实现 tree 一致：
+  `c8ab0ab212831fa30e8c18fa773d76ab949ce6ff`。
+- 远端实现提交的唯一父提交为
+  `6b97fbd4670a1028c22fe9e3b94c9eda61b5a587`。
+- Draft PR base SHA 由GitHub返回为同一个阶段6远端最终提交。
+- 远端实现检查：
+  - CI run #41：success
+  - Real environment QC policy run #47：success
+- 本交接由后续文档提交承载；最终远端 HEAD 和该文档提交的最新检查以
+  Draft PR #27 为准，不在文件中伪造自身SHA。
