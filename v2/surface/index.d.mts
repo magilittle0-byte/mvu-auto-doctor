@@ -157,6 +157,23 @@ export function createDualSurfaceViewModel(
     },
 ): DualSurfaceViewModel;
 export function diagnosticContainsSensitiveMaterial(value: unknown): boolean;
+export function coarseUserAgent(value: unknown): {
+    platform: string;
+    kernel: string;
+    kernelMajor: number;
+};
+export function createPrivacySafeDiagnosticProjection(
+    input?: Record<string, unknown>,
+): Record<string, unknown>;
+export function diagnosticPrivacyCanaryFindings(
+    value: unknown,
+    canaries?: string[],
+): {
+    credentialFindings: number;
+    absoluteUserPathFindings: number;
+    rawPayloadFindings: number;
+    privateContentFindings: number;
+};
 export function setControlledDisclosure(
     button: HTMLButtonElement,
     content: HTMLElement,

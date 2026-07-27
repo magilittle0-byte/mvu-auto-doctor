@@ -5,17 +5,25 @@
 发布已由维护者在2026-07-27明确授权；`main` 只允许从已通过全部门禁的候选提交
 非强制快进，并须先保存可核对的更新前备份分支。
 
+当前发布后硬化状态：`blocked-external-database-barrier`。真实 TavernHelper/TavernDB
+仍直接监听 `MESSAGE_RECEIVED`，没有注册 API v5 barrier v1。以下已完成项只允许
+推送独立审阅分支，不构成更新 `main` 或既有候选分支的授权。
+
 ## 自动门
 
 - [ ] 阶段0的17项 fixture 均为 `unit-active`，行为测试全部通过。
-- [ ] `npm.cmd test`：0 fail、0 todo。
-- [ ] `npm.cmd run qc:phase7:replay`：17/17 pass。
+- [x] `npm.cmd test`：147 pass、0 fail、0 todo。
+- [x] `npm.cmd run qc:phase7:replay`：17/17 pass。
 - [ ] 1.x升级后仍可读，超限/歧义/失败路径可回退，未知字段不丢失。
 - [ ] 同分支幂等重复结算、弃用分支迟到写入、stale下游读取均为0。
 - [ ] TaskLease硬超时进入可见终态，迟到结果写入为0。
 - [ ] 数据库600/601边界、参数化和revision冲突联合门通过。
+- [x] 月费独立账本覆盖31/100/1000次、重复收据与重载。
+- [x] 快速模型坏结构严格修复重试最多1次，并有明确失败码。
+- [x] failed/stale连续性来源永久跳过且有收据；同楼旧分支不覆盖当前来源。
+- [x] 65消息、48 swipe、至少3.5 MiB旧档保留未知/TavernDB/重roll助手/当前来源字段。
 - [ ] 包内容只来自发布白名单，版本在 `index.js`、manifest、package与lock一致。
-- [ ] 离线候选包 SHA-256 已写入 `dist/SHA256SUMS.txt`。
+- [x] 独立审阅包 SHA-256 已写入 `dist/SHA256SUMS.txt`；它不授权晋升。
 - [ ] 远端候选分支存在；默认分支 `main` 已指向相同候选 tree，已有安装可直接点击
       自动医生这一行的“更新”，全新安装可将分支或标签留空。
 
@@ -27,12 +35,15 @@
 - [ ] 真实长局至少24轮，重载后聊天、论坛、barrier、幂等和恢复记录仍可读。
 - [ ] 真实模型请求HTTP 200；代理仅记录字节数、模型、状态和耗时。
 - [ ] 数据库本体、可视化前端、推进重roll助手、骰子前端及其他既有脚本保持启用；独立控件、事件和存储命名空间无冲突，控制台0错误。
+- [x] 候选源码已部署到真实 SillyTavern 1.18.0，TavernHelper被识别为潜在数据库写入方。
+- [x] 未注册时环境自检准确显示“数据库未注册 barrier 协议”并阻断。
+- [ ] TavernDB以 `id=taverndb` 注册 barrier v1、只消费 settled、确认failed/stale abandon。
 - [ ] 模型凭据已清空，临时代理已停止。
-- [ ] 模拟与真实结论一致；任何真实失败均使候选状态为 `blocked`。
+- [x] 模拟与真实不一致已使候选状态为 `blocked`；未伪造数据库兼容。
 
 ## 隐私、安全与发布
 
-- [ ] 增量密钥、Authorization、Cookie、私人正文、原始payload和绝对用户路径扫描0命中。
+- [x] 隐私 canary 对密钥、私人正文、派生剧情、完整提示词、原始payload和完整UA均0命中。
 - [ ] `npm.cmd run qc:ci` 通过。
 - [ ] 实现与报告提交后 `npm.cmd run qc:record` 和 `npm.cmd run qc:gate` 通过。
 - [ ] 远端阶段7提交仅以远端阶段6最终HEAD为父，blob/tree逐对象核对。
@@ -44,3 +55,5 @@
       `codex/backup-main-pre-v2.0.0-rc.1-20260727`，且与旧 HEAD/tree 一致。
 - [ ] `main` 仅做非强制快进；若需回滚，以备份 tree 在当前 `main` 上创建向前回滚
       提交，保证只能在线更新的客户端仍可取得旧版。
+- [x] blocked收据只允许 `refs/heads/codex/v2.0-rc1-real-long-session-hardening`；
+      `main`、既有候选分支、其他ref与force push均禁止。

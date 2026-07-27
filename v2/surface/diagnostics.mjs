@@ -13,6 +13,200 @@ function shortHash(value) {
     }
 }
 
+export function coarseUserAgent(value) {
+    const source = String(value || '');
+    const platform = /Android/iu.test(source)
+        ? 'Android'
+        : /iPhone|iPad|iPod/iu.test(source)
+            ? 'iOS'
+            : /Windows/iu.test(source)
+                ? 'Windows'
+                : /Macintosh|Mac OS X/iu.test(source)
+                    ? 'macOS'
+                    : /Linux/iu.test(source)
+                        ? 'Linux'
+                        : 'Other';
+    const candidates = [
+        ['Chromium', /(?:Chrome|Chromium|CriOS)\/(\d+)/iu],
+        ['Firefox', /(?:Firefox|FxiOS)\/(\d+)/iu],
+        ['WebKit', /AppleWebKit\/(\d+)/iu],
+    ];
+    for (const [kernel, pattern] of candidates) {
+        const match = source.match(pattern);
+        if (match) {
+            return {
+                platform,
+                kernel,
+                kernelMajor: Number(match[1]) || 0,
+            };
+        }
+    }
+    return { platform, kernel: 'Other', kernelMajor: 0 };
+}
+
+export function createPrivacySafeDiagnosticProjection({
+    userAgent = '',
+    plugin = {},
+    environment = {},
+    chat = {},
+    statuses = {},
+    hardContract = null,
+    socialAudit = null,
+    prompt = null,
+    modelDiagnostics = [],
+    barrierProtocol = {},
+} = {}) {
+    const statusKinds = Object.fromEntries(
+        Object.entries(statuses).map(([key, value]) => [
+            key,
+            { kind: String(value?.kind || '') },
+        ]),
+    );
+    return {
+        schemaVersion: 2,
+        plugin: {
+            id: String(plugin?.id || ''),
+            version: String(plugin?.version || ''),
+        },
+        environment: {
+            userAgent: coarseUserAgent(userAgent),
+            status: String(environment?.status || 'unknown'),
+            checkCounts: {
+                ok: (environment?.checks || []).filter((item) => item?.kind === 'ok').length,
+                warn: (environment?.checks || []).filter((item) => item?.kind === 'warn').length,
+                error: (environment?.checks || []).filter((item) => item?.kind === 'error').length,
+                info: (environment?.checks || []).filter((item) => item?.kind === 'info').length,
+            },
+            barrierProtocol: {
+                required: barrierProtocol?.required === true,
+                registered: barrierProtocol?.registered === true,
+                clientCount: Math.max(0, Number(barrierProtocol?.clientCount) || 0),
+                errorCode: String(barrierProtocol?.errorCode || ''),
+            },
+        },
+        currentChat: {
+            present: chat?.present === true,
+            messageCount: Math.max(0, Number(chat?.messageCount) || 0),
+            repairJournalCount: Math.max(0, Number(chat?.repairJournalCount) || 0),
+            socialAuditCount: Math.max(0, Number(chat?.socialAuditCount) || 0),
+            continuity: {
+                activeCount: Math.max(0, Number(chat?.continuity?.activeCount) || 0),
+                resolvedCount: Math.max(0, Number(chat?.continuity?.resolvedCount) || 0),
+            },
+            forum: {
+                postCount: Math.max(0, Number(chat?.forum?.postCount) || 0),
+                totalComments: Math.max(0, Number(chat?.forum?.totalComments) || 0),
+            },
+            modelCalls: cloneModelCallStats(chat?.modelCalls),
+        },
+        latestStatuses: statusKinds,
+        latestHardContract: hardContract
+            ? {
+                checkedAt: Math.max(0, Number(hardContract.checkedAt) || 0),
+                targetIndex: Number.isInteger(Number(hardContract.targetIndex))
+                    ? Number(hardContract.targetIndex)
+                    : -1,
+                issueCount: (hardContract.issues || []).length,
+                issues: (hardContract.issues || []).map((item) => ({
+                    code: String(item?.code || 'unknown'),
+                    severity: String(item?.severity || 'error'),
+                    pathDigest: shortHash(item?.path || '$'),
+                })),
+            }
+            : null,
+        latestSocialAudit: socialAudit
+            ? {
+                createdAt: Math.max(0, Number(socialAudit.createdAt) || 0),
+                sourceIndex: Number.isInteger(Number(socialAudit.sourceRef?.index))
+                    ? Number(socialAudit.sourceRef.index)
+                    : -1,
+                mode: String(socialAudit.mode || ''),
+                verdict: String(socialAudit.verdict || ''),
+                reasonCount: (socialAudit.reasons || []).length,
+                findingCount: (socialAudit.findings || []).length,
+                decisionCount: (socialAudit.decisions || []).length,
+                failureCode: String(socialAudit.modelCall?.failureCode || ''),
+                receiptDigest: shortHash(socialAudit.id || ''),
+                usage: {
+                    inputTokens: Math.max(0, Number(socialAudit.usage?.inputTokens) || 0),
+                    outputTokens: Math.max(0, Number(socialAudit.usage?.outputTokens) || 0),
+                    cny: Math.max(0, Number(socialAudit.usage?.cny) || 0),
+                },
+                correction: {
+                    status: String(socialAudit.correction?.status || ''),
+                    revertedPathCount: (socialAudit.correction?.revertedPaths || []).length,
+                },
+            }
+            : null,
+        lastPrompt: prompt
+            ? {
+                taskDigest: shortHash(prompt.task || ''),
+                capturedAt: Math.max(0, Number(prompt.capturedAt) || 0),
+                maxTokens: Math.max(0, Number(prompt.maxTokens) || 0),
+                totalChars: Math.max(0, Number(prompt.totalChars) || 0),
+                segments: (prompt.messages || []).map((message) => ({
+                    role: String(message?.role || ''),
+                    chars: String(message?.content || '').length,
+                })),
+            }
+            : null,
+        modelDiagnostics: (Array.isArray(modelDiagnostics) ? modelDiagnostics : []).map(
+            (entry) => ({
+                at: Math.max(0, Number(entry?.at) || 0),
+                phase: String(entry?.phase || ''),
+                taskDigest: shortHash(entry?.task || ''),
+                channel: String(entry?.channel || ''),
+                status: String(entry?.status || ''),
+                durationMs: Math.max(0, Number(entry?.durationMs) || 0),
+                queueWaitMs: Math.max(0, Number(entry?.queueWaitMs) || 0),
+                outputChars: Math.max(0, Number(entry?.outputChars) || 0),
+                attempt: Math.max(0, Number(entry?.attempt) || 0),
+                targetIndex: Number.isInteger(Number(entry?.targetIndex))
+                    ? Number(entry.targetIndex)
+                    : -1,
+                failureKind: String(entry?.failureKind || ''),
+                rootType: String(entry?.rootType || ''),
+                tags: structuredClone(entry?.tags || {}),
+                recovered: entry?.recovered === true,
+            }),
+        ),
+    };
+}
+
+function cloneModelCallStats(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        total: Math.max(0, Number(source.total) || 0),
+        succeeded: Math.max(0, Number(source.succeeded) || 0),
+        failed: Math.max(0, Number(source.failed) || 0),
+        rateLimited: Math.max(0, Number(source.rateLimited) || 0),
+        byTask: Object.fromEntries(
+            Object.entries(source.byTask || {}).map(([key, count]) => [
+                key,
+                Math.max(0, Number(count) || 0),
+            ]),
+        ),
+    };
+}
+
+export function diagnosticPrivacyCanaryFindings(value, canaries = []) {
+    const serialized = JSON.stringify(value ?? {});
+    const patterns = [
+        /\b(?:sk|ghp|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b/u,
+        /Bearer\s+\S+/iu,
+        /(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+/iu,
+        /[A-Za-z]:\\Users\\/u,
+        /(?:rawPayload|raw_payload|promptText|fullPrompt|privateNarrative)/iu,
+    ];
+    return {
+        credentialFindings: patterns.slice(0, 3).filter((pattern) => pattern.test(serialized)).length,
+        absoluteUserPathFindings: patterns[3].test(serialized) ? 1 : 0,
+        rawPayloadFindings: patterns[4].test(serialized) ? 1 : 0,
+        privateContentFindings: (Array.isArray(canaries) ? canaries : [])
+            .filter((canary) => canary && serialized.includes(String(canary))).length,
+    };
+}
+
 function redactDiagnosticText(value) {
     return String(value ?? '')
         .replace(/Bearer\s+\S+/giu, '[凭据已隐藏]')

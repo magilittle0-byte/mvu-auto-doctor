@@ -71,12 +71,82 @@ function reportHash() {
     return createHash('sha256').update(fs.readFileSync(reportPath)).digest('hex');
 }
 
+function validateBlockedReport(report) {
+    const blocker = report.blocker;
+    if (
+        !blocker
+        || blocker.code !== 'database.barrier_not_registered'
+        || blocker.message !== '数据库未注册 barrier 协议'
+        || blocker.externalDatabaseDetected !== true
+        || blocker.registrationObserved !== false
+        || blocker.releasePromotionBlocked !== true
+    ) fail('blocked report does not prove the external database barrier failure');
+
+    const targeted = report.checks?.longSessionHardening;
+    if (
+        !targeted
+        || targeted.syntheticMessages !== 65
+        || targeted.syntheticSwipes !== 48
+        || targeted.syntheticBytes < 3.5 * 1024 * 1024
+        || targeted.unknownFieldsPreserved !== true
+        || targeted.tavernDbFieldsPreserved !== true
+        || targeted.rerollHelperFieldsPreserved !== true
+        || targeted.currentSwipeIdentityPreserved !== true
+        || targeted.monthlyReceiptCases !== 1000
+        || targeted.monthlyLedgerIdempotent !== true
+        || targeted.structureRepairRetryVerified !== true
+        || targeted.failedStaleContinuitySkipped !== true
+        || targeted.fullIdentityBarrierHistoryVerified !== true
+        || targeted.restartExactlyOnceVerified !== true
+    ) fail('blocked report long-session evidence is incomplete');
+
+    const real = report.checks?.realEnvironment;
+    if (
+        !real
+        || real.deployedRuntime !== true
+        || real.servedSourceMatchesFingerprint !== true
+        || real.tavernHelperDetected !== true
+        || real.databaseBarrierRegistered !== false
+        || real.selfCheckKind !== 'error'
+        || real.selfCheckCode !== 'database.barrier_not_registered'
+        || real.selfCheckMessage !== '数据库未注册 barrier 协议'
+        || real.externalDatabaseCompatibilityClaimed !== false
+        || real.companionScriptsModified !== false
+    ) fail('blocked report real-environment evidence is incomplete');
+
+    const publication = report.publication;
+    if (
+        !publication
+        || publication.scope !== 'independent-branch-only'
+        || publication.mainAllowed !== false
+        || publication.releaseCandidateAllowed !== false
+        || publication.forcePushAllowed !== false
+        || !Array.isArray(publication.allowedRemoteRefs)
+        || publication.allowedRemoteRefs.length !== 1
+        || publication.allowedRemoteRefs[0]
+            !== 'refs/heads/codex/v2.0-rc1-real-long-session-hardening'
+    ) fail('blocked report publication scope is not fail-closed');
+
+    const privacy = report.privacy;
+    if (
+        !privacy
+        || privacy.apiKeyIncluded !== false
+        || privacy.privateChatIncluded !== false
+        || privacy.userDataIncluded !== false
+        || privacy.rawModelPayloadIncluded !== false
+        || privacy.derivedNarrativeFindings !== 0
+        || privacy.fullPromptFindings !== 0
+        || privacy.privateCanaryFindings !== 0
+        || privacy.fullUserAgentIncluded !== false
+    ) fail('blocked report privacy declaration is incomplete');
+}
+
 function loadAndValidateReport() {
     if (!fs.existsSync(reportPath)) fail(`missing ${reportRelativePath}`);
     const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-    if (report.schemaVersion !== 1) fail('unsupported report schema');
+    if (![1, 2].includes(report.schemaVersion)) fail('unsupported report schema');
     if (report.version !== manifest.version) fail('report version does not match manifest');
-    if (report.result !== 'pass') fail('report result is not pass');
+    if (!['pass', 'blocked'].includes(report.result)) fail('unsupported report result');
     if (report.codeFingerprint !== codeFingerprint()) {
         fail('runtime fingerprint changed; repeat real QC and update the report');
     }
@@ -97,6 +167,12 @@ function loadAndValidateReport() {
         || tests.todo !== 0
     ) {
         fail('automated suite evidence is incomplete');
+    }
+    if (report.result === 'blocked') {
+        validateBlockedReport(report);
+        const testedAt = Date.parse(report.testedAt);
+        if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
+        return report;
     }
 
     const phase6 = report.checks?.phase6Barrier;
@@ -308,6 +384,8 @@ function recordReceipt() {
         report: reportRelativePath,
         reportSha256: reportHash(),
         testedAt: report.testedAt,
+        result: report.result,
+        publicationScope: report.publication?.scope || 'release',
     };
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
     fs.writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
@@ -315,7 +393,7 @@ function recordReceipt() {
 }
 
 function verifyReceipt() {
-    loadAndValidateReport();
+    const report = loadAndValidateReport();
     assertTrackedTreeClean();
     if (!fs.existsSync(receiptPath)) fail('missing local receipt; run npm run qc:record');
     const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
@@ -328,7 +406,38 @@ function verifyReceipt() {
     if (!Number.isFinite(age) || age < 0 || age > 7 * 24 * 60 * 60 * 1000) {
         fail('receipt is invalid or older than seven days');
     }
-    console.log(`Real-environment QC gate passed for ${receipt.commit.slice(0, 12)}.`);
+    if (receipt.result !== report.result) fail('receipt result does not match report');
+    if (
+        receipt.publicationScope
+        !== (report.publication?.scope || 'release')
+    ) fail('receipt publication scope does not match report');
+    if (report.result === 'blocked') {
+        const branchRef = `refs/heads/${git(['branch', '--show-current'])}`;
+        if (!report.publication.allowedRemoteRefs.includes(branchRef)) {
+            fail('blocked evidence receipt is valid only on its independent branch');
+        }
+        console.log(
+            `Branch-only blocked-evidence gate passed for ${receipt.commit.slice(0, 12)}; release promotion remains forbidden.`,
+        );
+    } else {
+        console.log(`Real-environment QC gate passed for ${receipt.commit.slice(0, 12)}.`);
+    }
+    return report;
+}
+
+function verifyPrePush() {
+    const report = verifyReceipt();
+    if (report.result !== 'blocked') return;
+    const updates = fs.readFileSync(0, 'utf8')
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map((line) => line.trim().split(/\s+/u));
+    if (!updates.length) fail('pre-push did not provide any ref updates');
+    for (const [, , remoteRef] of updates) {
+        if (!report.publication.allowedRemoteRefs.includes(remoteRef)) {
+            fail(`blocked evidence cannot update ${remoteRef}`);
+        }
+    }
 }
 
 const command = process.argv[2] || 'verify';
@@ -347,6 +456,8 @@ try {
         recordReceipt();
     } else if (command === 'verify') {
         verifyReceipt();
+    } else if (command === 'pre-push') {
+        verifyPrePush();
     } else {
         fail(`unknown command ${command}`);
     }

@@ -55,6 +55,9 @@ export function evaluateReleaseHardening(evidence = {}, limits = {}) {
         'privateContentFindings',
         'rawPayloadFindings',
         'absoluteUserPathFindings',
+        'derivedNarrativeFindings',
+        'fullPromptFindings',
+        'privateCanaryFindings',
     ]) {
         if (privacy[field] !== 0) {
             issues.push(failure(
@@ -92,6 +95,10 @@ export function evaluateReleaseHardening(evidence = {}, limits = {}) {
     }
     for (const field of [
         'databaseCoexistence',
+        'databaseBarrierRegistered',
+        'databaseSettledAfterBarrier',
+        'databaseFailedStaleWritesZero',
+        'databaseTerminalReceiptsVerified',
         'rerollLifecycleCompatible',
         'companionControlsIsolated',
         'otherScriptsPreserved',

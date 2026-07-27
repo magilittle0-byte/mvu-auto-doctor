@@ -535,3 +535,35 @@ interface MigrationState {
 3. 危险领域动作的确认摘要绑定 action、规范命令和完整目标身份；确认前不规划事务，目标变化后旧确认失效。
 4. 自然语言与UI入口只允许阶段4原生物品、装备、技能、社会和任务命令；阶段3 Fact/Knowledge/H2/H3命令继续使用各自证据与分支入口，不能伪装成本目录动作。
 5. 390×844触控视口的可见控件不得小于44px；对话框必须约束横向溢出、捕获Tab焦点、支持Escape关闭，并把焦点归还开启控件。
+
+## 21. 发布后真实长局终态协议
+
+### 21.1 下游注册与收据
+
+生产兼容 API v5 提供 `registerBarrierProtocolClient`、
+`getBarrierProtocolStatus` 和 `acknowledgeBarrierReceipt`。任何数据库写入方必须
+注册稳定客户端ID、`protocolVersion=1`、`settledOnly=true` 与
+`terminalReceipts=true`。每个 barrier 的 `settled/failed/stale` 终态生成持久、
+幂等收据：
+
+- `settled` 只允许 `read-final-and-write`，客户端必须按收据目标摘要重新读取最终目标；
+- `failed/stale` 只允许 `abandon`，任何 write 动作永久拒绝；
+- 收据目标绑定 chat、logical floor、message、swipe、generation、branch 与内容指纹；
+- TavernHelper存在但数据库未注册时，真实发布门必须报
+  `database.barrier_not_registered`，不能以数据库仍有写入为通过。
+
+### 21.2 历史、连续性与重启
+
+barrier持久键不得再按聊天+楼层覆盖；每个完整目标身份保留独立历史。连续性补记按
+消息当前swipe的 message/generation/branch 精确选择历史终态，failed/stale来源永久
+跳过并记录来源收据。刷新或重启后，同一完整身份直接恢复终态，不重复启动模型或
+事务；执行中重roll产生新branch，旧目标只能终止为stale。
+
+### 21.3 长期费用与诊断隐私
+
+人物二审费用使用独立月度账本；每次实际模型尝试以稳定收据ID累加，重复收据幂等，
+列表裁剪和重载不得降低累计。HTTP成功但结构无效只允许一次严格结构修复重试。
+
+默认诊断只输出 verdict、数量、错误码、哈希与必要运行计数；User-Agent仅保留平台
+和浏览器内核大版本。剧情摘要、finding/decision理由、完整提示词、原始payload、
+密钥、私人正文与绝对用户路径不得进入导出。

@@ -292,6 +292,7 @@ window.StoryOracleAPI = {
   async run(messages, options = {}) {
     const system = messages[0].content;
     const isSocial = system.includes('人物动机、人格自主性');
+    const isSocialRepair = system.includes('人物关系二审输出的JSON结构');
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
     calls.model.push(isSocial ? 'social' : isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
@@ -304,11 +305,14 @@ window.StoryOracleAPI = {
       throw new Error('connection refused');
     }
     if (!isContinuity && !isForum) {
-      if (isSocial) {
+      if (isSocial || isSocialRepair) {
         calls.socialRuns += 1;
         calls.socialSystem = messages[0].content;
         calls.socialUser = messages[1].content;
         const paths = [...messages[1].content.matchAll(/"path"\s*:\s*"([^"]+)"/g)].map((match) => match[1]);
+        if (mode === 'social-invalid-then-valid' && isSocial) {
+          return '{"verdict":"warning","decisions":[';
+        }
         const allow = mode === 'social-allow-dark';
         return JSON.stringify({
           verdict: allow ? 'pass' : 'violation',
@@ -667,6 +671,10 @@ try {
     assert.equal(finalReplyBarrier.status, 'settled');
     assert.equal(finalReplyBarrier.targetIndex, 2);
     assert.equal(typeof finalReplyBarrier.fingerprint, 'string');
+    assert.equal(typeof finalReplyBarrier.generationId, 'string');
+    assert.equal(typeof finalReplyBarrier.branchId, 'string');
+    assert.equal(finalReplyBarrier.receipt.barrierState, 'settled');
+    assert.equal(finalReplyBarrier.receipt.writeAllowed, true);
     const persistedBarrier = await page.evaluate(() => (
         Object.values(
             window.__TEST__.context.chatMetadata?.mvu_auto_doctor
@@ -676,6 +684,8 @@ try {
             .find((entry) => entry?.protocolVersion === '2.0' && entry?.targetIndex === 2)
     ));
     assert.equal(persistedBarrier.state, 'settled');
+    assert.equal(persistedBarrier.generationId, finalReplyBarrier.generationId);
+    assert.equal(persistedBarrier.branchId, finalReplyBarrier.branchId);
     assert.equal(
         persistedBarrier.finalFingerprint,
         finalReplyBarrier.fingerprint,
@@ -805,6 +815,17 @@ try {
             chat: assembledChat,
         });
         await new Promise((resolve) => setTimeout(resolve, 850));
+        window.TavernDB = {};
+        const databaseBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const databaseRegistration = await window.MvuAutoDoctorAPI
+            .registerBarrierProtocolClient({
+                id: 'taverndb',
+                protocolVersion: 1,
+                settledOnly: true,
+                terminalReceipts: true,
+            });
+        const databaseAfter = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const diagnostic = window.MvuAutoDoctorAPI.getDiagnosticProjection();
         return {
             apiCompatible: window.MvuAutoDoctorAPI.isCompatible(2),
             apiAcceptsBarrierV4: window.MvuAutoDoctorAPI.isCompatible(4),
@@ -820,6 +841,10 @@ try {
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
             ),
+            databaseBefore,
+            databaseRegistration,
+            databaseAfter,
+            diagnostic,
         };
     });
     assert.equal(diagnosticsUi.apiCompatible, true);
@@ -861,6 +886,51 @@ try {
     assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
     assert.equal(diagnosticsUi.injection.socialLanded, true, '人物动机合同也必须进入真实最终提示词');
     assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
+    assert.equal(diagnosticsUi.databaseRegistration.ok, true);
+    assert.equal(
+        diagnosticsUi.databaseBefore.checks.find(
+            (check) => check.label === 'TavernDB 稳定屏障',
+        ).kind,
+        'error',
+    );
+    assert.equal(
+        diagnosticsUi.databaseAfter.checks.find(
+            (check) => check.label === 'TavernDB 稳定屏障',
+        ).kind,
+        'ok',
+    );
+    assert.equal(typeof diagnosticsUi.diagnostic.environment.userAgent, 'object');
+
+    const reloadBarrierPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await reloadBarrierPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await reloadBarrierPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const recoveredAfterReload = await reloadBarrierPage.evaluate(async () => {
+        const t = window.__TEST__;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+        const initial = await window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 20000 },
+        );
+        const beforeCalls = t.calls.model.length;
+        await t.context.eventSource.emit('chat_loaded');
+        const recovered = await window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 2000, registrationGraceMs: 0 },
+        );
+        await t.context.eventSource.emit('message_received', 2);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return {
+            initial,
+            recovered,
+            modelCallDelta: t.calls.model.length - beforeCalls,
+        };
+    });
+    assert.equal(recoveredAfterReload.initial.status, 'settled');
+    assert.equal(recoveredAfterReload.recovered.status, 'settled');
+    assert.equal(recoveredAfterReload.recovered.workflowStatus, 'recovered-terminal');
+    assert.equal(recoveredAfterReload.modelCallDelta, 0);
+    await reloadBarrierPage.close();
 
     const socialPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await socialPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -1066,14 +1136,69 @@ try {
     assert.deepEqual(socialFailure.audits[0].modelCall, {
         attempted: true,
         completed: false,
+        attempts: 0,
+        structureRepairAttempted: false,
         fallback: true,
         failureReason: '二审调用失败：connection refused',
+        failureCode: 'social.transport_failure',
     });
     assert.deepEqual(
         socialFailure.audits[0].correction.revertedPaths.sort(),
         ['/characters/Mia/relationship', '/characters/Mia/trust'].sort(),
     );
     await socialFailurePage.close();
+
+    const socialRepairPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await socialRepairPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await socialRepairPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const socialRepair = await socialRepairPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('social-invalid-then-valid');
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            socialNarrativeGuardEnabled: true,
+            socialAuditMode: 'balanced',
+            fastModelProvider: 'story-oracle',
+            modelRoutingSettingsVersion: 2,
+            socialAuditSettingsVersion: 2,
+            socialMonthlySoftCny: 5,
+            socialMonthlyHardCny: 10,
+            socialMonthlyCostLedger: { version: 1, months: {} },
+        });
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
+            { is_user: true, is_system: false, mes: 'I bring dinner.', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: 'Mia becomes loyal.\\n<UpdateVariable><Analysis>jump</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: { characters: { Mia: { trust: 5 } } },
+            display_data: {},
+        };
+        const after = {
+            stat_data: { characters: { Mia: { trust: 40 } } },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
+        return {
+            result,
+            audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+            calls: structuredClone(t.calls),
+        };
+    });
+    assert.equal(socialRepair.result.status, 'audited');
+    assert.equal(socialRepair.calls.socialRuns, 2);
+    assert.equal(socialRepair.audits[0].modelCall.attempts, 2);
+    assert.equal(socialRepair.audits[0].modelCall.structureRepairAttempted, true);
+    assert.equal(socialRepair.audits[0].modelCall.failureCode, '');
+    assert.ok(socialRepair.audits[0].usage.cny > 0);
+    await socialRepairPage.close();
     await page.bringToFront();
 
     assert.equal(continuity.hasSettingsLedger, false, '设置页不应再复制完整事件账本');
@@ -2938,7 +3063,16 @@ try {
         await t.context.eventSource.emit('message_received', 4);
     });
     await externalForumPage.waitForFunction(() => (
-        window.MvuAutoDoctorAPI.getContinuityState().turn === 2
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+        && (
+            window.__TEST__.context.chatMetadata
+                ?.mvu_auto_doctor
+                ?.continuitySourceReceipts
+            || []
+        ).some((receipt) => (
+            receipt.sourceIndex === 2
+            && receipt.decision === 'permanently-skipped'
+        ))
     ), null, { timeout: 30000 }).catch(async (error) => {
         console.error('external forum continuity timeout diagnostics', await externalForumPage.evaluate(() => ({
             metadata: window.__TEST__.context.chatMetadata,
@@ -2950,6 +3084,21 @@ try {
         })));
         throw error;
     });
+    const continuityReceipts = await externalForumPage.evaluate(() => (
+        structuredClone(
+            window.__TEST__.context.chatMetadata
+                ?.mvu_auto_doctor
+                ?.continuitySourceReceipts
+            || [],
+        )
+    ));
+    assert.ok(
+        continuityReceipts.some((receipt) => (
+            receipt.sourceIndex === 2
+            && receipt.decision === 'permanently-skipped'
+        )),
+        '先前被新生成作废的来源不得在后续 settled 回合补记',
+    );
     const externalForumSelected = await externalForumPage.evaluate(() => ({
         forum: window.MvuAutoDoctorAPI.getForumState(),
         calls: structuredClone(window.__TEST__.calls),

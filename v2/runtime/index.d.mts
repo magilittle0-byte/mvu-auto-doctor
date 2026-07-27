@@ -219,3 +219,71 @@ export function buildReplayAutomationReport(
     results: Array<Record<string, unknown>>,
     options?: { generatedAt?: string; environment?: string },
 ): Record<string, unknown>;
+
+export interface BarrierClientRegistration {
+    id: string;
+    protocolVersion: 1;
+    settledOnly: true;
+    terminalReceipts: true;
+}
+
+export function validateBarrierClientRegistration(
+    input: Partial<BarrierClientRegistration>,
+): Record<string, unknown>;
+export function downstreamReceiptId(barrier: NarrativeBarrier): string;
+export class DownstreamBarrierProtocol {
+    constructor(
+        adapter: VersionedAdapter,
+        options?: { namespace?: string; now?: () => number },
+    );
+    register(input: BarrierClientRegistration): Promise<Record<string, unknown>>;
+    clientStatus(id: string): Promise<Record<string, unknown>>;
+    issue(barrier: NarrativeBarrier): Promise<Record<string, unknown>>;
+    acknowledge(input: {
+        clientId: string;
+        receiptId: string;
+        action: 'write' | 'read-final-and-write' | 'abandon';
+        targetDigest?: string;
+    }): Promise<Record<string, unknown>>;
+    readReceipt(receiptId: string): Promise<Record<string, unknown> | null>;
+}
+
+export interface MonthlyCostLedger {
+    version: 1;
+    months: Record<string, {
+        cny: number;
+        receiptCount: number;
+        receipts: Record<string, { cny: number; recordedAt: number }>;
+        updatedAt: number;
+        baselineIncomplete: boolean;
+    }>;
+}
+
+export function monthlyCostKey(now?: number): string;
+export function normalizeMonthlyCostLedger(value: unknown): MonthlyCostLedger;
+export function monthlyCostSpend(
+    ledger: unknown,
+    month?: string,
+): MonthlyCostLedger['months'][string];
+export function recordMonthlyCostReceipt(
+    ledger: unknown,
+    receipt: { receiptId: string; cny: number; month?: string; at?: number },
+): Record<string, unknown> & { ledger: MonthlyCostLedger };
+export function seedMonthlyCostLedgerFromAudits(
+    ledger: unknown,
+    audits: Array<Record<string, unknown>>,
+    now?: number,
+): MonthlyCostLedger;
+
+export function buildContinuitySourcePlan(input: {
+    messages: Array<Record<string, unknown>>;
+    fromIndex?: number;
+    toIndex?: number;
+    barrierHistory?: Array<Record<string, unknown>>;
+}): {
+    eligibleIndexes: number[];
+    skippedIndexes: number[];
+    eligibleCount: number;
+    skippedCount: number;
+    receipts: Array<Record<string, unknown>>;
+};

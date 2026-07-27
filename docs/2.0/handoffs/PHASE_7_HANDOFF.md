@@ -1,5 +1,48 @@
 # MVU Auto Doctor 2.0 阶段7交接
 
+## 发布后真实长局硬化补充（2026-07-28）
+
+- 独立分支：`codex/v2.0-rc1-real-long-session-hardening`
+- 基线：已发布 `2.0.0-rc.1` 的本地等价 tree
+  `7c225242d0e9e822c24395fc50043c5872ef4f1a`
+- 当前真实结论：`blocked-external-database-barrier`
+- 晋升权限：`main=false`、既有候选分支=false、force push=false；只允许本补充分支
+  以脱敏阻断收据供 Draft PR #27 审阅。
+- 回退分支 `codex/backup-main-pre-v2.0.0-rc.1-20260727` 继续固定在
+  `7d761ba6af1ceb10ab3ea5947c0bb25ee1b72566`，未改动。
+
+本轮依据用户授权的65消息、48 swipe、约3.5 MiB旧档续玩证据实施：
+
+1. API v5新增数据库 barrier v1显式注册、settled-only与持久终态收据；
+   failed/stale只允许永久 `abandon`。
+2. 人物二审费用改为独立月度收据账本，31/100/1000次、重载与重复收据幂等通过。
+3. 快速模型结构无效只做一次严格修复重试，失败码为
+   `social.invalid_structure_after_repair`。
+4. 连续性逐来源核对当前 message/swipe/generation/branch，failed/stale永久跳过并留收据。
+5. 诊断改为最小白名单投影，完整UA、派生剧情、理由、提示词和原始payload不再导出。
+6. barrier历史按完整目标身份保存，执行中重roll、刷新/重启stale和exactly-once有回归。
+7. 65消息/48 swipe合成旧档保留未知字段、TavernDB字段、推进重roll助手字段和当前
+   swipe来源身份，回滚摘要一致。
+
+完整 `npm.cmd test` 为147/147通过。候选源码已逐文件部署到真实 SillyTavern
+1.18.0/`8172dcd` 的用户扩展目录和实际公共镜像；真实自检唯一数据库结论为：
+
+```text
+× TavernDB 稳定屏障
+数据库未注册 barrier 协议
+```
+
+真实 TavernDB 仍由 TavernHelper 承载且监听 `MESSAGE_RECEIVED`，未调用医生注册接口。
+因此本补充明确覆盖下文阶段7初次发布时的“数据库共存已通过”表述：初次报告只能说明
+脚本可同时加载，不能证明数据库等待 settled。不得修改用户 TavernDB 脚本来制造
+通过。最小外部协调是 TavernDB 在启动/切聊天时注册 `id=taverndb`、
+`protocolVersion=1`、`settledOnly=true`、`terminalReceipts=true`，随后仅按终态
+收据工作；完成前 `main` 与既有候选分支保持在发布前用户给定的远端 HEAD。
+
+本补充分支确定性审阅包包含65个白名单文件、1,404,953字节，SHA-256为
+`714558c935ca424b677f91d08483306e5921b037b75e2c508733050ffe2d7d64`。
+该包与SHA只用于审阅，不代表发布晋升授权。
+
 ## 1. 候选身份与发布拓扑
 
 - 阶段：7，迁移、发布硬化与 `2.0.0-rc.1` 候选

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "phase": 7,
-  "generatedAt": "2026-07-27T14:24:46.671Z",
+  "generatedAt": "2026-07-27T17:06:44.020Z",
   "environment": "node-unit-integration-browser-release",
   "totals": {
     "cases": 17,
@@ -200,7 +200,7 @@
     }
   ],
   "candidate": "2.0.0-rc.1",
-  "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-release-core.test.mjs tests\\v2-release-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
+  "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-long-session-hardening.test.mjs tests\\v2-release-core.test.mjs tests\\v2-release-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
   "testFiles": [
     "tests\\v2-director-core.test.mjs",
     "tests\\v2-director-replays.test.mjs",
@@ -208,6 +208,7 @@
     "tests\\v2-domain-replays.test.mjs",
     "tests\\v2-domain-transaction-core.test.mjs",
     "tests\\v2-domain-transaction-replays.test.mjs",
+    "tests\\v2-long-session-hardening.test.mjs",
     "tests\\v2-release-core.test.mjs",
     "tests\\v2-release-replays.test.mjs",
     "tests\\v2-replay-fixtures.test.mjs",

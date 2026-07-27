@@ -76,12 +76,20 @@ import {
     stripClosedProposals,
 } from './social-core.mjs';
 import {
+    createPrivacySafeDiagnosticProjection,
     installDualSurfaceUI,
 } from './v2/surface/index.mjs';
 import {
+    buildContinuitySourcePlan,
+    DownstreamBarrierProtocol,
     NarrativeBarrierCoordinator,
     PersistentIdempotencyStore,
     PersistentRecoveryStore,
+    monthlyCostKey,
+    monthlyCostSpend,
+    normalizeMonthlyCostLedger,
+    recordMonthlyCostReceipt,
+    seedMonthlyCostLedgerFromAudits,
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
@@ -136,7 +144,7 @@ const DEFAULTS = Object.freeze({
     socialAuditContextMessages: 5,
     socialMonthlySoftCny: 5,
     socialMonthlyHardCny: 10,
-    socialAuditSettingsVersion: 1,
+    socialAuditSettingsVersion: 2,
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
@@ -256,10 +264,17 @@ let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
 let generationSerial = 0;
-let lastGeneration = { serial: 0, type: 'normal', dryRun: false };
+let lastGeneration = {
+    serial: 0,
+    id: '',
+    type: 'normal',
+    dryRun: false,
+};
 let pendingChatSaveTimer = null;
 let pendingOpeningSyncTimer = null;
 let presetContinuityCache = { checkedAt: 0, active: false };
+let downstreamBarrierProtocol = null;
+let downstreamBarrierProtocolChatId = '';
 
 function getContext() {
     return window.SillyTavern?.getContext?.() || null;
@@ -323,6 +338,21 @@ function getSettings() {
         settings.socialMonthlySoftCny = DEFAULTS.socialMonthlySoftCny;
         settings.socialMonthlyHardCny = DEFAULTS.socialMonthlyHardCny;
         settings.socialAuditSettingsVersion = 1;
+        changed = true;
+    }
+    const normalizedCostLedger = normalizeMonthlyCostLedger(settings.socialMonthlyCostLedger);
+    if (previousSocialAuditSettingsVersion < 2) {
+        settings.socialMonthlyCostLedger = seedMonthlyCostLedgerFromAudits(
+            normalizedCostLedger,
+            readChatNamespace(context).socialAudits,
+        );
+        settings.socialAuditSettingsVersion = 2;
+        changed = true;
+    } else if (
+        JSON.stringify(settings.socialMonthlyCostLedger)
+        !== JSON.stringify(normalizedCostLedger)
+    ) {
+        settings.socialMonthlyCostLedger = normalizedCostLedger;
         changed = true;
     }
     if (!['tavern', 'direct', 'story-oracle'].includes(settings.strictModelProvider)) {
@@ -1283,6 +1313,27 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
                     : '已注册，等待下一次真实生成验证',
     ));
 
+    const databaseBarrier = await barrierProtocolStatus();
+    if (databaseBarrier.required) {
+        checks.push(databaseBarrier.registered
+            ? environmentCheck(
+                'ok',
+                'TavernDB 稳定屏障',
+                '数据库已注册 barrier 协议；只允许 settled 写入并确认 failed/stale 放弃收据',
+            )
+            : environmentCheck(
+                'error',
+                'TavernDB 稳定屏障',
+                '数据库未注册 barrier 协议',
+            ));
+    } else {
+        checks.push(environmentCheck(
+            'info',
+            'TavernDB 稳定屏障',
+            '未检测到 TavernDB；如后续启用，必须先注册 barrier 协议',
+        ));
+    }
+
     const settings = getSettings();
     for (const [channel, label] of [['strict', '严格模型通道'], ['fast', '轻量模型通道']]) {
         const profile = directProfile(settings, channel);
@@ -1382,99 +1433,57 @@ function diagnosticPayload() {
         maxPosts: getSettings().forumMaxPosts,
         maxComments: getSettings().forumMaxComments,
     });
+    const databaseBarrierCheck = lastEnvironmentReport?.checks?.find(
+        (check) => check?.label === 'TavernDB 稳定屏障',
+    );
     return {
         exportedAt: new Date().toISOString(),
-        plugin: { id: PLUGIN_ID, version: VERSION },
-        environment: {
+        ...createPrivacySafeDiagnosticProjection({
             userAgent: navigator.userAgent,
-            report: lastEnvironmentReport,
-            injection: lastInjectionInspection,
-            socialPromptSanitization: lastSocialPromptSanitization,
-            capabilities: {
-                updateChatMetadata: typeof context?.updateChatMetadata === 'function',
-                saveMetadata: typeof context?.saveMetadata === 'function',
-                saveChat: typeof context?.saveChat === 'function',
-                generateRaw: typeof context?.generateRaw === 'function',
-                storyOracle: !!window.StoryOracleAPI,
-                mvu: !!window.Mvu,
+            plugin: { id: PLUGIN_ID, version: VERSION },
+            environment: lastEnvironmentReport,
+            barrierProtocol: {
+                required: tavernDatabaseDetected(context),
+                registered: databaseBarrierCheck?.kind === 'ok',
+                clientCount: databaseBarrierCheck?.kind === 'ok' ? 1 : 0,
+                errorCode: databaseBarrierCheck?.kind === 'error'
+                    ? 'database.barrier_not_registered'
+                    : '',
             },
-        },
-        currentChat: {
-            present: !!context?.chatId,
-            messageCount: Array.isArray(context?.chat) ? context.chat.length : 0,
-            modelCalls: normalizedModelCallStats(modelCallStats),
-            modelQueue: modelConnectionScheduler.snapshot().map((connection) => ({
-                active: connection.active,
-                activeTask: connection.activeLabel,
-                pendingTasks: connection.pending.map((item) => ({
-                    task: item.label,
-                    priority: item.priority,
-                })),
-            })),
-            repairJournalCount: Array.isArray(namespace.repairJournal)
-                ? namespace.repairJournal.length
-                : 0,
-            socialAuditCount: Array.isArray(namespace.socialAudits)
-                ? namespace.socialAudits.length
-                : 0,
-            continuity: {
-                activeCount: continuity.activeCount,
-                resolvedCount: continuity.resolvedCount,
+            chat: {
+                present: !!context?.chatId,
+                messageCount: Array.isArray(context?.chat) ? context.chat.length : 0,
+                modelCalls: normalizedModelCallStats(modelCallStats),
+                repairJournalCount: Array.isArray(namespace.repairJournal)
+                    ? namespace.repairJournal.length
+                    : 0,
+                socialAuditCount: Array.isArray(namespace.socialAudits)
+                    ? namespace.socialAudits.length
+                    : 0,
+                continuity: {
+                    activeCount: continuity.activeCount,
+                    resolvedCount: continuity.resolvedCount,
+                },
+                forum: {
+                    postCount: forum.posts.length,
+                    totalComments: forum.posts.reduce(
+                        (sum, post) => sum + post.comments.length,
+                        0,
+                    ),
+                },
             },
-            forum: {
-                postCount: forum.posts.length,
-                totalComments: forum.posts.reduce((sum, post) => sum + post.comments.length, 0),
+            statuses: {
+                variable: { kind: latestStatusKind },
+                hardContract: { kind: latestHardContractKind },
+                social: { kind: latestSocialKind },
+                continuity: { kind: latestContinuityKind },
+                forum: { kind: latestForumKind },
             },
-        },
-        latestStatuses: {
-            variable: { text: latestStatus, kind: latestStatusKind },
-            hardContract: { text: latestHardContractStatus, kind: latestHardContractKind },
-            social: { text: latestSocialStatus, kind: latestSocialKind },
-            continuity: { text: latestContinuityStatus, kind: latestContinuityKind },
-            forum: { text: latestForumStatus, kind: latestForumKind },
-        },
-        latestHardContract: latestHardContractAudit
-            ? {
-                checkedAt: latestHardContractAudit.checkedAt,
-                targetIndex: latestHardContractAudit.targetIndex,
-                issueCount: latestHardContractAudit.issues?.length || 0,
-                issues: (latestHardContractAudit.issues || []).map((issue) => ({
-                    code: issue.code,
-                    severity: issue.severity,
-                    path: issue.path || '',
-                    message: issue.message,
-                })),
-            }
-            : null,
-        latestSocialAudit: latestSocialAudit
-            ? {
-                createdAt: latestSocialAudit.createdAt,
-                sourceIndex: latestSocialAudit.sourceRef?.index ?? -1,
-                mode: latestSocialAudit.mode,
-                reasons: latestSocialAudit.reasons,
-                verdict: latestSocialAudit.verdict,
-                summary: latestSocialAudit.summary,
-                findings: latestSocialAudit.findings,
-                decisions: latestSocialAudit.decisions,
-                usage: latestSocialAudit.usage,
-                correction: latestSocialAudit.correction,
-            }
-            : null,
-        lastPrompt: lastPromptSnapshot
-            ? {
-                task: lastPromptSnapshot.task,
-                capturedAt: lastPromptSnapshot.capturedAt,
-                maxTokens: lastPromptSnapshot.maxTokens,
-                totalChars: lastPromptSnapshot.totalChars,
-                segments: lastPromptSnapshot.messages.map((message) => ({
-                    role: message.role,
-                    chars: message.content.length,
-                })),
-                note: '为保护私人剧情，诊断包不包含提示词、正文、世界书或变量原文。',
-            }
-            : null,
-        operationLog: deepClone(operationLog),
-        modelDiagnostics: normalizedModelDiagnostics(modelDiagnostics),
+            hardContract: latestHardContractAudit,
+            socialAudit: latestSocialAudit,
+            prompt: lastPromptSnapshot,
+            modelDiagnostics: normalizedModelDiagnostics(modelDiagnostics),
+        }),
     };
 }
 
@@ -1561,6 +1570,87 @@ function ensureMessageStableId(context, message, index) {
     }
     if (changed) scheduleSafeChatSave(context, context?.chatId);
     return id;
+}
+
+function currentSwipeInfo(message) {
+    const swipeId = Number(message?.swipe_id) || 0;
+    return Array.isArray(message?.swipe_info)
+        && message.swipe_info[swipeId]
+        && typeof message.swipe_info[swipeId] === 'object'
+        ? message.swipe_info[swipeId]
+        : null;
+}
+
+function previousRuntimeBranchId(context, index) {
+    for (let cursor = Number(index) - 1; cursor >= 0; cursor -= 1) {
+        const previous = context?.chat?.[cursor];
+        if (!previous || previous.is_user || previous.is_system) continue;
+        const swipeInfo = currentSwipeInfo(previous);
+        const value = swipeInfo?.extra?.mvu_auto_doctor_branch_id
+            || previous.extra?.mvu_auto_doctor_branch_id;
+        if (value) return String(value);
+    }
+    return '';
+}
+
+function ensureRuntimeTargetIdentity(context, message, index, messageId) {
+    const swipeId = Number(message?.swipe_id) || 0;
+    const swipeInfo = currentSwipeInfo(message);
+    const holders = [message, swipeInfo].filter(Boolean);
+    for (const holder of holders) {
+        if (!isPlainObject(holder.extra)) holder.extra = {};
+    }
+    let branchId = String(
+        swipeInfo?.extra?.mvu_auto_doctor_branch_id
+        || message?.extra?.mvu_auto_doctor_branch_id
+        || '',
+    );
+    if (!branchId) {
+        const inherited = !['swipe', 'regenerate'].includes(lastGeneration.type)
+            ? previousRuntimeBranchId(context, index)
+            : '';
+        branchId = inherited || ['branch', fingerprint(JSON.stringify([
+            context?.chatId || '',
+            lastGeneration.id || messageId,
+            messageId,
+            swipeId,
+        ]))].join(':');
+    }
+    let generationId = String(
+        swipeInfo?.extra?.mvu_auto_doctor_generation_id
+        || message?.extra?.mvu_auto_doctor_generation_id
+        || '',
+    );
+    const latest = latestAiMessage(context);
+    if (
+        lastGeneration.serial > 0
+        && lastGeneration.id
+        && latest.index === Number(index)
+    ) {
+        generationId = lastGeneration.id;
+    }
+    if (!generationId) {
+        generationId = ['generation', fingerprint(JSON.stringify([
+            context?.chatId || '',
+            index,
+            messageId,
+            swipeId,
+            fingerprint(message?.mes || ''),
+        ]))].join(':');
+    }
+    let changed = false;
+    for (const holder of holders) {
+        if (holder.extra.mvu_auto_doctor_branch_id !== branchId) {
+            holder.extra.mvu_auto_doctor_branch_id = branchId;
+            changed = true;
+        }
+        if (holder.extra.mvu_auto_doctor_generation_id !== generationId) {
+            holder.extra.mvu_auto_doctor_generation_id = generationId;
+            changed = true;
+        }
+    }
+    if (changed) scheduleSafeChatSave(context, context?.chatId);
+    return { branchId, generationId };
 }
 
 function readChatNamespace(context = getContext()) {
@@ -1709,6 +1799,110 @@ function createChatRuntimeAdapter(expectedChatId) {
             return task;
         },
     };
+}
+
+function currentDownstreamBarrierProtocol() {
+    const chatId = String(getContext()?.chatId || '');
+    if (!chatId) return null;
+    if (
+        !downstreamBarrierProtocol
+        || downstreamBarrierProtocolChatId !== chatId
+    ) {
+        downstreamBarrierProtocol = new DownstreamBarrierProtocol(
+            createChatRuntimeAdapter(chatId),
+        );
+        downstreamBarrierProtocolChatId = chatId;
+    }
+    return downstreamBarrierProtocol;
+}
+
+function tavernDatabaseDetected(context = getContext()) {
+    const pending = [context?.extensionSettings];
+    const keys = [];
+    const seen = new Set();
+    while (pending.length > 0 && keys.length < 5000) {
+        const value = pending.shift();
+        if (!value || typeof value !== 'object' || seen.has(value)) continue;
+        seen.add(value);
+        for (const [key, nested] of Object.entries(value)) {
+            keys.push(key);
+            if (nested && typeof nested === 'object') pending.push(nested);
+        }
+    }
+    const loadedScripts = Array.from(document.scripts || [])
+        .map((script) => String(script?.src || ''))
+        .join(' ');
+    return !!(
+        window.TavernDB
+        || window.TavernDBAPI
+        || window.SP_DATABASE
+        || /(?:tavern[_ -]?db|sp[_ -]?database|酒馆数据库)/iu.test(keys.join(' '))
+        // TavernDB commonly runs as a TavernHelper userscript and does not
+        // expose a stable global. Treat the host itself as a potential writer
+        // until one concrete database client registers the settled-only
+        // protocol. False negatives here would permit proven pre-settlement
+        // writes; a false positive only blocks the release gate with an
+        // actionable registration instruction.
+        || loadedScripts.toLowerCase().includes('/tavernhelper/')
+    );
+}
+
+async function registerBarrierProtocolClient(input) {
+    const protocol = currentDownstreamBarrierProtocol();
+    if (!protocol) {
+        return {
+            ok: false,
+            status: 'unresolved',
+            issues: [{
+                code: 'barrier.chat_missing',
+                path: '$.chatId',
+                severity: 'error',
+                message: '当前聊天不可用，无法注册下游 barrier 协议。',
+            }],
+        };
+    }
+    const result = await protocol.register(input);
+    await inspectEnvironment();
+    return result;
+}
+
+async function barrierProtocolStatus(clientId = 'taverndb') {
+    const protocol = currentDownstreamBarrierProtocol();
+    const detected = tavernDatabaseDetected();
+    if (!protocol) {
+        return {
+            required: detected,
+            registered: false,
+            clientCount: 0,
+            errorCode: detected ? 'database.barrier_not_registered' : '',
+        };
+    }
+    const status = await protocol.clientStatus(clientId);
+    return {
+        required: detected,
+        registered: status.ok,
+        clientCount: status.ok ? 1 : 0,
+        errorCode: detected && !status.ok
+            ? 'database.barrier_not_registered'
+            : '',
+    };
+}
+
+async function acknowledgeBarrierReceipt(input) {
+    const protocol = currentDownstreamBarrierProtocol();
+    if (!protocol) {
+        return {
+            ok: false,
+            status: 'unresolved',
+            issues: [{
+                code: 'barrier.chat_missing',
+                path: '$.chatId',
+                severity: 'error',
+                message: '当前聊天不可用，无法确认终态收据。',
+            }],
+        };
+    }
+    return protocol.acknowledge(input);
 }
 
 function currentCharacter(context) {
@@ -2305,12 +2499,21 @@ function captureTarget(context, index) {
     if (!message || message.is_user || message.is_system || !message.mes?.trim()) {
         return null;
     }
+    const messageId = ensureMessageStableId(context, message, index);
+    const runtimeIdentity = ensureRuntimeTargetIdentity(
+        context,
+        message,
+        index,
+        messageId,
+    );
     return {
         chatId: context.chatId,
         index,
-        messageId: ensureMessageStableId(context, message, index),
+        messageId,
         swipeId: Number(message.swipe_id) || 0,
         fingerprint: fingerprint(message.mes),
+        branchId: runtimeIdentity.branchId,
+        generationId: runtimeIdentity.generationId,
         epoch: operationEpoch,
         generationSerial,
         generationType: lastGeneration.type || 'normal',
@@ -2336,6 +2539,18 @@ function targetIsCurrent(captured, token = null, { requireLatest = true } = {}) 
     }
     if ((Number(message.swipe_id) || 0) !== captured.swipeId) {
         return { ok: false, reason: '目标回复已经切换 swipe' };
+    }
+    const identity = ensureRuntimeTargetIdentity(
+        context,
+        message,
+        captured.index,
+        ensureMessageStableId(context, message, captured.index),
+    );
+    if (
+        identity.branchId !== captured.branchId
+        || identity.generationId !== captured.generationId
+    ) {
+        return { ok: false, reason: '目标回复 generation 或 branch 身份已经变化' };
     }
     if (fingerprint(message.mes) !== captured.fingerprint) {
         return { ok: false, reason: '目标回复正文已经变化' };
@@ -3772,30 +3987,80 @@ function estimateSocialUsageCost(usage, promptChars = 0, outputChars = 0) {
 }
 
 function socialMonthSpend(namespace = readChatNamespace(), now = Date.now()) {
-    const date = new Date(now);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    const cny = (Array.isArray(namespace?.socialAudits) ? namespace.socialAudits : [])
-        .filter((audit) => String(audit.month || '') === key)
-        .reduce((sum, audit) => {
-            const legacyFailureText = [
-                audit.summary,
-                ...(Array.isArray(audit.findings)
-                    ? audit.findings.map((finding) => finding?.reason)
-                    : []),
-            ].filter(Boolean).join(' ');
-            const failedBeforeCompletion = audit.modelCall?.completed === false
-                || (
-                    audit.modelCall?.completed === undefined
-                    && audit.usage?.estimated === true
-                    && /二审调用失败|HTTP\s*[45]\d\d|connection refused|network error|timeout/iu.test(
-                        legacyFailureText,
-                    )
-                );
-            return failedBeforeCompletion
-                ? sum
-                : sum + Math.max(0, Number(audit.usage?.cny) || 0);
-        }, 0);
-    return { key, cny: Number(cny.toFixed(6)) };
+    void namespace;
+    const key = monthlyCostKey(now);
+    const spend = monthlyCostSpend(getSettings().socialMonthlyCostLedger, key);
+    return {
+        key,
+        cny: spend.cny,
+        receiptCount: spend.receiptCount,
+        baselineIncomplete: spend.baselineIncomplete,
+    };
+}
+
+function combineSocialUsage(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    return {
+        inputTokens: list.reduce((sum, item) => sum + (Number(item?.inputTokens) || 0), 0),
+        outputTokens: list.reduce((sum, item) => sum + (Number(item?.outputTokens) || 0), 0),
+        cacheHitTokens: list.reduce((sum, item) => sum + (Number(item?.cacheHitTokens) || 0), 0),
+        cacheMissTokens: list.reduce((sum, item) => sum + (Number(item?.cacheMissTokens) || 0), 0),
+        cny: Number(list.reduce((sum, item) => sum + (Number(item?.cny) || 0), 0).toFixed(6)),
+        estimated: list.some((item) => item?.estimated === true),
+    };
+}
+
+function buildSocialStructureRepairMessages(output, changes) {
+    return [
+        {
+            role: 'system',
+            content: [
+                '你是结构修复器，只修复上一份人物关系二审输出的JSON结构。',
+                '不得重新阅读或补写剧情，不得新增路径、事实、证据或判断。',
+                '每个给定路径必须恰好返回一次，action只能是allow或revert。',
+                '只返回一个合法JSON对象，不要代码围栏。',
+                '{"verdict":"pass|warning|violation","summary":"短结论","findings":[],"decisions":[{"path":"给定路径","action":"allow|revert","reason":"短原因","evidence":""}]}',
+            ].join('\n'),
+        },
+        {
+            role: 'user',
+            content: [
+                '=== 允许的路径 ===',
+                safeJson((changes || []).map((change) => ({ path: change.path }))),
+                '=== 待修复输出 ===',
+                cropText(output || '', 6000, '待修复结构'),
+            ].join('\n'),
+        },
+    ];
+}
+
+function persistSocialCostReceipt(record) {
+    if (!record?.id || !record?.modelCall?.completed) {
+        return socialMonthSpend(readChatNamespace(), record?.createdAt);
+    }
+    const settings = getSettings();
+    const result = recordMonthlyCostReceipt(settings.socialMonthlyCostLedger, {
+        receiptId: record.id,
+        cny: record.usage?.cny,
+        month: record.month,
+        at: record.createdAt,
+    });
+    if (result.ok || result.status === 'duplicate') {
+        settings.socialMonthlyCostLedger = result.ledger;
+        saveSettings();
+    }
+    record.costReceipt = {
+        id: record.id,
+        status: result.status,
+        month: record.month,
+        cny: Math.max(0, Number(record.usage?.cny) || 0),
+    };
+    return {
+        key: record.month,
+        cny: result.spend?.cny ?? socialMonthSpend().cny,
+        receiptCount: result.spend?.receiptCount ?? 0,
+        baselineIncomplete: result.spend?.baselineIncomplete === true,
+    };
 }
 
 async function persistSocialAudit(record, expectedChatId) {
@@ -3899,12 +4164,20 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
 
     const namespace = readChatNamespace(context);
     const monthly = socialMonthSpend(namespace);
-    const overHardCap = monthly.cny >= settings.socialMonthlyHardCny;
+    // A migrated 30-entry audit window cannot prove how much was spent before
+    // its oldest retained receipt. Treat that month as closed instead of
+    // silently under-counting and exceeding the configured hard boundary.
+    const overHardCap = monthly.baselineIncomplete
+        || monthly.cny >= settings.socialMonthlyHardCny;
     let output = '';
     let parsed = null;
-    let usage = null;
+    const usageAttempts = [];
     let failureReason = '';
+    let failureCode = '';
     let modelCallCompleted = false;
+    let modelAttempts = 0;
+    let structureRepairAttempted = false;
+    const auditId = `social_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const messages = buildSocialAuditMessages({
         userText,
         replyText,
@@ -3914,12 +4187,15 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
     });
     setSocialStatus(
         overHardCap
-            ? `人物关系：本月二审已达硬上限 ¥${settings.socialMonthlyHardCny}，关系变化转为待确认`
+            ? monthly.baselineIncomplete
+                ? '人物关系：旧审计窗口无法证明本月完整费用，已安全停止自动二审，关系变化转为待确认'
+                : `人物关系：本月二审已达硬上限 ¥${settings.socialMonthlyHardCny}，关系变化转为待确认`
             : '人物关系：正在进行语义二审',
         overHardCap ? 'error' : 'busy',
     );
     if (!overHardCap) {
         try {
+            let attemptUsage = null;
             output = await callModel(messages, {
                 maxTokens: settings.socialAuditMaxTokens,
                 task: '人物关系二审',
@@ -3927,17 +4203,96 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
                 targetIndex: target.index,
                 jsonMode: true,
                 onUsage: (value) => {
-                    usage = value;
+                    attemptUsage = value;
                 },
             });
+            modelAttempts += 1;
             modelCallCompleted = true;
+            usageAttempts.push(estimateSocialUsageCost(
+                attemptUsage,
+                messages.reduce((sum, message) => sum + message.content.length, 0),
+                output.length,
+            ));
             parsed = parseSocialAuditOutput(output, relationship.changes);
-            if (parsed.error) failureReason = parsed.error;
+            if (parsed.error) {
+                structureRepairAttempted = true;
+                recordModelDiagnostic({
+                    phase: 'validation',
+                    task: '人物关系二审',
+                    channel: 'fast',
+                    status: 'failed',
+                    attempt: 1,
+                    targetIndex: target.index,
+                    failureKind: 'social-invalid-structure',
+                    reason: parsed.error,
+                    outputChars: output.length,
+                    ...structuredOutputShape(output),
+                });
+                guard = targetIsCurrent(target, token);
+                if (!guard.ok) return { status: 'stale', reason: guard.reason };
+                const repairMessages = buildSocialStructureRepairMessages(
+                    output,
+                    relationship.changes,
+                );
+                let repairUsage = null;
+                const repairedOutput = await callModel(repairMessages, {
+                    maxTokens: settings.socialAuditMaxTokens,
+                    task: '人物关系二审结构修复',
+                    channel: 'fast',
+                    targetIndex: target.index,
+                    jsonMode: true,
+                    onUsage: (value) => {
+                        repairUsage = value;
+                    },
+                });
+                modelAttempts += 1;
+                usageAttempts.push(estimateSocialUsageCost(
+                    repairUsage,
+                    repairMessages.reduce(
+                        (sum, message) => sum + message.content.length,
+                        0,
+                    ),
+                    repairedOutput.length,
+                ));
+                parsed = parseSocialAuditOutput(repairedOutput, relationship.changes);
+                if (parsed.error) {
+                    failureReason = parsed.error;
+                    failureCode = 'social.invalid_structure_after_repair';
+                    recordModelDiagnostic({
+                        phase: 'validation',
+                        task: '人物关系二审结构修复',
+                        channel: 'fast',
+                        status: 'failed',
+                        attempt: 2,
+                        targetIndex: target.index,
+                        failureKind: failureCode,
+                        reason: parsed.error,
+                        outputChars: repairedOutput.length,
+                        ...structuredOutputShape(repairedOutput),
+                    });
+                } else {
+                    recordModelDiagnostic({
+                        phase: 'validation',
+                        task: '人物关系二审结构修复',
+                        channel: 'fast',
+                        status: 'recovered',
+                        attempt: 2,
+                        targetIndex: target.index,
+                        failureKind: 'social-structure-repaired',
+                        outputChars: repairedOutput.length,
+                        ...structuredOutputShape(repairedOutput),
+                    });
+                }
+            }
         } catch (error) {
             failureReason = `二审调用失败：${error.message || error}`;
+            failureCode = structureRepairAttempted
+                ? 'social.structure_repair_transport'
+                : 'social.transport_failure';
         }
     } else {
         failureReason = '达到月度费用硬上限';
+        failureCode = 'social.monthly_hard_cap';
     }
     guard = targetIsCurrent(target, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
@@ -3983,14 +4338,10 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         estimated: false,
     };
     const usageSummary = modelCallCompleted
-        ? estimateSocialUsageCost(
-            usage,
-            messages.reduce((sum, message) => sum + message.content.length, 0),
-            output.length,
-        )
+        ? combineSocialUsage(usageAttempts)
         : zeroUsage;
     const record = {
-        id: `social_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        id: auditId,
         createdAt: Date.now(),
         month: monthly.key,
         mode: settings.socialAuditMode,
@@ -4004,13 +4355,17 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         modelCall: {
             attempted: !overHardCap,
             completed: modelCallCompleted,
+            attempts: modelAttempts,
+            structureRepairAttempted,
             fallback: overHardCap || reviewFailed,
             failureReason: reviewFailed ? failureReason : '',
+            failureCode: reviewFailed || overHardCap ? failureCode : '',
         },
         relationshipChangeCount: relationship.changes.length,
         omittedRelationshipChanges: relationship.omitted,
         promptProposalSanitization: deepClone(lastSocialPromptSanitization),
     };
+    const ledgerAfter = persistSocialCostReceipt(record);
 
     const rollbackOps = buildSocialRollbackOps(relationship.changes, parsed.decisions);
     let correction = { status: 'nochange' };
@@ -4052,7 +4407,7 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         reason: correction.reason || '',
     };
     await persistSocialAudit(record, target.chatId);
-    const monthAfter = Number((monthly.cny + record.usage.cny).toFixed(6));
+    const monthAfter = ledgerAfter.cny;
     if (correction.status === 'failed') {
         setSocialStatus(`人物关系：二审或安全回退失败：${correction.reason}`, 'error');
     } else if (reviewFailed) {
@@ -5307,6 +5662,8 @@ function capturedTargetKey(captured) {
         captured.index,
         captured.messageId,
         captured.swipeId,
+        captured.generationId,
+        captured.branchId,
         captured.fingerprint,
     ].join(':');
 }
@@ -5318,11 +5675,44 @@ function capturedBranchKey(captured) {
         captured.index,
         captured.messageId,
         captured.swipeId,
+        captured.branchId,
     ].join(':');
 }
 
 function targetSettlementKey(chatId, targetIndex) {
     return `${String(chatId || '')}:${Number(targetIndex)}`;
+}
+
+function targetSettlementIdentityKey(captured) {
+    return [
+        captured?.chatId || '',
+        captured?.index ?? captured?.targetIndex ?? -1,
+        captured?.messageId || '',
+        captured?.swipeId ?? captured?.initialSwipeId ?? -1,
+        captured?.generationId || '',
+        captured?.branchId || '',
+        captured?.fingerprint || captured?.initialFingerprint || '',
+    ].join(':');
+}
+
+function persistedTerminalBarrierForCaptured(captured) {
+    return phase6BarrierHistory(readChatNamespace())
+        .filter((entry) => (
+            ['settled', 'failed', 'stale'].includes(entry?.state)
+            && entry.chatId === captured?.chatId
+            && Number(entry.targetIndex) === Number(captured?.index)
+            && String(entry.messageId || '') === String(captured?.messageId || '')
+            && Number(entry.finalSwipeId ?? entry.initialSwipeId)
+                === Number(captured?.swipeId)
+            && String(entry.finalFingerprint || entry.initialFingerprint || '')
+                === String(captured?.fingerprint || '')
+            && String(entry.generationId || '') === String(captured?.generationId || '')
+            && String(entry.branchId || '') === String(captured?.branchId || '')
+        ))
+        .sort((left, right) => (
+            Number(right.terminalAt ?? right.updatedAt ?? 0)
+            - Number(left.terminalAt ?? left.updatedAt ?? 0)
+        ))[0] || null;
 }
 
 function safeSettlementResult(record, status, extra = {}) {
@@ -5331,13 +5721,15 @@ function safeSettlementResult(record, status, extra = {}) {
         chatId: record?.chatId || '',
         targetIndex: Number(record?.targetIndex),
         serial: Number(record?.serial) || 0,
+        generationId: record?.generationId || '',
+        branchId: record?.branchId || '',
         ...extra,
     };
 }
 
 async function persistTargetSettlementBarrier(record, state, extra = {}) {
     const adapter = createChatRuntimeAdapter(record.chatId);
-    const storageKey = `legacy-narrative-barrier:${record.key}`;
+    const storageKey = `legacy-narrative-barrier:${record.identityKey}`;
     for (let attempt = 0; attempt < 12; attempt += 1) {
         const current = await adapter.read(storageKey);
         const value = {
@@ -5349,6 +5741,9 @@ async function persistTargetSettlementBarrier(record, state, extra = {}) {
             messageId: record.messageId,
             initialSwipeId: record.initialSwipeId,
             initialFingerprint: record.initialFingerprint,
+            generationId: record.generationId,
+            branchId: record.branchId,
+            targetDigest: fingerprint(record.identityKey),
             state,
             registeredAt: record.registeredAt,
             updatedAt: Date.now(),
@@ -5374,17 +5769,21 @@ async function transitionTargetSettlement(record, state, extra = {}) {
     return value;
 }
 
-function createTargetSettlementRecord(captured) {
+async function createTargetSettlementRecord(captured) {
     if (!captured) return null;
     const key = targetSettlementKey(captured.chatId, captured.index);
+    const identityKey = targetSettlementIdentityKey(captured);
     const record = {
         key,
+        identityKey,
         serial: ++targetSettlementSerial,
         chatId: captured.chatId,
         targetIndex: captured.index,
         messageId: captured.messageId,
         initialSwipeId: captured.swipeId,
         initialFingerprint: captured.fingerprint,
+        generationId: captured.generationId,
+        branchId: captured.branchId,
         registeredAt: Date.now(),
         settledAt: 0,
         state: 'captured',
@@ -5393,8 +5792,29 @@ function createTargetSettlementRecord(captured) {
         promise: null,
         ready: null,
     };
-    targetSettlementRecords.set(key, record);
+    const persisted = persistedTerminalBarrierForCaptured(captured);
+    if (persisted) {
+        record.persisted = deepClone(persisted);
+        record.state = persisted.state;
+        record.pending = false;
+        record.settledAt = Number(persisted.settledAt) || Date.now();
+        record.recoveredTerminal = true;
+        record.result = safeSettlementResult(record, persisted.state, {
+            messageId: persisted.messageId || record.messageId,
+            swipeId: persisted.finalSwipeId ?? record.initialSwipeId,
+            fingerprint: persisted.finalFingerprint || record.initialFingerprint,
+            generationId: persisted.generationId || record.generationId,
+            branchId: persisted.branchId || record.branchId,
+            workflowStatus: 'recovered-terminal',
+            reason: persisted.terminalReason || '',
+        });
+        record.ready = Promise.resolve(record.persisted);
+        record.promise = Promise.resolve(record.result);
+        targetSettlementRecords.set(key, record);
+        return record;
+    }
     record.ready = transitionTargetSettlement(record, 'captured');
+    targetSettlementRecords.set(key, record);
     return record;
 }
 
@@ -5409,6 +5829,8 @@ function attachTargetSettlement(record, settlementPromise) {
                 context?.chatId !== record.chatId
                 || !current
                 || current.messageId !== record.messageId
+                || current.generationId !== record.generationId
+                || current.branchId !== record.branchId
             ) {
                 return safeSettlementResult(record, 'stale', {
                     reason: '聊天、楼层或回复分支已经变化',
@@ -5419,6 +5841,8 @@ function attachTargetSettlement(record, settlementPromise) {
                     messageId: current.messageId,
                     swipeId: current.swipeId,
                     fingerprint: current.fingerprint,
+                    generationId: current.generationId,
+                    branchId: current.branchId,
                     workflowStatus: workflowResult.status,
                     reason: workflowResult.reason || '医生流程目标已经失效',
                 });
@@ -5430,6 +5854,8 @@ function attachTargetSettlement(record, settlementPromise) {
                     messageId: current.messageId,
                     swipeId: current.swipeId,
                     fingerprint: current.fingerprint,
+                    generationId: current.generationId,
+                    branchId: current.branchId,
                     workflowStatus: workflowResult.status,
                     reason: workflowResult.reason || '医生流程未能安全完成',
                 });
@@ -5438,6 +5864,8 @@ function attachTargetSettlement(record, settlementPromise) {
                 messageId: current.messageId,
                 swipeId: current.swipeId,
                 fingerprint: current.fingerprint,
+                generationId: current.generationId,
+                branchId: current.branchId,
                 workflowStatus: workflowResult?.status || 'completed',
                 reason: workflowResult?.reason || '',
             });
@@ -5458,9 +5886,40 @@ function attachTargetSettlement(record, settlementPromise) {
                 messageId: result.messageId || record.messageId,
                 finalSwipeId: result.swipeId,
                 finalFingerprint: result.fingerprint || '',
+                generationId: result.generationId || record.generationId,
+                branchId: result.branchId || record.branchId,
                 workflowStatus: result.workflowStatus || '',
                 terminalReason: result.reason || '',
-            }).then(() => result);
+            }).then(async () => {
+                const protocol = currentDownstreamBarrierProtocol();
+                if (!protocol) return result;
+                try {
+                    const receipt = await protocol.issue({
+                        ...record.persisted,
+                        id: record.persisted?.id || `barrier:${record.serial}`,
+                        state: result.status,
+                    });
+                    return {
+                        ...result,
+                        receipt: receipt
+                            ? {
+                                id: receipt.id,
+                                barrierState: receipt.barrierState,
+                                targetDigest: receipt.targetDigest,
+                                permittedAction: receipt.permittedAction,
+                                writeAllowed: receipt.writeAllowed,
+                            }
+                            : null,
+                    };
+                } catch (error) {
+                    console.warn('[MVU Auto Doctor] 下游终态收据持久化失败：', error);
+                    return {
+                        ...result,
+                        receipt: null,
+                        receiptErrorCode: 'barrier.receipt_persist_failed',
+                    };
+                }
+            });
         })
         .then((result) => {
             try {
@@ -5472,7 +5931,10 @@ function attachTargetSettlement(record, settlementPromise) {
                         messageId: result.messageId,
                         swipeId: result.swipeId,
                         fingerprint: result.fingerprint,
+                        generationId: result.generationId,
+                        branchId: result.branchId,
                         workflowStatus: result.workflowStatus,
+                        receipt: result.receipt,
                     },
                 }));
                 if (result.status === 'settled') {
@@ -5484,7 +5946,10 @@ function attachTargetSettlement(record, settlementPromise) {
                             messageId: result.messageId,
                             swipeId: result.swipeId,
                             fingerprint: result.fingerprint,
+                            generationId: result.generationId,
+                            branchId: result.branchId,
                             workflowStatus: result.workflowStatus,
+                            receipt: result.receipt,
                         },
                     }));
                 }
@@ -5494,9 +5959,9 @@ function attachTargetSettlement(record, settlementPromise) {
     return record;
 }
 
-function registerTargetSettlement(captured, settlementPromise) {
+async function registerTargetSettlement(captured, settlementPromise) {
     return attachTargetSettlement(
-        createTargetSettlementRecord(captured),
+        await createTargetSettlementRecord(captured),
         settlementPromise,
     );
 }
@@ -5523,6 +5988,25 @@ async function waitForTargetSettled(
         record = targetSettlementRecords.get(key);
     }
     if (!record) {
+        const captured = captureTarget(context, resolved);
+        if (captured) {
+            const persisted = persistedTerminalBarrierForCaptured(captured);
+            if (persisted) {
+                return {
+                    status: persisted.state,
+                    chatId: captured.chatId,
+                    targetIndex: captured.index,
+                    serial: Number(String(persisted.id || '').split(':').at(-1)) || 0,
+                    messageId: persisted.messageId || captured.messageId,
+                    swipeId: persisted.finalSwipeId ?? captured.swipeId,
+                    fingerprint: persisted.finalFingerprint || captured.fingerprint,
+                    generationId: persisted.generationId || captured.generationId,
+                    branchId: persisted.branchId || captured.branchId,
+                    workflowStatus: 'recovered-terminal',
+                    reason: persisted.terminalReason || '',
+                };
+            }
+        }
         return {
             status: 'unmanaged',
             chatId: context.chatId,
@@ -5582,6 +6066,8 @@ async function runAfterTargetSettled(targetIndex, reader, options = {}) {
         !current
         || current.messageId !== barrier.messageId
         || current.swipeId !== barrier.swipeId
+        || current.generationId !== barrier.generationId
+        || current.branchId !== barrier.branchId
         || current.fingerprint !== barrier.fingerprint
     ) {
         return {
@@ -5598,6 +6084,8 @@ async function runAfterTargetSettled(targetIndex, reader, options = {}) {
             targetIndex: barrier.targetIndex,
             messageId: barrier.messageId,
             swipeId: barrier.swipeId,
+            generationId: barrier.generationId,
+            branchId: barrier.branchId,
             fingerprint: barrier.fingerprint,
             narrative: String(context.chat[barrier.targetIndex]?.mes || ''),
         }),
@@ -5791,13 +6279,26 @@ function undoLast() {
     });
 }
 
-function recentTranscriptThrough(context, targetIndex, limit) {
+function recentTranscriptThrough(
+    context,
+    targetIndex,
+    limit,
+    excludedAiIndexes = new Set(),
+) {
     const chat = context?.chat || [];
     return chat
         .slice(0, targetIndex + 1)
-        .filter((message) => message && !message.is_system && typeof message.mes === 'string')
+        .map((message, index) => ({ message, index }))
+        .filter(({ message, index }) => (
+            message
+            && !message.is_system
+            && typeof message.mes === 'string'
+            && !(!message.is_user && excludedAiIndexes.has(index))
+        ))
         .slice(-Math.max(1, Number(limit) || 12))
-        .map((message) => `${message.is_user ? '用户' : 'AI'}：${stripMechanism(message.mes)}`)
+        .map(({ message }) => (
+            `${message.is_user ? '用户' : 'AI'}：${stripMechanism(message.mes)}`
+        ))
         .join('\n\n');
 }
 
@@ -6110,22 +6611,30 @@ function preserveMissingThreadClockFields(previous, next, rawThreads) {
     return next;
 }
 
-function continuityTicksDue(context, base, captured) {
+function phase6BarrierHistory(namespace = readChatNamespace()) {
+    return Object.entries(phase6RuntimeState(namespace).records)
+        .filter(([key, record]) => (
+            key.startsWith('legacy-narrative-barrier:')
+            && isPlainObject(record?.value)
+        ))
+        .map(([, record]) => deepClone(record.value));
+}
+
+function continuityTickPlan(context, base, captured, namespace = readChatNamespace(context)) {
     const lastIndex = Number(base?.lastSource?.index);
     const start = Number.isInteger(lastIndex) && lastIndex >= 0 ? lastIndex + 1 : 1;
-    const count = (context?.chat || [])
-        .slice(start, captured.index + 1)
-        .filter((message) => (
-            message
-            && !message.is_user
-            && !message.is_system
-            && typeof message.mes === 'string'
-            && message.mes.trim()
-        ))
-        .length;
+    const sourcePlan = buildContinuitySourcePlan({
+        messages: context?.chat || [],
+        fromIndex: start,
+        toIndex: captured.index,
+        barrierHistory: phase6BarrierHistory(namespace),
+    });
     // Rerolls and legacy ledgers may already point at this floor. They still
     // need exactly one recomputation from the branch checkpoint.
-    return Math.max(1, count);
+    return {
+        ...sourcePlan,
+        ticksDue: Math.max(1, sourcePlan.eligibleCount),
+    };
 }
 
 function buildContinuityMessages({
@@ -6137,6 +6646,7 @@ function buildContinuityMessages({
     worldContext,
     stateAnchors,
     retryReason = '',
+    excludedSourceIndexes = [],
 }) {
     const settings = getSettings();
     const jsonOnly = (
@@ -6304,6 +6814,7 @@ function buildContinuityMessages({
                 context,
                 captured.index,
                 settings.continuityContextMessages,
+                new Set(excludedSourceIndexes),
             ),
             18000,
             '支线剧情上下文',
@@ -6398,7 +6909,33 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     }
     const director = detectContinuityDirector(context, messageText, markers);
     setContinuityStatus('世界连续性：正在整理因果…', 'busy');
-    const ticksDue = continuityTicksDue(context, base, captured);
+    const sourcePlan = continuityTickPlan(context, base, captured, namespace);
+    const ticksDue = sourcePlan.ticksDue;
+    namespace.continuitySourceReceipts = [
+        ...sourcePlan.receipts.map((receipt) => ({
+            ...receipt,
+            targetIndex: captured.index,
+            checkedAt: Date.now(),
+        })),
+        ...(Array.isArray(namespace.continuitySourceReceipts)
+            ? namespace.continuitySourceReceipts
+            : []),
+    ].filter((receipt, index, list) => (
+        list.findIndex((candidate) => (
+            candidate.sourceIndex === receipt.sourceIndex
+            && candidate.targetIndex === receipt.targetIndex
+            && candidate.barrierId === receipt.barrierId
+        )) === index
+    )).slice(0, 500);
+    await writeChatNamespace(namespace, captured.chatId, {
+        fields: ['continuitySourceReceipts'],
+    });
+    if (sourcePlan.skippedCount > 0) {
+        setContinuityStatus(
+            `世界连续性：永久跳过 ${sourcePlan.skippedCount} 个 failed/stale 来源，正在处理 ${ticksDue} 个可用回合…`,
+            'busy',
+        );
+    }
     if (ticksDue > 1) {
         setContinuityStatus(`世界连续性：正在补记 ${ticksDue} 个尚未落账的 AI 回合…`, 'busy');
     }
@@ -6444,6 +6981,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             worldContext,
             stateAnchors,
             retryReason,
+            excludedSourceIndexes: sourcePlan.skippedIndexes,
         });
         let output = '';
         let validOutput = false;
@@ -6659,6 +7197,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 'continuityCheckpoint',
                 'continuityDirector',
                 'continuityDetected',
+                'continuitySourceReceipts',
             ],
         });
     }
@@ -10040,6 +10579,7 @@ function bindEvents() {
             generationSerial += 1;
             lastGeneration = {
                 serial: generationSerial,
+                id: `generation:${Date.now().toString(36)}:${generationSerial.toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
                 type: generationType,
                 dryRun: false,
             };
@@ -10054,14 +10594,17 @@ function bindEvents() {
     );
     context.eventSource.on(
         types.MESSAGE_RECEIVED || 'message_received',
-        (value) => {
+        async (value) => {
             const index = resolveMessageId(value);
             const current = getContext();
             const latest = latestAiMessage(current);
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
-            const barrierRecord = createTargetSettlementRecord(captured);
+            const barrierRecord = await createTargetSettlementRecord(captured);
+            if (barrierRecord.recoveredTerminal) {
+                return barrierRecord.result;
+            }
             let settledTarget = null;
             const settled = barrierRecord.ready
                 .then(() => waitAutomaticTargetSettled(captured))
@@ -10247,6 +10790,14 @@ function bindEvents() {
             forumPendingKeys.clear();
             forumCompletedKeys.clear();
             targetSettlementRecords.clear();
+            downstreamBarrierProtocol = null;
+            downstreamBarrierProtocolChatId = '';
+            lastGeneration = {
+                serial: generationSerial,
+                id: '',
+                type: 'normal',
+                dryRun: false,
+            };
             presetContinuityCache = { checkedAt: 0, active: false };
             lastUndo = latestUndoRecord(readChatNamespace());
             lastInjectionInspection = {
@@ -10466,10 +11017,13 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 4,
-        isCompatible: (required = 1) => Number(required) <= 4,
+        apiVersion: 5,
+        isCompatible: (required = 1) => Number(required) <= 5,
         waitForTargetSettled,
         runAfterTargetSettled,
+        registerBarrierProtocolClient,
+        getBarrierProtocolStatus: barrierProtocolStatus,
+        acknowledgeBarrierReceipt,
         executeBarrieredDomainTransaction: executeDualSurfacePlan,
         runLatest: () => enqueue(null, { manual: true }),
         auditHardContracts: () => enqueueHardContractAudit(null, { manual: true }),
@@ -10508,6 +11062,7 @@ function initialize() {
         getInjectionInspection: () => deepClone(lastInjectionInspection),
         getModelCallStats: () => deepClone(normalizedModelCallStats(modelCallStats)),
         getModelDiagnostics: () => deepClone(normalizedModelDiagnostics(modelDiagnostics)),
+        getDiagnosticProjection: () => deepClone(diagnosticPayload()),
         getLastPromptInfo: () => lastPromptSnapshot
             ? {
                 task: lastPromptSnapshot.task,
@@ -10522,6 +11077,16 @@ function initialize() {
             : null,
         exportDiagnosticPackage,
     });
+    try {
+        window.dispatchEvent(new CustomEvent('mvu-auto-doctor-barrier-protocol-ready', {
+            detail: {
+                protocolVersion: 1,
+                apiVersion: 5,
+                settledOnly: true,
+                terminalReceipts: true,
+            },
+        }));
+    } catch {}
     console.info(`[MVU Auto Doctor] v${VERSION} initialized`);
 }
 

@@ -17,3 +17,16 @@ export {
     buildReplayAutomationReport,
     runPhase6Replay,
 } from './replay.mjs';
+export {
+    DownstreamBarrierProtocol,
+    downstreamReceiptId,
+    validateBarrierClientRegistration,
+} from './downstream.mjs';
+export {
+    monthlyCostKey,
+    monthlyCostSpend,
+    normalizeMonthlyCostLedger,
+    recordMonthlyCostReceipt,
+    seedMonthlyCostLedgerFromAudits,
+} from './social-ledger.mjs';
+export { buildContinuitySourcePlan } from './continuity-receipts.mjs';

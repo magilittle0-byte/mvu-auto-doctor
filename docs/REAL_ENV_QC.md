@@ -232,6 +232,32 @@ downstream behavior changes.
    durations. Do not record final narrative, a full prompt, raw payload or
    credential. Use `docs/2.0/PHASE_6_REAL_QC_TEMPLATE.json`.
 
+### 5C.1 External TavernDB registration
+
+TavernDB may run inside TavernHelper without exposing a stable global. Therefore the
+presence of TavernHelper is treated as a potential external database writer until one
+concrete database client registers API v5 barrier protocol v1 with all of:
+
+```json
+{
+  "id": "taverndb",
+  "protocolVersion": 1,
+  "settledOnly": true,
+  "terminalReceipts": true
+}
+```
+
+The real database integration must then prove that it consumes the terminal receipt,
+re-reads the final target only for `settled`, acknowledges `read-final-and-write`, and
+acknowledges `abandon` for `failed/stale`. A database listener that still consumes
+`MESSAGE_RECEIVED` directly is not compatible, even when its writes appear successful.
+
+If registration is absent, require the environment self-check to show exactly
+`数据库未注册 barrier 协议`. Record `result=blocked`, do not run or claim the remaining
+release-promotion checks, and do not update `main` or the release-candidate branch.
+The scoped blocked-evidence receipt may authorize only the exact independent review
+branch named in the report; the tracked pre-push hook rejects every other remote ref.
+
 ## 6. Automated suite
 
 Run the complete suite and wait for the browser runtime file to finish:
@@ -263,6 +289,9 @@ git push
 `qc:record` binds the ignored local receipt to the exact committed `HEAD` and report
 hash. Any later code edit, amended commit, version change, report change, expiration,
 or dirty tracked file invalidates the receipt and blocks the tracked pre-push hook.
+For a fail-closed external-database result, these commands validate and bind the
+blocked evidence rather than converting it into a release pass. Only the report's
+single independent branch ref can be pushed; promotion refs remain forbidden.
 
 ## Failure rule
 
