@@ -1286,7 +1286,7 @@
         ]
       },
       "automation": {
-        "status": "structural-only",
+        "status": "unit-active",
         "activateAt": "phase-7",
         "futureTestId": "replay.release.real_qc_wins"
       }

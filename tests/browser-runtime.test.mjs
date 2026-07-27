@@ -742,7 +742,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '1.9.0');
+    assert.equal(continuity.version, '2.0.0-rc.1');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -794,6 +794,7 @@ try {
     assert.match(continuity.calls.forumSystem, /不可信引用数据/u);
     const diagnosticsUi = await page.evaluate(async () => {
         const t = window.__TEST__;
+        const registrationBeforeInspection = window.MvuAutoDoctorAPI.getInjectionInspection();
         const injection = Object.values(t.calls.extensionPrompts)
             .find((entry) => entry.name === 'mvu-auto-doctor-continuity');
         const assembledChat = Object.values(t.calls.extensionPrompts)
@@ -814,6 +815,7 @@ try {
                 t.context.chatMetadata.mvu_auto_doctor?.modelCallStats || {},
             ),
             hostPrompt: structuredClone(injection || null),
+            registrationBeforeInspection,
             injection: window.MvuAutoDoctorAPI.getInjectionInspection(),
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
@@ -837,6 +839,16 @@ try {
         diagnosticsUi.hostPrompt.role,
         0,
         'SillyTavern setExtensionPrompt 必须使用数值 SYSTEM=0；字符串system会变成NaN并被最终提示词过滤',
+    );
+    assert.equal(
+        diagnosticsUi.registrationBeforeInspection.registered,
+        true,
+        '诊断必须区分已注册但尚未观察最终提示词的注入',
+    );
+    assert.equal(
+        diagnosticsUi.registrationBeforeInspection.socialRegistered,
+        true,
+        '人物动机合同注册状态不能在提示词事件前误报为 false',
     );
     assert.equal(diagnosticsUi.modelCalls.currentRun.total, 3, '本次生成统计应与聊天累计分开保存');
     assert.deepEqual(diagnosticsUi.modelCalls.currentRun.byTask, {
@@ -1129,6 +1141,48 @@ try {
         orbBeforeOpen.documentScrollWidth,
         orbBeforeOpen.documentClientWidth,
         `收起的悬浮球不得扩大移动端横向滚动范围：${JSON.stringify(orbBeforeOpen)}`,
+    );
+    const tuckedOrbHitTargets = await page.evaluate(() => {
+        const storageKey = 'mvu-auto-doctor-orb-position-v1';
+        const orb = document.querySelector('#mvuad-floating-orb');
+        const probe = (side) => {
+            localStorage.setItem(storageKey, JSON.stringify({
+                side,
+                top: 260,
+                tucked: true,
+            }));
+            window.dispatchEvent(new Event('resize'));
+            const rect = orb.getBoundingClientRect();
+            const x = side === 'right' ? rect.right - 43 : rect.left + 43;
+            const y = rect.top + (rect.height / 2);
+            return {
+                side,
+                x,
+                y,
+                hit: orb.contains(document.elementFromPoint(x, y)),
+            };
+        };
+        const result = {
+            right: probe('right'),
+            left: probe('left'),
+        };
+        localStorage.setItem(storageKey, JSON.stringify({
+            side: 'right',
+            top: 260,
+            tucked: true,
+        }));
+        window.dispatchEvent(new Event('resize'));
+        return result;
+    });
+    assert.equal(
+        tuckedOrbHitTargets.right.hit,
+        true,
+        `右侧缩边悬浮球必须保留至少44px触控宽度：${JSON.stringify(tuckedOrbHitTargets)}`,
+    );
+    assert.equal(
+        tuckedOrbHitTargets.left.hit,
+        true,
+        `左侧缩边悬浮球必须保留至少44px触控宽度：${JSON.stringify(tuckedOrbHitTargets)}`,
     );
     await page.evaluate(() => {
         /*
@@ -1744,7 +1798,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '1.9.0');
+    assert.equal(lifecycle.version, '2.0.0-rc.1');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -3458,6 +3512,14 @@ try {
     assert.equal(missingCloseDiagnosticResult.calls, 1);
     const recoveredDiagnostic = missingCloseDiagnosticResult.diagnostics.find(
         (entry) => entry.status === 'recovered' && entry.rootType === 'object',
+    );
+    const transportDiagnostic = missingCloseDiagnosticResult.diagnostics.find(
+        (entry) => entry.phase === 'transport' && entry.task === '变量诊断',
+    );
+    assert.equal(
+        transportDiagnostic?.targetIndex,
+        2,
+        '目标型模型调用的脱敏诊断必须保留楼层索引',
     );
     assert.ok(recoveredDiagnostic, 'local structured-output recovery must create a diagnostic entry');
     assert.deepEqual(

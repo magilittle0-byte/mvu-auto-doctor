@@ -1,12 +1,12 @@
 # MVU Auto Doctor 2.0 权威规格索引
 
-状态：`2.0-phase6`
+状态：`2.0-phase7-rc`
 
 适用范围：2.0 产品、数据协议、事务协议、真实故障回放与阶段交接
 
 最后更新：2026-07-27
 
-本目录是 2.0 实施的权威入口。阶段0冻结产品边界、协议、不变量、回放基线与交接规则；阶段1新增无宿主依赖的 `v2/domain/` 领域核；阶段2新增无宿主依赖的 `v2/transaction/` 消息身份、分支与事务内核；阶段3新增无宿主依赖的 `v2/director/` 玩家边界、H0–H3裁定、事实/知识状态机与主模型上下文合同；阶段4新增无宿主依赖的 `v2/domain-transaction/`；阶段5新增 `v2/surface/` 双源适配入口和生产导演台；阶段6新增 `v2/runtime/` 持久正文屏障、幂等/恢复存储、TaskLease/看门狗、settled-only 下游和数据库安全门，并把 API 升级为兼容 v4。当前不宣称阶段7迁移、发布硬化或2.0.0候选已经实现。
+本目录是 2.0 实施的权威入口。阶段0冻结产品边界、协议、不变量、回放基线与交接规则；阶段1至6依次实现领域、事务、导演、领域事务、双入口和持久运行时。阶段7新增 `v2/release/` 的1.x升级/回滚演练、性能/容量/隐私/安全/恢复硬化门，以及真实QC优先于模拟的发布候选门。维护者已于2026-07-27明确授权把 `2.0.0-rc.1` 非强制快进发布到 `main`；正式 `2.0.0` 仍需后续审阅决定。
 
 ## 权威文件
 
@@ -21,10 +21,15 @@
 9. [`handoffs/PHASE_3_HANDOFF.md`](handoffs/PHASE_3_HANDOFF.md)：阶段3导演层公开 API、测试证据与阶段4准确入口。
 10. [`handoffs/PHASE_4_HANDOFF.md`](handoffs/PHASE_4_HANDOFF.md)：阶段4领域事务公开 API、测试证据与阶段5准确入口。
 11. [`handoffs/PHASE_5_HANDOFF.md`](handoffs/PHASE_5_HANDOFF.md)：阶段5双入口、导演台、移动端与真实环境证据，以及阶段6准确入口。
-12. `handoffs/PHASE_6_HANDOFF.md`：阶段6稳定屏障、下游、看门狗、数据库与真实回放证据，以及阶段7准确入口（阶段6完成后生成）。
-13. [`PHASE_6_REAL_QC_TEMPLATE.json`](PHASE_6_REAL_QC_TEMPLATE.json)：不含密钥、原始载荷或私人正文的阶段6真实环境报告模板。
-14. [`replay-fixture.schema.json`](replay-fixture.schema.json)：阶段0回放语料的机器可读 JSON Schema。
-15. [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)：脱敏、最小化的真实故障回放基线。
+12. [`handoffs/PHASE_6_HANDOFF.md`](handoffs/PHASE_6_HANDOFF.md)：阶段6稳定屏障、下游、看门狗、数据库与真实回放证据，以及阶段7准确入口。
+13. [`handoffs/PHASE_7_HANDOFF.md`](handoffs/PHASE_7_HANDOFF.md)：阶段7迁移、发布硬化、候选包、真实QC与维护者审阅入口。
+14. [`PHASE_6_REAL_QC_TEMPLATE.json`](PHASE_6_REAL_QC_TEMPLATE.json)：不含密钥、原始载荷或私人正文的阶段6真实环境报告模板。
+15. [`MIGRATION_ROLLBACK_GUIDE.md`](MIGRATION_ROLLBACK_GUIDE.md)：1.x惰性升级、可读回退和保守恢复步骤。
+16. [`USER_GUIDE_2.0_RC.md`](USER_GUIDE_2.0_RC.md)：RC安装、日常使用、伴生脚本共存测试和回滚说明。
+17. [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)：2.0.0 RC自动门、真实门、隐私门与发布门。
+18. [`2.1_OPEN_ITEMS.md`](2.1_OPEN_ITEMS.md)：明确推迟到2.1的未决范围。
+19. [`replay-fixture.schema.json`](replay-fixture.schema.json)：阶段0回放语料的机器可读 JSON Schema。
+20. [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)：脱敏、最小化的真实故障回放基线。
 
 ## 冲突处理
 
@@ -34,7 +39,7 @@
 - 阶段范围与“何时可以进入下一阶段”，以 `PHASE_ROADMAP.md` 为准。
 - 若规范与已发布的1.x运行时行为冲突，2.0实现必须通过兼容适配器迁移，不能直接覆盖旧数据。
 
-## 阶段0—6验证
+## 阶段0—7验证
 
 ```powershell
 node --test tests/v2-replay-fixtures.test.mjs
@@ -45,6 +50,7 @@ node --test tests/v2-domain-transaction-core.test.mjs tests/v2-domain-transactio
 node --test tests/v2-surface-core.test.mjs tests/v2-surface-browser.test.mjs
 node --test tests/v2-runtime-core.test.mjs tests/v2-runtime-replays.test.mjs
 npm.cmd run qc:phase6:replay
+npm.cmd run qc:phase7:replay
 ```
 
-前六条命令保持阶段0—5全部不变量。第七条验证持久幂等/恢复、`captured → repairing → state-committing → settled`、failed/stale零下游、TaskLease硬超时、迟到结果零写入，以及数据库长度/参数化/修订冲突联合拒绝。最后一条自动执行全部V2测试并生成17例矩阵报告。阶段7真实发布候选门仍为 `structural-only`，不会在默认 CI 中制造未来阶段的假失败。
+前六条命令保持阶段0—5全部不变量。第七条验证持久幂等/恢复、`captured → repairing → state-committing → settled`、failed/stale零下游、TaskLease硬超时、迟到结果零写入，以及数据库长度/参数化/修订冲突联合拒绝。阶段6报告保留历史证据；阶段7命令执行全部V2测试并生成17/17行为矩阵，真实环境失败会正式阻断候选。

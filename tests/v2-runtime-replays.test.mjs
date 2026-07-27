@@ -138,7 +138,7 @@ test('replay.database.safety — RR-DATABASE-LENGTH-SQL-CONCURRENCY', async () =
     assert.equal(result.pass, true);
 });
 
-test('phase-6 report covers the complete matrix without promoting phase-7 release gate', async () => {
+test('phase-6 report covers the complete matrix after phase-7 release gate activation', async () => {
     const results = [
         { id: 'RR-REPAIR-DB-BARRIER', pass: true },
         { id: 'RR-TASK-WATCHDOG', pass: true },
@@ -152,6 +152,6 @@ test('phase-6 report covers the complete matrix without promoting phase-7 releas
     const release = report.cases.find(
         (entry) => entry.id === 'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
     );
-    assert.equal(release.automation, 'structural-only');
+    assert.equal(release.automation, 'unit-active');
     assert.equal(release.status, 'covered-by-phase-suite');
 });

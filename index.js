@@ -85,7 +85,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '1.9.0';
+const VERSION = '2.0.0-rc.1';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 8;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -3604,6 +3604,9 @@ async function callModel(messages, options = {}) {
     syncTaskCancelButtons();
     const task = String(options.task || '模型任务');
     const channel = options.channel === 'fast' ? 'fast' : 'strict';
+    const diagnosticTargetIndex = Number.isInteger(Number(options.targetIndex))
+        ? Number(options.targetIndex)
+        : -1;
     const profile = directProfile(settings, channel);
     const connectionKey = modelConnectionKey(profile);
     const queuedAt = Date.now();
@@ -3634,6 +3637,7 @@ async function callModel(messages, options = {}) {
                     provider: profile.provider,
                     model: profile.model,
                     status: 'succeeded',
+                    targetIndex: diagnosticTargetIndex,
                     durationMs: Date.now() - callStartedAt,
                     queueWaitMs: callStartedAt - queuedAt,
                     outputChars: String(output || '').length,
@@ -3720,6 +3724,7 @@ async function callModel(messages, options = {}) {
                     provider: profile.provider,
                     model: profile.model,
                     status: 'failed',
+                    targetIndex: diagnosticTargetIndex,
                     durationMs: Date.now() - callStartedAt,
                     queueWaitMs: callStartedAt - queuedAt,
                     failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
@@ -3919,6 +3924,7 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
                 maxTokens: settings.socialAuditMaxTokens,
                 task: '人物关系二审',
                 channel: 'fast',
+                targetIndex: target.index,
                 jsonMode: true,
                 onUsage: (value) => {
                     usage = value;
@@ -5056,6 +5062,7 @@ async function runTarget(targetId, {
             output = await callModel(built.messages, {
                 maxTokens: built.maxTokens,
                 task: '变量诊断',
+                targetIndex: resolved,
             });
         } catch (error) {
             candidate = {
@@ -5867,6 +5874,7 @@ function registerSocialInjection(content) {
                 0,
             );
             lastRegisteredSocialContent = registeredContent;
+            lastInjectionInspection.socialRegistered = !!registeredContent;
             return true;
         }
         if (typeof context?.registerInjection === 'function') {
@@ -5879,6 +5887,7 @@ function registerSocialInjection(content) {
                 });
             }
             lastRegisteredSocialContent = registeredContent;
+            lastInjectionInspection.socialRegistered = !!registeredContent;
             return true;
         }
         if (Array.isArray(context?.extensionPrompts)) {
@@ -5894,12 +5903,14 @@ function registerSocialInjection(content) {
                 });
             }
             lastRegisteredSocialContent = registeredContent;
+            lastInjectionInspection.socialRegistered = !!registeredContent;
             return true;
         }
     } catch (error) {
         console.warn('[MVU Auto Doctor] 人物动机合同注入失败：', error);
     }
     lastRegisteredSocialContent = '';
+    lastInjectionInspection.socialRegistered = false;
     return false;
 }
 
@@ -5928,6 +5939,7 @@ function registerContinuityInjection(content) {
                 0,
             );
             lastRegisteredContinuityContent = registeredContent;
+            lastInjectionInspection.registered = !!registeredContent;
             return true;
         }
         if (typeof context?.registerInjection === 'function') {
@@ -5940,6 +5952,7 @@ function registerContinuityInjection(content) {
                 });
             }
             lastRegisteredContinuityContent = registeredContent;
+            lastInjectionInspection.registered = !!registeredContent;
             return true;
         }
         if (Array.isArray(context?.extensionPrompts)) {
@@ -5955,12 +5968,14 @@ function registerContinuityInjection(content) {
                 });
             }
             lastRegisteredContinuityContent = registeredContent;
+            lastInjectionInspection.registered = !!registeredContent;
             return true;
         }
     } catch (error) {
         console.warn('[MVU Auto Doctor] 支线账本注入失败：', error);
     }
     lastRegisteredContinuityContent = '';
+    lastInjectionInspection.registered = false;
     return false;
 }
 
@@ -6437,6 +6452,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 maxTokens: settings.continuityMaxTokens,
                 task: '活世界整理',
                 channel: 'fast',
+                targetIndex: captured.index,
                 jsonMode: true,
             });
         } catch (error) {
@@ -7046,6 +7062,7 @@ async function runForumTarget(captured, {
                 maxTokens: settings.forumMaxTokens,
                 task: '内置论坛刷新',
                 channel: 'fast',
+                targetIndex: captured.index,
                 jsonMode: true,
             });
         } catch (error) {

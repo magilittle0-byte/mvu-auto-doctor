@@ -629,13 +629,17 @@
 #mvuad-floating-orb[data-side="right"].mvuad-orb-tucked {
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
-    clip-path: inset(0 0 0 35px);
+    /*
+     * clip-path also clips pointer hit testing. Keep at least a 44px-wide
+     * mobile target while still tucking a small visual strip into the edge.
+     */
+    clip-path: inset(0 0 0 6px);
 }
 
 #mvuad-floating-orb[data-side="left"].mvuad-orb-tucked {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
-    clip-path: inset(0 35px 0 0);
+    clip-path: inset(0 6px 0 0);
 }
 
 #mvuad-floating-orb.mvuad-orb-tucked::before {

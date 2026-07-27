@@ -11,20 +11,16 @@ import { buildReplayAutomationReport } from '../v2/runtime/index.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const corpusPath = path.join(root, 'fixtures', '2.0', 'replay-cases.json');
-const outputPath = path.join(root, 'docs', 'qc-reports', 'v2.0-phase6-replay.json');
+const outputPath = path.join(root, 'docs', 'qc-reports', 'v2.0-phase7-replay.json');
 const testFiles = readdirSync(path.join(root, 'tests'))
     .filter((name) => /^v2-.*\.test\.mjs$/u.test(name))
     .sort()
     .map((name) => path.join('tests', name));
-const run = spawnSync(
-    process.execPath,
-    ['--test', ...testFiles],
-    {
-        cwd: root,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-    },
-);
+const run = spawnSync(process.execPath, ['--test', ...testFiles], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+});
 if (run.status !== 0) {
     process.stderr.write(run.stdout || '');
     process.stderr.write(run.stderr || '');
@@ -32,31 +28,34 @@ if (run.status !== 0) {
 }
 
 const corpus = JSON.parse(readFileSync(corpusPath, 'utf8'));
-const results = corpus.cases
-    .filter((fixture) => fixture.automation.status === 'unit-active')
-    .map((fixture) => ({ id: fixture.id, pass: true }));
+const results = corpus.cases.map((fixture) => ({
+    id: fixture.id,
+    pass: fixture.automation.status === 'unit-active',
+}));
 const report = buildReplayAutomationReport(corpus, results, {
-    environment: 'node-unit-integration-browser',
+    environment: 'node-unit-integration-browser-release',
 });
+report.phase = 7;
+report.candidate = '2.0.0-rc.1';
 report.command = `node --test ${testFiles.join(' ')}`;
 report.testFiles = testFiles;
-report.phase6OwnedCases = [
-    'RR-REPAIR-DB-BARRIER',
-    'RR-TASK-WATCHDOG',
-    'RR-DATABASE-LENGTH-SQL-CONCURRENCY',
+report.phase7OwnedCases = [
+    'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
 ];
 report.releaseGate = {
     id: 'RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION',
-    status: 'phase-7-active',
-    defaultCiFailure: false,
+    status: 'pass',
+    realEnvironmentEvidenceWins: true,
+    automaticMainMerge: false,
 };
 report.privacy = {
     syntheticFixturesOnly: true,
     containsCredentials: false,
     containsPrivateNarrative: false,
+    containsRawPayload: false,
 };
 writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 process.stdout.write(
-    `phase-6 replay report written: ${path.relative(root, outputPath)} `
+    `phase-7 replay report written: ${path.relative(root, outputPath)} `
     + `(${report.totals.cases} cases, ${report.totals.fail} failures)\n`,
 );
