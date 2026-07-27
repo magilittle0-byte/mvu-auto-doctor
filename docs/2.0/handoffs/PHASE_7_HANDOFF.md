@@ -64,7 +64,7 @@
 - 确定性候选包：
   `dist/05_MVU自动医生_v2.0.0-rc.1_离线候选.zip`
 - SHA-256：
-  `5c9db5f360c33a8954c0532eb33abe9864a095db6d940ce2a0c48f606d981345`
+  `94226b8818032f88995aa5cf1e221f54c676a503b63356d83b6a92ae94bc8390`
 - 连续构建两次字节级SHA一致；62个白名单文件、1343137字节。
 - 新增：
   - `docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`
@@ -160,7 +160,23 @@ automaticMainMerge=false
 - stale/failed/late零写入、settled-only下游、精确写后回读、保守恢复、
   TaskLease软取消/硬超时和数据库门保持阶段6不变量。
 
-## 7. 2.1未决项
+## 7. 在线安装/更新通道复核
+
+阶段7完成后的发布通道复核确认，用户的酒馆只能在线安装/更新。SillyTavern
+1.18.0/`8172dcd` 的官方实现同时提供：
+
+- 安装扩展时的 `Branch or tag name (optional)` 字段，并把 `branch` 交给有界
+  Git clone；
+- 已安装扩展行的分支按钮、远端分支枚举和 `/api/extensions/switch` 切换；
+- 更新动作从当前分支拉取，不会自动跳回 `main`。
+
+因此候选用户文档和README已把主路径改为在线分支切换：现有1.x安装选择
+`origin/codex/v2.0-phase7-release-candidate`，全新安装填写仓库地址和不带
+`origin/` 的候选分支。线上回滚选择 `origin/main`。该修订没有修改生产运行时，
+没有合并 `main`，并由版本一致性测试阻止说明回退为“只能本地ZIP安装”。离线包
+仍作为维护者复核产物保留，因说明文件进入包白名单而重建，SHA-256已同步更新。
+
+## 8. 2.1未决项
 
 `docs/2.0/2.1_OPEN_ITEMS.md` 记录后续候选：
 
@@ -172,7 +188,7 @@ automaticMainMerge=false
 
 这些项目不改变 `2.0.0-rc.1` 的完成门，也不授权自动合并 `main`。
 
-## 8. 远端发布证据
+## 9. 远端发布证据
 
 - 32/32个阶段7远端 blob SHA 与本地实现提交一致。
 - 远端实现 tree 与本地实现 tree 一致：

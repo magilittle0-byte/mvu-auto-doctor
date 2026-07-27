@@ -6,17 +6,28 @@
 
 ## 安装
 
-> 当前 `2.0.0-rc.1` 仍位于 Draft PR。测试候选时请按
-> [`2.0 RC 使用说明`](docs/2.0/USER_GUIDE_2.0_RC.md) 下载候选分支的离线 ZIP；
-> 下面的默认仓库地址会安装 `main` 上的稳定版。
+> 当前 `2.0.0-rc.1` 仍位于 Draft PR，尚未合并 `main`。酒馆只能在线安装或更新时，
+> 请使用仓库地址加候选分支，不要留空分支直接取得 `main`。完整步骤见
+> [`2.0 RC 使用说明`](docs/2.0/USER_GUIDE_2.0_RC.md)。
 
-在 TauriTavern 的扩展安装页面选择“从 Git 仓库安装”，粘贴：
+已有 1.x 安装：在已安装扩展列表找到“MVU 自动医生”，点击该行的分叉/分支图标，
+选择：
 
 ```text
-https://github.com/magilittle0-byte/mvu-auto-doctor
+origin/codex/v2.0-phase7-release-candidate
 ```
 
-安装后刷新一次页面。后续版本可直接使用扩展管理里的“更新”功能，不需要重新下载压缩包。
+确认切换后刷新页面。以后点击该扩展的“更新”会继续更新这个候选分支。
+
+全新在线安装：在 TauriTavern 的“安装扩展”页面填写：
+
+```text
+仓库地址：https://github.com/magilittle0-byte/mvu-auto-doctor
+分支或标签：codex/v2.0-phase7-release-candidate
+```
+
+安装后刷新一次页面，扩展信息应显示 `2.0.0-rc.1`。切换或安装只改变自动医生自己的
+扩展代码，不会替换数据库、骰子前端、缝合怪、推进重roll助手或其他脚本。
 
 每次收到新的 AI 回复后，扩展会：
 

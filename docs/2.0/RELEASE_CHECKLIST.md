@@ -15,6 +15,8 @@
 - [ ] 数据库600/601边界、参数化和revision冲突联合门通过。
 - [ ] 包内容只来自发布白名单，版本在 `index.js`、manifest、package与lock一致。
 - [ ] 离线候选包 SHA-256 已写入 `dist/SHA256SUMS.txt`。
+- [ ] 远端候选分支存在；SillyTavern 1.18.0 可从安装对话框指定候选分支，也可从
+      已安装扩展的分支按钮切换到 `origin/codex/v2.0-phase7-release-candidate`。
 
 ## 真实环境门
 
@@ -33,6 +35,8 @@
 - [ ] `npm.cmd run qc:ci` 通过。
 - [ ] 实现与报告提交后 `npm.cmd run qc:record` 和 `npm.cmd run qc:gate` 通过。
 - [ ] 远端阶段7提交仅以远端阶段6最终HEAD为父，blob/tree逐对象核对。
+- [ ] 用户在线安装/更新入口指向阶段7候选分支，不要求本地导入 ZIP，也不把 RC
+      伪装为已进入 `main`。
 - [ ] Draft PR base 为 `codex/v2.0-phase6-stable-barrier-replay`。
 - [ ] 远端 CI 与真实环境 QC policy 均终态成功。
 - [ ] 未推送或合并 `main`。

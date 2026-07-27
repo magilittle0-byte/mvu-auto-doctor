@@ -2,6 +2,17 @@
 
 适用候选：`2.0.0-rc.1`
 
+## 在线发布通道
+
+候选尚未合并 `main`，线上测试分支固定为
+`codex/v2.0-phase7-release-candidate`。已有安装从扩展管理器的分支按钮选择
+`origin/codex/v2.0-phase7-release-candidate`；全新安装则在仓库地址
+`https://github.com/magilittle0-byte/mvu-auto-doctor` 之外，把不带 `origin/` 的
+候选分支名填入“分支或标签”。切换完成后普通“更新”会继续跟随当前候选分支。
+
+线上回滚代码时从同一分支按钮选择 `origin/main`。分支切换只针对自动医生代码；
+数据库、骰子前端、缝合怪、推进重roll助手、聊天和角色卡均保持原位。
+
 ## 迁移原则
 
 2.0 不批量重写旧聊天。首次读取 1.x 数据时，医生建立只读 V2 sidecar 投影；1.x
