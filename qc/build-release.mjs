@@ -17,6 +17,8 @@ const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
 
 const rootFiles = [
+    'actor-shard-core.d.mts',
+    'actor-shard-core.mjs',
     'CHANGELOG.md',
     'continuity-core.mjs',
     'core.mjs',

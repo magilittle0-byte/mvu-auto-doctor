@@ -89,7 +89,7 @@ input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
 <script>
-const calls = { model: [], raw: 0, replace: [], prompts: [], extensionPrompts: {}, toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], socialSystem: '', socialUser: '', socialRuns: 0, continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
+const calls = { model: [], raw: 0, replace: [], prompts: [], extensionPrompts: {}, toasts: [], order: [], saves: 0, maxConcurrentReplacements: 0, repairSystem: '', repairUser: '', repairOptions: [], socialSystem: '', socialUser: '', socialRuns: 0, actorSystem: '', actorUser: '', actorRuns: 0, actorActive: 0, actorPeak: 0, actorBarrierStates: [], continuitySystem: '', continuityUser: '', continuityRuns: 0, forumSystem: '', forumUser: '', forumRuns: 0 };
 const listeners = {};
 let latestData = { stat_data: { 账户: { 代币: 2 } }, display_data: {} };
 let messageMvuData = null;
@@ -293,9 +293,10 @@ window.StoryOracleAPI = {
     const system = messages[0].content;
     const isSocial = system.includes('人物动机、人格自主性');
     const isSocialRepair = system.includes('人物关系二审输出的JSON结构');
+    const isActor = system.includes('NPC幕后模拟worker');
     const isContinuity = system.includes('活世界事件');
     const isForum = system.includes('独立网络论坛模拟器');
-    calls.model.push(isSocial ? 'social' : isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
+    calls.model.push(isSocial ? 'social' : isActor ? 'actor' : isContinuity ? 'continuity' : isForum ? 'forum' : 'repair');
     if (mode === 'rate-limit') {
       const error = new Error('HTTP 429: rate limit exceeded');
       error.status = 429;
@@ -303,6 +304,45 @@ window.StoryOracleAPI = {
     }
     if (mode === 'transport-error') {
       throw new Error('connection refused');
+    }
+    if (isActor) {
+      calls.actorRuns += 1;
+      calls.actorSystem = messages[0].content;
+      calls.actorUser = messages[1].content;
+      calls.actorActive += 1;
+      calls.actorPeak = Math.max(calls.actorPeak, calls.actorActive);
+      const barriers = Object.values(
+        context.chatMetadata?.mvu_auto_doctor?.phase6Runtime?.records || {},
+      ).map((entry) => entry?.value).filter((entry) => entry?.targetIndex === 2);
+      calls.actorBarrierStates.push(
+        barriers.sort((left, right) => (right?.updatedAt || 0) - (left?.updatedAt || 0))[0]?.state || '',
+      );
+      try {
+        const objects = messages[1].content
+          .split('\n')
+          .filter((line) => line.startsWith('{'))
+          .map((line) => JSON.parse(line));
+        const actor = objects[1];
+        await new Promise((resolve) => setTimeout(
+          resolve,
+          Math.abs(String(actor.actorName).charCodeAt(0)) % 7,
+        ));
+        return JSON.stringify({
+          actorId: actor.actorId,
+          actorName: actor.actorName,
+          time: '第三日午夜',
+          location: actor.possibleLocations[0] || 'unknown',
+          knowledgeBasis: [actor.limitedKnowledgeBasis[0]],
+          currentGoal: actor.currentGoalHints[0] || '继续既定目标',
+          candidateAction: '沿已知传播链继续调查',
+          interactionTargets: [],
+          sourceThreads: [actor.sourceThreads[0]],
+          evidence: [actor.evidence[0]],
+          causalChain: [actor.causalChain[0]],
+        });
+      } finally {
+        calls.actorActive -= 1;
+      }
     }
     if (!isContinuity && !isForum) {
       if (isSocial || isSocialRepair) {
@@ -768,6 +808,7 @@ try {
     assert.match(continuity.hardStatus, /硬合同/u);
     assert.match(continuity.hardDetails, /未发现可由程序确定/u);
     assert.equal(continuity.state.threads[0].id, 'WE-港城-钟楼-01');
+    assert.equal(continuity.calls.actorRuns, 0, 'Actor Shard默认关闭时不得增加模型调用');
     assert.equal(continuity.state.threads[0].origin, 'ambient');
     assert.equal(continuity.state.threads[0].relation, 'independent');
     assert.equal(continuity.state.threads[0].eventType, 'progress');
@@ -815,6 +856,14 @@ try {
             chat: assembledChat,
         });
         await new Promise((resolve) => setTimeout(resolve, 850));
+        const helperOnly = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const hiddenDatabaseScript = document.createElement('iframe');
+        hiddenDatabaseScript.id = 'TH-script--TavernDB--qc-client';
+        hiddenDatabaseScript.name = hiddenDatabaseScript.id;
+        hiddenDatabaseScript.hidden = true;
+        document.body.append(hiddenDatabaseScript);
+        const databaseScriptBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        hiddenDatabaseScript.remove();
         window.TavernDB = {};
         const databaseBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
         const databaseRegistration = await window.MvuAutoDoctorAPI
@@ -841,6 +890,8 @@ try {
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
             ),
+            helperOnly,
+            databaseScriptBefore,
             databaseBefore,
             databaseRegistration,
             databaseAfter,
@@ -886,6 +937,20 @@ try {
     assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
     assert.equal(diagnosticsUi.injection.socialLanded, true, '人物动机合同也必须进入真实最终提示词');
     assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
+    assert.equal(
+        diagnosticsUi.helperOnly.checks.find(
+            (check) => check.label.startsWith('TavernDB '),
+        ).kind,
+        'info',
+        'benign TavernHelper scripts must not be mistaken for TavernDB',
+    );
+    assert.equal(
+        diagnosticsUi.databaseScriptBefore.checks.find(
+            (check) => check.label.startsWith('TavernDB '),
+        ).kind,
+        'error',
+        'a hidden TavernDB userscript must remain fail-closed until registration',
+    );
     assert.equal(diagnosticsUi.databaseRegistration.ok, true);
     assert.equal(
         diagnosticsUi.databaseBefore.checks.find(
@@ -4329,6 +4394,138 @@ try {
     assert.equal(manualRetryResult.calls.continuityRuns, 3, '手动整理可在首次坏账本后定向重试一次');
     assert.equal(manualRetryResult.state.threads[0].id, 'WE-重试-街巷-01');
     await retryPage.close();
+
+    const actorIntegrationPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await actorIntegrationPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await actorIntegrationPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await actorIntegrationPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const mode = document.querySelector('.mvuad-actor-shard-mode');
+        mode.value = 'on';
+        mode.dispatchEvent(new Event('change', { bubbles: true }));
+        const workers = document.querySelector('.mvuad-actor-shard-workers');
+        workers.value = '2';
+        workers.dispatchEvent(new Event('change', { bubbles: true }));
+        document.querySelector('.mvuad-continuity-prompt-addon').value =
+            'PHASE9-CONTINUITY-CANARY：保留倒叙节奏。';
+        document.querySelector('.mvuad-actor-shard-prompt-addon').value =
+            'PHASE9-ACTOR-CANARY：候选行动使用短句。';
+        document.querySelector('.mvuad-actor-prompt-save').click();
+        t.context.chatMetadata.mvu_auto_doctor ||= {};
+        t.context.chatMetadata.mvu_auto_doctor.continuity = {
+            turn: 4,
+            chatId: t.context.chatId,
+            threads: [
+                {
+                    id: 'AS-ADA',
+                    title: '艾达的北港调查',
+                    kind: 'parallel',
+                    eventType: 'progress',
+                    level: 2,
+                    origin: 'setting_independent',
+                    relation: 'independent',
+                    stage: 'advancing',
+                    stageProgress: 3,
+                    summary: '艾达正在北港核对公开货单。',
+                    nextBeat: '艾达会询问夜班记录员。',
+                    trigger: '午夜换班。',
+                    seedBasis: '世界书：北港货运制度',
+                    causedBy: ['CHAIN-HARBOR'],
+                    actors: ['艾达'],
+                    locations: ['北港'],
+                    sourceRefs: [{ messageId: 'seed-ada', hash: 'hash-ada' }],
+                    knowledge: 'observed',
+                    urgency: 3,
+                },
+                {
+                    id: 'AS-BELLA',
+                    title: '贝拉的北港调查',
+                    kind: 'parallel',
+                    eventType: 'progress',
+                    level: 2,
+                    origin: 'setting_independent',
+                    relation: 'independent',
+                    stage: 'advancing',
+                    stageProgress: 2,
+                    summary: '贝拉只知道北港公开的车次变更。',
+                    nextBeat: '贝拉会对照到港名单。',
+                    trigger: '午夜换班。',
+                    seedBasis: '世界书：北港货运制度',
+                    causedBy: ['CHAIN-HARBOR'],
+                    actors: ['贝拉'],
+                    locations: ['北港'],
+                    sourceRefs: [{ messageId: 'seed-bella', hash: 'hash-bella' }],
+                    knowledge: 'observed',
+                    urgency: 2,
+                },
+            ],
+            world: {},
+        };
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await actorIntegrationPage.waitForFunction(() => (
+        window.__TEST__.calls.actorRuns === 2
+        && window.__TEST__.calls.continuityRuns === 1
+    ), null, { timeout: 30000 });
+    const actorIntegration = await actorIntegrationPage.evaluate(() => ({
+        calls: structuredClone(window.__TEST__.calls),
+        settings: structuredClone(
+            window.__TEST__.context.extensionSettings.mvu_auto_doctor,
+        ),
+        diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
+        controls: {
+            mode: document.querySelector('.mvuad-actor-shard-mode').value,
+            workers: document.querySelector('.mvuad-actor-shard-workers').value,
+            continuityPrompt: document.querySelector('.mvuad-continuity-prompt-addon').value,
+            actorPrompt: document.querySelector('.mvuad-actor-shard-prompt-addon').value,
+            hint: document.querySelector('.mvuad-actor-prompt-save-hint').textContent,
+        },
+    }));
+    assert.equal(actorIntegration.calls.actorRuns, 2);
+    assert.equal(actorIntegration.calls.actorPeak, 2, '隔离并行lane应允许两个worker并发');
+    assert.deepEqual(actorIntegration.calls.actorBarrierStates, ['settled', 'settled']);
+    assert.match(actorIntegration.calls.actorSystem, /PHASE9-ACTOR-CANARY/u);
+    assert.doesNotMatch(actorIntegration.calls.actorUser, /PHASE9-ACTOR-CANARY/u);
+    assert.match(actorIntegration.calls.continuitySystem, /PHASE9-CONTINUITY-CANARY/u);
+    assert.match(actorIntegration.calls.continuityUser, /NPC分片候选（只产提案/u);
+    assert.match(actorIntegration.calls.continuityUser, /沿已知传播链继续调查/u);
+    assert.equal(actorIntegration.settings.actorShardMode, 'on');
+    assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
+    assert.deepEqual(actorIntegration.controls, {
+        mode: 'on',
+        workers: '2',
+        continuityPrompt: 'PHASE9-CONTINUITY-CANARY：保留倒叙节奏。',
+        actorPrompt: 'PHASE9-ACTOR-CANARY：候选行动使用短句。',
+        hint: '已保存；诊断仅记录长度、哈希与启用状态',
+    });
+    assert.equal(actorIntegration.diagnostic.actorShards.status, 'completed');
+    assert.equal(actorIntegration.diagnostic.actorShards.selected, 2);
+    assert.equal(actorIntegration.diagnostic.actorShards.succeeded, 2);
+    assert.deepEqual(
+        Object.keys(actorIntegration.diagnostic.userPrompts.actorShard),
+        ['enabled', 'length', 'hash'],
+    );
+    assert.equal(
+        JSON.stringify(actorIntegration.diagnostic).includes('PHASE9-ACTOR-CANARY'),
+        false,
+    );
+    const actorReset = await actorIntegrationPage.evaluate(() => {
+        document.querySelector('.mvuad-actor-prompt-reset').click();
+        const diagnostic = window.MvuAutoDoctorAPI.getDiagnosticProjection();
+        return {
+            continuity: window.__TEST__.context.extensionSettings
+                .mvu_auto_doctor.continuityPromptAddon,
+            actor: window.__TEST__.context.extensionSettings
+                .mvu_auto_doctor.actorShardPromptAddon,
+            diagnostic: diagnostic.userPrompts,
+        };
+    });
+    assert.equal(actorReset.continuity, '');
+    assert.equal(actorReset.actor, '');
+    assert.equal(actorReset.diagnostic.continuity.enabled, false);
+    assert.equal(actorReset.diagnostic.actorShard.enabled, false);
+    await actorIntegrationPage.close();
 } finally {
     await browser.close();
     server.close();

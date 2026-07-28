@@ -50,6 +50,14 @@ import {
     WORLD_WIND_TYPE_LABELS,
 } from './continuity-core.mjs';
 import {
+    buildActorShardMessages,
+    formatUserNarrativeInstruction,
+    normalizeUserPromptSlot,
+    runActorShardBatch,
+    selectActorShardCandidates,
+    userPromptSlotMetadata,
+} from './actor-shard-core.mjs';
+import {
     applyForumUpdate,
     emptyForumState,
     extractForumUpdate,
@@ -82,6 +90,7 @@ import {
 import {
     buildContinuitySourcePlan,
     DownstreamBarrierProtocol,
+    MemoryVersionedAdapter,
     NarrativeBarrierCoordinator,
     PersistentIdempotencyStore,
     PersistentRecoveryStore,
@@ -90,6 +99,7 @@ import {
     normalizeMonthlyCostLedger,
     recordMonthlyCostReceipt,
     seedMonthlyCostLedgerFromAudits,
+    TaskLeaseManager,
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
@@ -154,6 +164,13 @@ const DEFAULTS = Object.freeze({
     continuityMaxVisible: 1,
     continuityContextMessages: 12,
     continuityMaxTokens: 12288,
+    continuityPromptAddon: '',
+    actorShardMode: 'off',
+    actorShardMaxWorkers: 2,
+    actorShardMaxTokens: 1200,
+    actorShardTimeoutMs: 30000,
+    actorShardPromptAddon: '',
+    actorShardSettingsVersion: 1,
     builtInForumEnabled: true,
     forumAutoRefresh: false,
     forumRefreshMode: 'manual',
@@ -174,6 +191,10 @@ let continuityChain = Promise.resolve();
 let forumChain = Promise.resolve();
 let runtimePersistenceChain = Promise.resolve();
 const modelConnectionScheduler = new ConnectionTaskScheduler();
+const actorShardLeaseManager = new TaskLeaseManager(new MemoryVersionedAdapter(), {
+    namespace: 'actor-shard-leases',
+    heartbeatTimeoutMs: 15000,
+});
 const automaticPendingKeys = new Set();
 const automaticCompletedKeys = new Set();
 const openingSyncPendingKeys = new Set();
@@ -199,6 +220,13 @@ let dualSurfaceController = null;
 let latestSocialAudit = null;
 let latestContinuityStatus = '世界连续性：等待事件';
 let latestContinuityKind = '';
+let latestActorShardDiagnostics = {
+    status: 'disabled',
+    selected: 0,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+};
 let latestForumStatus = '论坛：等待世界消息';
 let latestForumKind = '';
 // 最近操作时间线：内存即时渲染，并按聊天防抖保存，刷新后仍可追溯。
@@ -291,6 +319,7 @@ function getSettings() {
     const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
     const previousModelRoutingSettingsVersion = Number(settings.modelRoutingSettingsVersion) || 0;
     const previousSocialAuditSettingsVersion = Number(settings.socialAuditSettingsVersion) || 0;
+    const previousActorShardSettingsVersion = Number(settings.actorShardSettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -304,6 +333,37 @@ function getSettings() {
     }
     if (!['conservative', 'living', 'expansive'].includes(settings.continuityAutonomy)) {
         settings.continuityAutonomy = 'living';
+        changed = true;
+    }
+    if (!['off', 'auto', 'on'].includes(settings.actorShardMode)) {
+        settings.actorShardMode = 'off';
+        changed = true;
+    }
+    settings.actorShardMaxWorkers = Math.min(
+        5,
+        Math.max(1, Math.floor(Number(settings.actorShardMaxWorkers) || 2)),
+    );
+    settings.actorShardMaxTokens = Math.min(
+        2048,
+        Math.max(768, Math.floor(Number(settings.actorShardMaxTokens) || 1200)),
+    );
+    settings.actorShardTimeoutMs = Math.min(
+        60000,
+        Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 30000)),
+    );
+    for (const key of ['continuityPromptAddon', 'actorShardPromptAddon']) {
+        const normalized = normalizeUserPromptSlot(settings[key]);
+        if (settings[key] !== normalized) {
+            settings[key] = normalized;
+            changed = true;
+        }
+    }
+    if (previousActorShardSettingsVersion < 1) {
+        settings.actorShardMode = 'off';
+        settings.actorShardMaxWorkers = 2;
+        settings.actorShardMaxTokens = 1200;
+        settings.actorShardTimeoutMs = 30000;
+        settings.actorShardSettingsVersion = 1;
         changed = true;
     }
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
@@ -1424,6 +1484,7 @@ function renderEnvironmentReport(report = lastEnvironmentReport) {
 function diagnosticPayload() {
     const context = getContext();
     const namespace = readChatNamespace(context);
+    const settings = getSettings();
     const continuity = continuityLedgerView(namespace.continuity, {
         chatId: context?.chatId || '',
         maxThreads: getSettings().continuityMaxThreads,
@@ -1449,6 +1510,11 @@ function diagnosticPayload() {
                 errorCode: databaseBarrierCheck?.kind === 'error'
                     ? 'database.barrier_not_registered'
                     : '',
+            },
+            actorShards: latestActorShardDiagnostics,
+            userPrompts: {
+                continuity: userPromptSlotMetadata(settings.continuityPromptAddon),
+                actorShard: userPromptSlotMetadata(settings.actorShardPromptAddon),
             },
             chat: {
                 present: !!context?.chatId,
@@ -1816,6 +1882,70 @@ function currentDownstreamBarrierProtocol() {
     return downstreamBarrierProtocol;
 }
 
+function activeTavernHelperScriptNames() {
+    return Array.from(document.querySelectorAll('iframe[id^="TH-script--"]'))
+        .flatMap((iframe) => [
+            String(iframe?.id || ''),
+            String(iframe?.name || ''),
+        ])
+        .filter(Boolean);
+}
+
+function tavernHelperScriptRecords(context = getContext()) {
+    const currentCharacter = context?.groupId == null
+        ? context?.characters?.[context?.characterId]
+        : null;
+    const roots = [
+        context?.extensionSettings?.tavern_helper?.script?.scripts,
+        context?.extensionSettings?.TavernHelper?.script?.scripts,
+        currentCharacter?.data?.extensions?.tavern_helper?.scripts,
+        currentCharacter?.data?.extensions?.TavernHelper_scripts,
+    ];
+    const records = [];
+    const pending = roots.filter(Array.isArray).flat();
+    const seen = new Set();
+    while (pending.length > 0 && records.length < 1000) {
+        const record = pending.shift();
+        if (!record || typeof record !== 'object' || seen.has(record)) continue;
+        seen.add(record);
+        if (Array.isArray(record.scripts)) {
+            pending.push(...record.scripts);
+        } else {
+            records.push(record);
+        }
+    }
+    return records;
+}
+
+function tavernDatabaseScriptDetected(context = getContext()) {
+    const explicitName = /(?:tavern[_ .-]?db|tavern[_ .-]?database|sp[_ ·.-]?(?:database|数据库)|酒馆数据库|数据库(?:脚本|填表|写入))/iu;
+    if (activeTavernHelperScriptNames().some((name) => explicitName.test(name))) {
+        return true;
+    }
+    return tavernHelperScriptRecords(context).some((record) => {
+        const name = [
+            record?.name,
+            record?.scriptName,
+            record?.displayName,
+            record?.label,
+        ].filter(Boolean).join(' ');
+        if (explicitName.test(name)) return true;
+        const content = String(
+            record?.content
+            || record?.code
+            || record?.script
+            || '',
+        );
+        return (
+            /(?:TavernDBAPI|SP_DATABASE|tavern[_ .-]?db)/iu.test(content)
+            || (
+                /(?:MESSAGE_RECEIVED|message_received)/u.test(content)
+                && /(?:tableEdit|database|数据库|SQL)/iu.test(content)
+            )
+        );
+    });
+}
+
 function tavernDatabaseDetected(context = getContext()) {
     const pending = [context?.extensionSettings];
     const keys = [];
@@ -1829,21 +1959,15 @@ function tavernDatabaseDetected(context = getContext()) {
             if (nested && typeof nested === 'object') pending.push(nested);
         }
     }
-    const loadedScripts = Array.from(document.scripts || [])
-        .map((script) => String(script?.src || ''))
-        .join(' ');
     return !!(
         window.TavernDB
         || window.TavernDBAPI
         || window.SP_DATABASE
         || /(?:tavern[_ -]?db|sp[_ -]?database|酒馆数据库)/iu.test(keys.join(' '))
-        // TavernDB commonly runs as a TavernHelper userscript and does not
-        // expose a stable global. Treat the host itself as a potential writer
-        // until one concrete database client registers the settled-only
-        // protocol. False negatives here would permit proven pre-settlement
-        // writes; a false positive only blocks the release gate with an
-        // actionable registration instruction.
-        || loadedScripts.toLowerCase().includes('/tavernhelper/')
+        // TavernDB commonly runs as a hidden TavernHelper userscript and may
+        // expose no global at all. Inspect concrete active/script records
+        // instead of treating the benign TavernHelper host itself as a writer.
+        || tavernDatabaseScriptDetected(context)
     );
 }
 
@@ -3813,8 +3937,17 @@ async function callModel(messages, options = {}) {
         1024,
         Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
     );
-    const timeoutMs = Math.max(10000, Number(settings.modelTimeoutMs) || 120000);
+    const timeoutMs = Math.max(
+        10000,
+        Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
+    );
     const controller = new AbortController();
+    const externalSignal = options.signal || null;
+    const abortFromExternal = () => controller.abort(
+        externalSignal?.reason || '模型任务已被上游取消',
+    );
+    externalSignal?.addEventListener?.('abort', abortFromExternal, { once: true });
+    if (externalSignal?.aborted) abortFromExternal();
     activeModelControllers.add(controller);
     syncTaskCancelButtons();
     const task = String(options.task || '模型任务');
@@ -3823,7 +3956,12 @@ async function callModel(messages, options = {}) {
         ? Number(options.targetIndex)
         : -1;
     const profile = directProfile(settings, channel);
-    const connectionKey = modelConnectionKey(profile);
+    const parallelLane = String(options.parallelLane || '')
+        .replace(/[^a-zA-Z0-9_-]/gu, '')
+        .slice(0, 40);
+    const connectionKey = parallelLane
+        ? `${modelConnectionKey(profile)}:lane:${parallelLane}`
+        : modelConnectionKey(profile);
     const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
     let providerUsage = null;
@@ -3953,6 +4091,7 @@ async function callModel(messages, options = {}) {
             label: task,
         });
     } finally {
+        externalSignal?.removeEventListener?.('abort', abortFromExternal);
         activeModelControllers.delete(controller);
         syncTaskCancelButtons();
     }
@@ -6647,6 +6786,7 @@ function buildContinuityMessages({
     stateAnchors,
     retryReason = '',
     excludedSourceIndexes = [],
+    actorShardCandidates = null,
 }) {
     const settings = getSettings();
     const jsonOnly = (
@@ -6698,6 +6838,10 @@ function buildContinuityMessages({
         : settings.continuityAutonomy === 'expansive'
             ? '活跃：允许每轮从世界设定按需要建立0或1条自主事件，未结自主事件最多12条；每轮可让同一因果簇内最多6条旧事件发生实质变化。'
             : '活世界：允许每轮从世界设定按需要建立0或1条自主事件，未结自主事件最多8条；每轮可让同一因果簇内最多3条旧事件发生实质变化。';
+    const customContinuityInstruction = formatUserNarrativeInstruction(
+        '世界连续性',
+        settings.continuityPromptAddon,
+    );
     const system = [
         '你是一个通用的跑团“活世界事件与状态”记账与调度引擎。你不写主回复，只维护结构化事件账本与分类世界快照。',
         '你必须服从当前角色卡与已发生正文，不得套用别的角色卡设定。',
@@ -6706,6 +6850,7 @@ function buildContinuityMessages({
         '【职责边界】',
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
+        ...(customContinuityInstruction ? [customContinuityInstruction] : []),
         '- 调用模型前，本地事件时钟已为每条未结事件掷出success/hold/setback，并更新stageProgress；这是防止世界永久停摆的基线，不等于所有事件都要在正文显现。你可按真实能力、资源、信息、距离和阻力纠正阶段、进度与stalled，但不得为了热闹强推。',
         `- 每个账本轮次可让同一因果簇内最多${changeLimit}条旧事件产生新的实质叙事变化；优先选择共享人物、势力、地点、资源、传播链或causedBy关系的稀疏事件簇。其他事件只保留本地时钟结果。`,
         '- 每个完成的AI回复都必须运行一次世界调度，但“运行调度”不等于所有事件机械前进。通常让一个相关事件簇推进、显现、转入休眠或结束；若正文只过去片刻、trigger尚未满足或因果前提缺失，可原样保留线程，并在lastTick登记held、目标threadId和不少于8字的具体依据。',
@@ -6804,6 +6949,14 @@ function buildContinuityMessages({
         '',
         '=== 当前MVU主线锚点（时间/地点/人物/势力/任务/资源，只读）===',
         stateAnchors,
+        ...(actorShardCandidates
+            ? [
+                '',
+                '=== NPC分片候选（只产提案；未发生、非事实、无写权限）===',
+                '这些候选只供宏观连续性模型参考。必须重新核对时间、地点、有限认知、因果、玩家授权和当前分支；可以全部不采用。',
+                safeJson(actorShardCandidates),
+            ]
+            : []),
         '',
         `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
         worldContext.text,
@@ -6866,6 +7019,160 @@ function buildContinuityMessages({
         jsonOnly ? '' : '</ContinuityState>',
     ].filter(Boolean).join('\n');
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+function actorShardLeaseFingerprint(captured) {
+    return {
+        chatId: String(captured?.chatId || ''),
+        logicalIndex: Math.max(0, Number(captured?.index) || 0),
+        messageId: String(captured?.messageId || ''),
+        swipeId: Math.max(0, Number(captured?.swipeId) || 0),
+        generation: Math.max(0, Number(captured?.generationSerial) || 0),
+        branchId: String(captured?.branchId || ''),
+        parentHash: fingerprint(String(captured?.generationId || captured?.branchId || 'root')),
+        contentHash: String(captured?.fingerprint || ''),
+    };
+}
+
+async function collectActorShardProposals(captured, {
+    base,
+    messageText,
+    token,
+} = {}) {
+    const settings = getSettings();
+    if (settings.actorShardMode === 'off') {
+        latestActorShardDiagnostics = {
+            status: 'disabled',
+            selected: 0,
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+        };
+        return { status: 'disabled', candidates: null };
+    }
+    const terminalBarrier = persistedTerminalBarrierForCaptured(captured);
+    if (terminalBarrier?.state !== 'settled') {
+        latestActorShardDiagnostics = {
+            status: 'barrier-not-settled',
+            selected: 0,
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+        };
+        return { status: 'skipped', candidates: null };
+    }
+    const candidates = selectActorShardCandidates({
+        continuity: base,
+        presentText: messageText,
+        maxWorkers: settings.actorShardMaxWorkers,
+    });
+    if (!candidates.length) {
+        latestActorShardDiagnostics = {
+            status: 'no-eligible-actors',
+            selected: 0,
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+        };
+        return { status: 'completed', candidates: null };
+    }
+
+    const target = actorShardLeaseFingerprint(captured);
+    const leaseId = `actor-shard:${fingerprint([
+        captured.chatId,
+        captured.messageId,
+        captured.swipeId,
+        captured.generationId,
+        captured.branchId,
+        captured.fingerprint,
+    ].join(':'))}:${Date.now().toString(36)}`;
+    await actorShardLeaseManager.create({
+        id: leaseId,
+        branchId: captured.branchId,
+        target,
+        phase: 'selecting',
+        softDeadlineAt: Date.now() + settings.actorShardTimeoutMs,
+        hardDeadlineAt: Date.now() + settings.actorShardTimeoutMs + 5000,
+    });
+    await actorShardLeaseManager.start(leaseId, 'parallel-proposals');
+    setContinuityStatus(
+        `世界连续性：NPC分片 0/${candidates.length}（最多 ${settings.actorShardMaxWorkers} 次额外轻量调用）`,
+        'busy',
+    );
+    const result = await runActorShardBatch({
+        candidates,
+        maxConcurrency: settings.actorShardMaxWorkers,
+        timeoutMs: settings.actorShardTimeoutMs,
+        isCurrent: () => targetIsCurrent(captured, token).ok,
+        onProgress(progress) {
+            latestActorShardDiagnostics = {
+                status: 'running',
+                selected: progress.total,
+                completed: progress.completed,
+                succeeded: progress.succeeded,
+                failed: progress.failed,
+            };
+            setContinuityStatus(
+                `世界连续性：NPC分片 ${progress.completed}/${progress.total}（成功 ${progress.succeeded}，降级 ${progress.failed}）`,
+                'busy',
+            );
+        },
+        callWorker: async (candidate, { signal }) => callModel(
+            buildActorShardMessages(candidate, {
+                target,
+                customPrompt: settings.actorShardPromptAddon,
+            }),
+            {
+                maxTokens: settings.actorShardMaxTokens,
+                timeoutMs: settings.actorShardTimeoutMs,
+                task: '活世界 NPC 分片',
+                channel: 'fast',
+                targetIndex: captured.index,
+                jsonMode: true,
+                signal,
+                parallelLane: candidate.id,
+            },
+        ),
+    });
+    latestActorShardDiagnostics = {
+        status: result.status,
+        ...result.diagnostics,
+    };
+    if (result.status === 'stale') {
+        await actorShardLeaseManager.markStale(leaseId, 'target identity changed');
+        return { status: 'stale', candidates: null };
+    }
+    await actorShardLeaseManager.heartbeat(leaseId, {
+        phase: 'converged',
+        progress: {
+            current: result.diagnostics.completed,
+            total: result.diagnostics.selected,
+            label: 'actor proposals',
+        },
+    });
+    const fresh = captureTarget(getContext(), captured.index);
+    const accepted = fresh && await actorShardLeaseManager.acceptsResult(leaseId, {
+        fingerprint: actorShardLeaseFingerprint(fresh),
+        branch: { id: fresh.branchId, status: 'active' },
+    });
+    if (!accepted || !targetIsCurrent(captured, token).ok) {
+        await actorShardLeaseManager.markStale(leaseId, 'final target identity changed');
+        latestActorShardDiagnostics.status = 'stale';
+        return { status: 'stale', candidates: null };
+    }
+    await actorShardLeaseManager.complete(leaseId);
+    if (!result.proposals.length) {
+        return { status: 'completed', candidates: null };
+    }
+    return {
+        status: 'completed',
+        candidates: {
+            proposals: result.proposals,
+            jointEvents: result.convergence.jointEvents,
+            independent: result.convergence.independent,
+            diagnostics: result.diagnostics,
+        },
+    };
 }
 
 async function runContinuityTarget(captured, { force = false } = {}) {
@@ -6957,6 +7264,27 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const tickTurn = base.turn + ticksDue;
     const worldClockChanged = continuityWorldDigest(base)
         !== continuityWorldDigest(scheduledBase);
+    let actorShardCandidates = null;
+    try {
+        const actorShardResult = await collectActorShardProposals(captured, {
+            base: scheduledBase,
+            messageText,
+            token,
+        });
+        if (actorShardResult.status === 'stale') {
+            return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
+        }
+        actorShardCandidates = actorShardResult.candidates;
+    } catch (error) {
+        latestActorShardDiagnostics = {
+            status: 'failed',
+            selected: 0,
+            completed: 0,
+            succeeded: 0,
+            failed: 1,
+        };
+        console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
+    }
 
     const localProgressed = clockPlan.changedThreadIds.length > 0 || worldClockChanged;
     let next = localProgressed ? scheduledBase : base;
@@ -6982,6 +7310,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             stateAnchors,
             retryReason,
             excludedSourceIndexes: sourcePlan.skippedIndexes,
+            actorShardCandidates,
         });
         let output = '';
         let validOutput = false;
@@ -10204,6 +10533,51 @@ function buildSettingsPanel() {
                                     <option value="expansive">活跃·更多幕后事件</option>
                                 </select>
                             </label>
+                            <label class="mvuad-select">
+                                <span>NPC 分片</span>
+                                <select class="text_pole mvuad-actor-shard-mode">
+                                    <option value="off">关闭（默认，0 次额外调用）</option>
+                                    <option value="auto">保守自动</option>
+                                    <option value="on">开启</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-number">
+                                <span>每回合最多 NPC worker</span>
+                                <input class="text_pole mvuad-actor-shard-workers" type="number" min="1" max="5" step="1">
+                            </label>
+                            <div class="mvuad-description">
+                                仅在最终正文 settled 且硬审计通过后，确定性选择不在场 NPC；每个 worker 会增加一次轻量模型调用，
+                                默认上限 2、可设 1—5。worker 只产提案，失败或超时会单独降级，不阻断原宏观连续性路径。
+                            </div>
+                            <details class="mvuad-settings-fold mvuad-continuity-prompt-settings">
+                                <summary>用户自定义叙事提示词插槽</summary>
+                                <div class="mvuad-settings-fold-body">
+                                    <div class="mvuad-description">
+                                        内容不做题材或 NSFW 语义过滤，也不内置破限文本；它只作为清楚标识的用户自定义模型指令，
+                                        影响叙事模拟与候选提案。它不能替代玩家授权、事实证据、事务、分支、危险确认、完整目标身份或硬字段校验。
+                                        脱敏诊断只导出是否启用、长度和哈希，不导出全文。每个插槽最多 6000 字符。
+                                    </div>
+                                    <label class="mvuad-prompt-addon-label" for="mvuad-continuity-prompt-addon">
+                                        世界连续性自定义提示词
+                                    </label>
+                                    <textarea id="mvuad-continuity-prompt-addon"
+                                        class="text_pole mvuad-continuity-prompt-addon"
+                                        rows="5" maxlength="6000"
+                                        placeholder="留空使用内置连续性规则。"></textarea>
+                                    <label class="mvuad-prompt-addon-label" for="mvuad-actor-shard-prompt-addon">
+                                        NPC 分片自定义提示词
+                                    </label>
+                                    <textarea id="mvuad-actor-shard-prompt-addon"
+                                        class="text_pole mvuad-actor-shard-prompt-addon"
+                                        rows="5" maxlength="6000"
+                                        placeholder="留空使用内置隔离 worker 规则。"></textarea>
+                                    <div class="mvuad-actor-prompt-save-hint" aria-live="polite"></div>
+                                    <div class="mvuad-actions">
+                                        <button class="menu_button mvuad-actor-prompt-save" type="button">保存自定义提示词</button>
+                                        <button class="menu_button mvuad-actor-prompt-reset" type="button">清空两个插槽</button>
+                                    </div>
+                                </div>
+                            </details>
                             <div class="mvuad-continuity-options"></div>
                             <div class="mvuad-actions">
                                 <button class="menu_button mvuad-continuity-open" type="button">打开世界与事件面板</button>
@@ -10389,6 +10763,55 @@ function buildSettingsPanel() {
         getSettings().continuityAutonomy = continuityAutonomy.value;
         saveSettings();
         applyContinuityInjection();
+    });
+    const actorShardMode = wrapper.querySelector('.mvuad-actor-shard-mode');
+    actorShardMode.value = getSettings().actorShardMode;
+    actorShardMode.addEventListener('change', () => {
+        getSettings().actorShardMode = actorShardMode.value;
+        saveSettings();
+    });
+    const actorShardWorkers = wrapper.querySelector('.mvuad-actor-shard-workers');
+    actorShardWorkers.value = String(getSettings().actorShardMaxWorkers);
+    actorShardWorkers.addEventListener('change', () => {
+        const normalized = Math.min(
+            5,
+            Math.max(1, Math.floor(Number(actorShardWorkers.value) || 2)),
+        );
+        getSettings().actorShardMaxWorkers = normalized;
+        actorShardWorkers.value = String(normalized);
+        saveSettings();
+    });
+    const continuityPromptAddon = wrapper.querySelector('.mvuad-continuity-prompt-addon');
+    const actorShardPromptAddon = wrapper.querySelector('.mvuad-actor-shard-prompt-addon');
+    const actorPromptSaveHint = wrapper.querySelector('.mvuad-actor-prompt-save-hint');
+    continuityPromptAddon.value = getSettings().continuityPromptAddon;
+    actorShardPromptAddon.value = getSettings().actorShardPromptAddon;
+    const saveNarrativePromptSlots = ({ notify = false } = {}) => {
+        const continuityValue = normalizeUserPromptSlot(continuityPromptAddon.value);
+        const actorValue = normalizeUserPromptSlot(actorShardPromptAddon.value);
+        continuityPromptAddon.value = continuityValue;
+        actorShardPromptAddon.value = actorValue;
+        getSettings().continuityPromptAddon = continuityValue;
+        getSettings().actorShardPromptAddon = actorValue;
+        saveSettings();
+        actorPromptSaveHint.textContent = '已保存；诊断仅记录长度、哈希与启用状态';
+        if (notify) toast('success', '世界连续性与 NPC 分片自定义提示词已保存。');
+    };
+    for (const input of [continuityPromptAddon, actorShardPromptAddon]) {
+        input.addEventListener('input', () => {
+            actorPromptSaveHint.textContent = '有未保存改动；离开输入框时会自动保存';
+        });
+        input.addEventListener('blur', () => saveNarrativePromptSlots());
+    }
+    wrapper.querySelector('.mvuad-actor-prompt-save').addEventListener(
+        'click',
+        () => saveNarrativePromptSlots({ notify: true }),
+    );
+    wrapper.querySelector('.mvuad-actor-prompt-reset').addEventListener('click', () => {
+        continuityPromptAddon.value = '';
+        actorShardPromptAddon.value = '';
+        saveNarrativePromptSlots();
+        toast('info', '已清空两个用户自定义叙事提示词插槽。');
     });
     wrapper.querySelector('.mvuad-continuity-options').append(
         makeCheckbox('默认折叠未显现的幕后事件，保留惊喜', 'hideContinuitySpoilers'),

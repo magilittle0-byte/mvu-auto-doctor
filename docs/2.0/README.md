@@ -1,19 +1,19 @@
 # MVU Auto Doctor 2.0 权威规格索引
 
-状态：`2.0-phase7-rc / post-release hardening blocked on external database barrier`
+状态：`2.0-phase10-real-qc-blocked / release-not-authorized`
 
 适用范围：2.0 产品、数据协议、事务协议、真实故障回放与阶段交接
 
-最后更新：2026-07-27
+最后更新：2026-07-28
 
-本目录是 2.0 实施的权威入口。阶段0冻结产品边界、协议、不变量、回放基线与交接规则；阶段1至6依次实现领域、事务、导演、领域事务、双入口和持久运行时。阶段7新增 `v2/release/` 的1.x升级/回滚演练、性能/容量/隐私/安全/恢复硬化门，以及真实QC优先于模拟的发布候选门。维护者已于2026-07-27明确授权把 `2.0.0-rc.1` 非强制快进发布到 `main`。发布后真实长局硬化已进入独立审阅分支，但真实 TavernDB 尚未注册 API v5 barrier v1，因此硬化版禁止晋升 `main` 或既有候选分支；正式 `2.0.0` 仍需后续审阅决定。
+本目录是 2.0 实施的权威入口。阶段0冻结产品边界、协议、不变量、回放基线与交接规则；阶段1至6依次实现领域、事务、导演、领域事务、双入口和持久运行时。阶段7新增 `v2/release/` 的1.x升级/回滚演练、性能/容量/隐私、安全/恢复硬化门。阶段8提供 Actor Shard / NPC分片领域核与自由提示词插槽；阶段9完成它与原医生连续性、settled屏障、完整目标身份、原事务路径和设置/诊断UI的自动化接入验收。阶段10已完成可执行的真实酒馆、桌面/移动视觉、合成长局、打包与发布门复核；更新凭据运行取得19/19次模型HTTP 200，但Scenario Plan 5A和运行中三类stale仍缺真实证据，外部 TavernDB 也未注册 barrier v1，因此结果为阻断、不得推送或晋升。正式 `2.0.0` 仍需后续审阅决定。
 
 ## 权威文件
 
 1. [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)：产品定位、设计原则、导演模式、口胡四级、模块和版本边界。
 2. [`DATA_TRANSACTION_PROTOCOL.md`](DATA_TRANSACTION_PROTOCOL.md)：核心数据模型、事务状态机、分支隔离、稳定屏障和1.x兼容策略。
 3. [`REAL_REPLAY_ACCEPTANCE_MATRIX.md`](REAL_REPLAY_ACCEPTANCE_MATRIX.md)：历史故障到机器回放用例的验收映射。
-4. [`PHASE_ROADMAP.md`](PHASE_ROADMAP.md)：阶段1至阶段7的输入、输出、完成门和交接入口。
+4. [`PHASE_ROADMAP.md`](PHASE_ROADMAP.md)：阶段1至阶段10的输入、输出、完成门和交接入口。
 5. [`PHASE_HANDOFF_TEMPLATE.md`](PHASE_HANDOFF_TEMPLATE.md)：每阶段必须填写的无聊天记忆交接模板。
 6. [`handoffs/PHASE_0_HANDOFF.md`](handoffs/PHASE_0_HANDOFF.md)：阶段0实际交接、测试证据与阶段1准确入口。
 7. [`handoffs/PHASE_1_HANDOFF.md`](handoffs/PHASE_1_HANDOFF.md)：阶段1领域核公开 API、测试证据与阶段2准确入口。
@@ -23,13 +23,16 @@
 11. [`handoffs/PHASE_5_HANDOFF.md`](handoffs/PHASE_5_HANDOFF.md)：阶段5双入口、导演台、移动端与真实环境证据，以及阶段6准确入口。
 12. [`handoffs/PHASE_6_HANDOFF.md`](handoffs/PHASE_6_HANDOFF.md)：阶段6稳定屏障、下游、看门狗、数据库与真实回放证据，以及阶段7准确入口。
 13. [`handoffs/PHASE_7_HANDOFF.md`](handoffs/PHASE_7_HANDOFF.md)：阶段7迁移、发布硬化、候选包、真实QC与维护者审阅入口。
-14. [`PHASE_6_REAL_QC_TEMPLATE.json`](PHASE_6_REAL_QC_TEMPLATE.json)：不含密钥、原始载荷或私人正文的阶段6真实环境报告模板。
-15. [`MIGRATION_ROLLBACK_GUIDE.md`](MIGRATION_ROLLBACK_GUIDE.md)：1.x惰性升级、可读回退和保守恢复步骤。
-16. [`USER_GUIDE_2.0_RC.md`](USER_GUIDE_2.0_RC.md)：RC安装、日常使用、伴生脚本共存测试和回滚说明。
-17. [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)：2.0.0 RC自动门、真实门、隐私门与发布门。
-18. [`2.1_OPEN_ITEMS.md`](2.1_OPEN_ITEMS.md)：明确推迟到2.1的未决范围。
-19. [`replay-fixture.schema.json`](replay-fixture.schema.json)：阶段0回放语料的机器可读 JSON Schema。
-20. [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)：脱敏、最小化的真实故障回放基线。
+14. [`handoffs/PHASE_8_HANDOFF.md`](handoffs/PHASE_8_HANDOFF.md)：Actor Shard领域核、确定性选择/汇合、隔离worker和提示词插槽。
+15. [`handoffs/PHASE_9_HANDOFF.md`](handoffs/PHASE_9_HANDOFF.md)：Actor Shard宿主接线、自动化集成证据及阶段10真实QC入口。
+16. [`handoffs/PHASE_10_HANDOFF.md`](handoffs/PHASE_10_HANDOFF.md)：阶段10真实QC、阻断证据、候选包与发布门结论。
+17. [`PHASE_6_REAL_QC_TEMPLATE.json`](PHASE_6_REAL_QC_TEMPLATE.json)：不含密钥、原始载荷或私人正文的阶段6真实环境报告模板。
+18. [`MIGRATION_ROLLBACK_GUIDE.md`](MIGRATION_ROLLBACK_GUIDE.md)：1.x惰性升级、可读回退和保守恢复步骤。
+19. [`USER_GUIDE_2.0_RC.md`](USER_GUIDE_2.0_RC.md)：RC安装、日常使用、伴生脚本共存测试和回滚说明。
+20. [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)：2.0.0 RC自动门、真实门、隐私门与发布门。
+21. [`2.1_OPEN_ITEMS.md`](2.1_OPEN_ITEMS.md)：明确推迟到2.1的未决范围。
+22. [`replay-fixture.schema.json`](replay-fixture.schema.json)：阶段0回放语料的机器可读 JSON Schema。
+23. [`../../fixtures/2.0/replay-cases.json`](../../fixtures/2.0/replay-cases.json)：脱敏、最小化的真实故障回放基线。
 
 ## 冲突处理
 

@@ -28,6 +28,8 @@ function collectRuntimeFiles(relativeDirectory) {
 }
 
 const runtimeFiles = [
+    'actor-shard-core.d.mts',
+    'actor-shard-core.mjs',
     'continuity-core.mjs',
     'core.mjs',
     'forum-core.mjs',

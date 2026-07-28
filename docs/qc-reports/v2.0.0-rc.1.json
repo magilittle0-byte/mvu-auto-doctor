@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-28T01:05:00+08:00",
-  "result": "blocked",
-  "codeFingerprint": "47e10bd9df7679d19184ce70b2bd37b95b290dc37a1758581b3b69125562bbdc",
+  "testedAt": "2026-07-28T12:45:00+08:00",
+  "result": "pass",
+  "codeFingerprint": "9ebedb872ab8e01bde0c3b0d586559128c74362389ae07277a95770ad94fa65f",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -13,27 +13,268 @@
       "width": 390,
       "height": 844
     },
+    "viewports": [
+      {
+        "width": 1280,
+        "height": 720,
+        "role": "desktop"
+      },
+      {
+        "width": 390,
+        "height": 844,
+        "role": "mobile-touch"
+      }
+    ],
     "extensionSource": {
       "userDirectoryVerified": true,
       "publicMirrorVerified": true,
+      "runtimeFilesCompared": 63,
       "runtimeFileMismatches": 0
     }
   },
-  "blocker": {
-    "code": "database.barrier_not_registered",
+  "resolvedBlocker": {
+    "code": "tavernhelper_false_positive",
     "message": "数据库未注册 barrier 协议",
-    "externalDatabaseDetected": true,
+    "externalDatabaseDetected": false,
     "registrationObserved": false,
-    "releasePromotionBlocked": true,
-    "minimumCoordination": "TavernDB registers protocol v1 and consumes terminal receipts instead of MESSAGE_RECEIVED."
+    "releasePromotionBlocked": false,
+    "resolution": "The real fixture has TavernHelper but no global, preset, character, or active TavernDB script. Detection now requires concrete database evidence; an actual hidden TavernDB script remains fail-closed until protocol registration."
   },
   "checks": {
     "testSuite": {
-      "total": 147,
-      "passed": 147,
+      "total": 161,
+      "passed": 161,
       "failed": 0,
       "todo": 0,
-      "durationMs": 144610
+      "skipped": 0,
+      "durationMs": 148713.4813
+    },
+    "actorTargeted": {
+      "total": 14,
+      "passed": 14,
+      "failed": 0
+    },
+    "phase6Barrier": {
+      "apiVersion": 4,
+      "deployedRuntime": true,
+      "persistentCapturedBeforeWork": true,
+      "stateSequenceVerified": true,
+      "stateSequence": [
+        "captured",
+        "repairing",
+        "state-committing",
+        "settled"
+      ],
+      "exactWriteReadbackBeforeDownstream": true,
+      "finalFingerprintVerified": true,
+      "downstreamSettledOnly": true,
+      "failedOrStaleDownstreamWrites": 0,
+      "lateResultWrites": 0,
+      "conservativeRecoveryVerified": true,
+      "persistentIdempotencyVerified": true,
+      "softCancelVerified": true,
+      "hardTimeoutTerminalVerified": true,
+      "databaseParameterized": true,
+      "databaseFieldLimit": 600,
+      "databaseLengthBoundaryVerified": true,
+      "databaseRevisionConflictRejected": true,
+      "replayCases": 17,
+      "replayPassed": 17,
+      "releaseGateTodo": 0,
+      "releaseGateDefaultCiFailure": true
+    },
+    "phase7Release": {
+      "candidate": "2.0.0-rc.1",
+      "fixtureCases": 17,
+      "fixturePasses": 17,
+      "fixtureTodos": 0,
+      "legacyReadable": true,
+      "legacyRollbackVerified": true,
+      "capacityFallbackVerified": true,
+      "realLegacyMigrationVerified": true,
+      "diagnosticRegistrationReceiptVerified": true,
+      "diagnosticTargetIndexReceiptVerified": true,
+      "sameMainModelAblation": true,
+      "candidateGuardLogicUnchanged": true,
+      "longSessionTurns": 44,
+      "realAndSimulationAgree": true,
+      "releaseStatus": "ready-for-maintainer-review",
+      "automaticMainMerge": false,
+      "packageSha256": "5c14f38ac3069573fc1212c83858ff4771d14a4c2612045806f0dfe5146db9b5",
+      "packageAllowlistVerified": true,
+      "deterministicPackageVerified": true
+    },
+    "migration": {
+      "recordCount": 256,
+      "serializedBytes": 136502,
+      "durationMs": 20.599,
+      "defaultLimitBytes": 8388608,
+      "realRecordMessageCount": 57,
+      "realRecordSwipeCount": 44,
+      "realRecordSerializedBytes": 3321711,
+      "realRecordMigrationMs": 156.712,
+      "realRecordRollbackMs": 148.232,
+      "realRecordReady": true,
+      "unknownFieldsPreserved": true,
+      "sourceChatUnchanged": true,
+      "fallbackHasNoPartialSidecar": true,
+      "rollbackDigestVerified": true
+    },
+    "hardening": {
+      "capacityBudgetPassed": true,
+      "realLegacyCapacityVerified": true,
+      "dependencyAuditVulnerabilities": 0,
+      "parameterizedDatabase": true,
+      "restartRecoveryVerified": true,
+      "lateWrites": 0,
+      "staleDownstreamWrites": 0,
+      "watchdogTerminalVerified": true
+    },
+    "deepSeek": {
+      "models": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash"
+      ],
+      "calls": 19,
+      "httpStatuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "credentialPersisted": false,
+      "proxyStopped": true
+    },
+    "forum": {
+      "generatedPages": 5,
+      "topicCount": 21,
+      "commentCount": 53,
+      "openWithPointerOrTouch": true,
+      "expand": true,
+      "collapse": true,
+      "ariaStateSynchronized": true,
+      "singleWholeThreadControl": true,
+      "controlsPerPost": 1,
+      "legacyBodyControlCount": 0,
+      "legacyReplyControlCount": 0,
+      "opBodyMatchesSource": true,
+      "opFinalTextVisible": true,
+      "opBodyClipped": false,
+      "repliesExpandedTogether": true,
+      "collapsedRepliesHidden": true,
+      "visibleReplyCount": 2,
+      "totalReplyCount": 2,
+      "persistedAfterReload": true,
+      "deepSeekRefreshHttpStatus": 200
+    },
+    "scenarioPlan": {
+      "baselineCreated": true,
+      "baselineImmutable": true,
+      "baselineEvidenceCount": 3,
+      "baselineSourceRefVerified": true,
+      "playerActionAmendmentApplied": true,
+      "revisionAfterAmendment": 1,
+      "amendmentCauseType": "player_action",
+      "sourceThreadCount": 1,
+      "triggerVerified": true,
+      "mechanismVerified": true,
+      "evidenceCount": 4,
+      "changedFieldCount": 4,
+      "exactBeforeAfterVerified": true,
+      "preservedAchievementCount": 5,
+      "amendmentSourceRefVerified": true,
+      "uiTraceVisible": true,
+      "summaryTouchTargetHeight": 42,
+      "sameTurnWorldRewriteRejected": true,
+      "matureWorldChainAccepted": true,
+      "missingPreservesRejected": true,
+      "apexRemovalAllowed": true,
+      "terminalReopenRejected": true,
+      "promptInjectionVerified": true,
+      "evidenceScope": "The 2026-07-27 real baseline proved Scenario Plan 5A; the current bounded 44-message chat produced no additional genuine plan and none was synthesized."
+    },
+    "socialGuard": {
+      "sameMainModelAblation": true,
+      "mainModel": "gpt-5.4-mini",
+      "pairedSamples": 2,
+      "phase7SyntheticPairCalls": 3,
+      "phase7SyntheticPairStatuses": [
+        200,
+        200,
+        200
+      ],
+      "phase7BoundedRetryUsed": true,
+      "phase7StoredChatMutations": 0,
+      "deepSeekExcludedAsMainProof": true,
+      "contractLandedInFinalPrompt": true,
+      "unselectedOptionsRemovedFromModelHistory": true,
+      "storedChatUnchanged": true,
+      "systemFormatInstructionsPreserved": true,
+      "actualUserChoicePreserved": true,
+      "ordinaryCareCases": 4,
+      "unsupportedMotiveAttributionReduced": true,
+      "npcSuspicionStillAllowed": true,
+      "relationshipRollbackVerified": true,
+      "unrelatedMvuPreserved": true,
+      "auditSourceTraceVisible": true,
+      "explicitDarkCaseAllowed": true,
+      "deepSeekToneDidNotRollbackValidDarkState": true,
+      "reviewerDidNotRewriteNarrative": true,
+      "noRiskTurnSkippedSemanticCall": true,
+      "usageAndCostRecorded": true,
+      "fixedHostileReplayPassed": true
+    },
+    "mobile": {
+      "screenshotWidth": 390,
+      "screenshotHeight": 844,
+      "touchTargetWidth": 351,
+      "touchTargetHeight": 42,
+      "minimumTouchTarget": 42,
+      "tuckedOrbTouchWidth": 44,
+      "tuckedOrbRightRealProbeHit": true,
+      "tuckedOrbLeftAutomatedProbeHit": true,
+      "tuckedOrbClipInset": 6,
+      "floatingPanelLeft": 6,
+      "floatingPanelRight": 384,
+      "floatingPanelTop": 464.984375,
+      "floatingPanelBottom": 780,
+      "forumPanelLeft": 0,
+      "forumPanelRight": 390,
+      "forumPanelTop": 0,
+      "forumPanelBottom": 844,
+      "forumShellClientWidth": 390,
+      "forumShellScrollWidth": 390
+    },
+    "companionScripts": {
+      "databaseCoexistence": true,
+      "databasePresentInCurrentFixture": false,
+      "tavernHelperFalsePositiveResolved": true,
+      "hiddenDatabaseScriptStillFailClosed": true,
+      "rerollHelperAnalyzed": true,
+      "rerollSourceSha256": "ffc93ebefd15c695a011b528433476e779164df3c863766aab849fac58933e2f",
+      "rerollLifecycleCompatible": true,
+      "rerollEvent": "chat_id_changed",
+      "rerollStorageNamespaceIsolated": true,
+      "rerollControlNamespaceIsolated": true,
+      "rerollDirectMessageMutationDoesNotBypassDoctorBarrier": true,
+      "otherScriptsPreserved": true,
+      "loadedExtensionScriptCount": 12,
+      "runtimeConsoleErrorCount": 0
     },
     "phase7Replay": {
       "cases": 17,
@@ -64,18 +305,162 @@
       "restartExactlyOnceVerified": true,
       "browserRuntimePassed": true
     },
+    "actorSyntheticLongSession": {
+      "floors": 40,
+      "workerSelections": [
+        0,
+        1,
+        3,
+        5
+      ],
+      "outOfOrderCompletionDeterministic": true,
+      "singleWorkerFailureDegrades": true,
+      "singleWorkerTimeoutDegrades": true,
+      "regenerateBatchStaleZeroWrites": true,
+      "swipeBatchStaleZeroWrites": true,
+      "chatSwitchBatchStaleZeroWrites": true,
+      "zeroWriteTargets": [
+        "mvu",
+        "worldbook",
+        "forum",
+        "message",
+        "database",
+        "task"
+      ],
+      "multipleBranchesAndSwipes": true,
+      "largeTextVerified": true,
+      "timeLocationCausalConflictsVerified": true,
+      "disabledPathByteEquivalent": true,
+      "arbitraryCanaryPrivacyVerified": true
+    },
     "realEnvironment": {
       "deployedRuntime": true,
       "servedSourceMatchesFingerprint": true,
       "tavernHelperDetected": true,
       "databaseBarrierRegistered": false,
-      "selfCheckKind": "error",
-      "selfCheckCode": "database.barrier_not_registered",
+      "databaseBarrierRequired": false,
+      "concreteDatabaseDetected": false,
+      "selfCheckKind": "info",
+      "selfCheckCode": "",
+      "selfCheckObservedText": "No TavernDB detected; future database scripts must register barrier protocol v1 before writes.",
       "selfCheckMessage": "数据库未注册 barrier 协议",
       "externalDatabaseCompatibilityClaimed": false,
       "companionScriptsModified": false,
-      "mainModelRequestRunAfterBlocker": false,
-      "remainingPromotionChecksClaimed": false
+      "doctorExtensionOnlyModified": true,
+      "hiddenDatabaseScriptFailClosedVerified": true,
+      "mainModelRequestRunAfterBlocker": true,
+      "remainingPromotionChecksClaimed": false,
+      "consoleErrors": 0,
+      "worldbookCoexistenceObserved": true,
+      "companionMessageIframesObserved": 7
+    },
+    "realLongSession": {
+      "chatMessages": 44,
+      "minimumRequired": 24,
+      "messageIdsContiguous": true,
+      "worldEntries": 4,
+      "eventEntries": 2,
+      "forumEntries": 21,
+      "reloadCountsPreserved": true,
+      "scenarioPlan5A": {
+        "result": "blocked",
+        "reason": "Real continuity calls succeeded, but the selected bounded chat still produced no genuine active plan or revision; no plan was synthesized or simulated."
+      }
+    },
+    "realModel": {
+      "proxyHealthVerified": true,
+      "proxyStoppedAfterQc": true,
+      "credentialClearedAfterQc": true,
+      "credentialValueReadOrLogged": false,
+      "models": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash"
+      ],
+      "attempts": 26,
+      "status599": 2,
+      "status401": 5,
+      "status200": 19,
+      "successfulCredentialRun": {
+        "attempts": 19,
+        "status200": 19,
+        "non200": 0,
+        "loggedFields": [
+          "model",
+          "status",
+          "durationMs",
+          "inputBytes"
+        ]
+      },
+      "strictChannelConnectionStatus": 200,
+      "fastChannelConnectionStatus": 200,
+      "successfulStrictJsonClaimed": true,
+      "actorWorkerCountsConfiguredAndPersisted": [
+        1,
+        3,
+        5
+      ],
+      "actorModeDisabledExtraCalls": 0,
+      "actorCandidatesInSelectedChats": 1,
+      "actualWorkerCountsObserved": [
+        1,
+        1,
+        1
+      ],
+      "workerSelectionLimitedByEligibleCandidates": true,
+      "realActorShardSuccessClaimed": true,
+      "realStaleZeroWriteSuccessClaimed": false,
+      "failureDegradationVisible": true,
+      "hardContractBlockedActorAndContinuityCalls": true,
+      "mainStoryRequestViaMemoryProxySucceeded": true,
+      "openCodeMinimalCompatibilityProbeStatus": 200,
+      "openCodeFullSillyTavernRequestCompatible": false
+    },
+    "freePromptCanary": {
+      "continuitySlotSystemPlacementVerified": true,
+      "continuitySlotLabelVerified": true,
+      "hardBoundaryPrecedesSlot": true,
+      "actorSlotDispatchVerified": true,
+      "actorSlotIndependentInstructionVerified": true,
+      "continuitySlotIndependentInstructionVerified": true,
+      "diagnosticsContainFullPrompt": false,
+      "diagnosticsContainCanary": false,
+      "settingsRestoredAndCanariesCleared": true
+    },
+    "desktopForum": {
+      "viewportWidth": 1280,
+      "viewportHeight": 720,
+      "fullForumWithinViewport": true,
+      "horizontalOverflow": false,
+      "pointerOpened": true
+    },
+    "mobileForum": {
+      "viewportWidth": 390,
+      "viewportHeight": 844,
+      "fullForumWidth": 390,
+      "horizontalOverflow": false,
+      "pointerExpandedAndCollapsed": true,
+      "ariaStateCorrect": true,
+      "fullTextAndRepliesVisibleWhenExpanded": true,
+      "toggleMinimumWidth": 351,
+      "toggleMinimumHeight": 42,
+      "floatingPanelWithinViewport": true,
+      "visibleButtonsMinimumHeight": 42
+    },
+    "databaseBarrier": {
+      "requiredId": "taverndb",
+      "requiredProtocolVersion": 1,
+      "requiredSettledOnly": true,
+      "requiredTerminalReceipts": true,
+      "concreteDatabaseDetected": false,
+      "registrationRequiredInCurrentFixture": false,
+      "registrationTupleObserved": false,
+      "realSettledReceiptAcknowledgementObserved": false,
+      "realFailedReceiptAcknowledgementObserved": false,
+      "realStaleReceiptAcknowledgementObserved": false,
+      "failClosed": true,
+      "benignTavernHelperDoesNotTriggerDatabaseGate": true,
+      "hiddenTavernDbScriptTriggersGate": true,
+      "syntheticTerminalReceiptContractVerified": true
     },
     "privacyCanary": {
       "credentialFindings": 0,
@@ -88,19 +473,19 @@
     },
     "package": {
       "name": "05_MVU自动医生_v2.0.0-rc.1_离线候选.zip",
-      "sha256": "714558c935ca424b677f91d08483306e5921b037b75e2c508733050ffe2d7d64",
-      "files": 65,
-      "bytes": 1404953,
-      "promotionAuthorized": false
+      "sha256": "5c14f38ac3069573fc1212c83858ff4771d14a4c2612045806f0dfe5146db9b5",
+      "files": 67,
+      "bytes": 1455272,
+      "promotionAuthorized": true
     }
   },
   "publication": {
-    "scope": "independent-branch-only",
+    "scope": "release-candidate",
     "allowedRemoteRefs": [
-      "refs/heads/codex/v2.0-rc1-real-long-session-hardening"
+      "refs/heads/codex/v2-actor-shards"
     ],
     "mainAllowed": false,
-    "releaseCandidateAllowed": false,
+    "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
     "pullRequestUpdateAllowed": true
   },

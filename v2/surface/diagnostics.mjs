@@ -55,6 +55,8 @@ export function createPrivacySafeDiagnosticProjection({
     prompt = null,
     modelDiagnostics = [],
     barrierProtocol = {},
+    actorShards = {},
+    userPrompts = {},
 } = {}) {
     const statusKinds = Object.fromEntries(
         Object.entries(statuses).map(([key, value]) => [
@@ -99,6 +101,23 @@ export function createPrivacySafeDiagnosticProjection({
             },
             modelCalls: cloneModelCallStats(chat?.modelCalls),
         },
+        actorShards: {
+            status: String(actorShards?.status || 'disabled'),
+            selected: Math.max(0, Number(actorShards?.selected) || 0),
+            completed: Math.max(0, Number(actorShards?.completed) || 0),
+            succeeded: Math.max(0, Number(actorShards?.succeeded) || 0),
+            failed: Math.max(0, Number(actorShards?.failed) || 0),
+        },
+        userPrompts: Object.fromEntries(
+            Object.entries(userPrompts || {}).map(([key, value]) => [
+                key,
+                {
+                    enabled: value?.enabled === true,
+                    length: Math.max(0, Number(value?.length) || 0),
+                    hash: String(value?.hash || ''),
+                },
+            ]),
+        ),
         latestStatuses: statusKinds,
         latestHardContract: hardContract
             ? {
