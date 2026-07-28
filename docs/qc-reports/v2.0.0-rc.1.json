@@ -480,14 +480,24 @@
     }
   },
   "publication": {
-    "scope": "release-candidate",
+    "scope": "release-candidate-and-main-fast-forward",
     "allowedRemoteRefs": [
-      "refs/heads/codex/v2-actor-shards"
+      "refs/heads/codex/v2-actor-shards",
+      "refs/heads/main"
     ],
-    "mainAllowed": false,
+    "mainAllowed": true,
     "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
-    "pullRequestUpdateAllowed": true
+    "pullRequestUpdateAllowed": true,
+    "maintainerAuthorizationObserved": true,
+    "prePromotionMainCommit": "d659167ce3a861dbef3391800057ec7f0d54dbfd",
+    "prePromotionMainTree": "a19a5a0bc4d7e3e7cebad6694af10c80ad8e5f35",
+    "backupRef": "refs/heads/codex/backup-main-pre-v2.0.0-rc.1-20260727",
+    "backupVerified": true,
+    "forcePushUsed": false,
+    "remotePublicationCommit": "dfb347400ae80b1b1b34e23b07b3faf1d087c8f8",
+    "remotePublicationTree": "ddc4317c1d00241cba2f02bb5f43ae583b4e325e",
+    "draftPullRequest": "https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29"
   },
   "baselineReleaseQc": {
     "testedAt": "2026-07-27T23:32:16+08:00",

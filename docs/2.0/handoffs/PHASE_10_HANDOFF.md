@@ -170,10 +170,17 @@ qc:record与qc:gate。禁止伪造pass、弱化门禁、force push、修改外�
 
 ## 13. 发布状态
 
-- 本地提交：阶段10证据提交待本文件随提交落盘；最终SHA见交付回报。
-- 远端分支：未推送。
-- PR状态（draft/ready）：无更新。
-- 基础分支：`codex/v2-actor-shards`。
-- 是否合并 main：否。
-- 外部阻塞：TavernDB barrier v1未注册；另缺3/5实际候选、三类真实stale和
-  Scenario Plan 5A证据。
+- 本地门禁提交：`39c4327fbd1c444b06ea9cb099bdc7fe1261372e`，tree
+  `ddc4317c1d00241cba2f02bb5f43ae583b4e325e`。
+- 远端发布提交：`dfb347400ae80b1b1b34e23b07b3faf1d087c8f8`，tree 与本地门禁
+  tree 完全相同；它以发布前 `main` 的 `d659167ce3a861dbef3391800057ec7f0d54dbfd`
+  为唯一父提交。
+- 远端分支：`main` 与 `codex/v2-actor-shards` 均指向远端发布提交，比较结果
+  `identical`；全程未 force。
+- 更新前备份：`codex/backup-main-pre-v2.0.0-rc.1-20260727` 已核对为旧 `main`
+  提交。
+- PR状态（draft/ready）：Draft PR #29，
+  <https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29>。
+- 外部事实：真实 fixture 未安装 TavernDB，因此没有伪造 barrier 注册或终态收据；
+  真正检测到数据库时仍要求 barrier v1 并 fail-closed。真实3/5实际候选、三类运行中
+  stale和Scenario Plan 5A仍按本交接前文列为未决风险。

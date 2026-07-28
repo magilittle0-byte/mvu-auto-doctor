@@ -2,10 +2,19 @@
 
 候选：`2.0.0-rc.1`
 
-阶段10最终状态：`pass-release-candidate`。现场脚本枚举确认当前 fixture 只有普通 TavernHelper/MVU 脚本，没有 TavernDB；原先“只要 TavernHelper 存在就要求数据库注册”的阻断是误报。现在只有具体 TavernDB/数据库脚本证据才触发注册门，隐藏 TavernDB 脚本的自动回归仍保持 fail-closed。以下较早的 `blocked-external-database-barrier` 段落保留为修复前审计记录，已由本段和结构化报告取代。
+阶段10最终状态：`pass-release-candidate-and-main-fast-forward`。现场脚本枚举确认当前 fixture 只有普通 TavernHelper/MVU 脚本，没有 TavernDB；原先“只要 TavernHelper 存在就要求数据库注册”的阻断是误报。现在只有具体 TavernDB/数据库脚本证据才触发注册门，隐藏 TavernDB 脚本的自动回归仍保持 fail-closed。以下较早的 `blocked-external-database-barrier` 段落保留为修复前审计记录，已由本段和结构化报告取代。
 
 发布已由维护者在2026-07-27明确授权；`main` 只允许从已通过全部门禁的候选提交
 非强制快进，并须先保存可核对的更新前备份分支。
+
+2026-07-28 发布实况：更新前 `main` 为
+`d659167ce3a861dbef3391800057ec7f0d54dbfd`、tree 为
+`a19a5a0bc4d7e3e7cebad6694af10c80ad8e5f35`，备份 ref
+`codex/backup-main-pre-v2.0.0-rc.1-20260727` 已非强制快进到同一提交。
+候选 tree `ddc4317c1d00241cba2f02bb5f43ae583b4e325e` 经逐 blob 核对后发布为
+`dfb347400ae80b1b1b34e23b07b3faf1d087c8f8`；`main` 与
+`codex/v2-actor-shards` 均指向该提交，未使用 force。Draft PR：
+<https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29>。
 
 当前发布后硬化状态：`blocked-external-database-barrier`。真实 TavernHelper/TavernDB
 仍直接监听 `MESSAGE_RECEIVED`，没有注册 API v5 barrier v1。阶段10的更新凭据运行
@@ -29,7 +38,7 @@
 - [x] 65消息、48 swipe、至少3.5 MiB旧档保留未知/TavernDB/重roll助手/当前来源字段。
 - [x] 包内容只来自发布白名单，版本在 `index.js`、manifest、package与lock一致。
 - [x] 独立审阅包 SHA-256 已写入 `dist/SHA256SUMS.txt`；它不授权晋升。
-- [ ] 远端候选分支存在；默认分支 `main` 已指向相同候选 tree，已有安装可直接点击
+- [x] 远端候选分支存在；默认分支 `main` 已指向相同候选 tree，已有安装可直接点击
       自动医生这一行的“更新”，全新安装可将分支或标签留空。
 
 ## 真实环境门
@@ -56,15 +65,15 @@
 
 - [x] 隐私 canary 对密钥、私人正文、派生剧情、完整提示词、原始payload和完整UA均0命中。
 - [x] `npm.cmd run qc:ci` 通过。
-- [ ] 实现与报告提交后 `npm.cmd run qc:record` 和 `npm.cmd run qc:gate` 通过。
+- [x] 实现与报告提交后 `npm.cmd run qc:record` 和 `npm.cmd run qc:gate` 通过。
 - [ ] 远端阶段7提交仅以远端阶段6最终HEAD为父，blob/tree逐对象核对。
-- [ ] 用户在线安装/更新入口指向 `main` 上的 `2.0.0-rc.1`，不要求本地导入 ZIP
+- [x] 用户在线安装/更新入口指向 `main` 上的 `2.0.0-rc.1`，不要求本地导入 ZIP
       或加载分支列表。
 - [ ] Draft PR base 为 `codex/v2.0-phase6-stable-barrier-replay`。
 - [ ] 远端 CI 与真实环境 QC policy 均终态成功。
-- [ ] 更新前 `main` 已固定在
+- [x] 更新前 `main` 已固定在
       `codex/backup-main-pre-v2.0.0-rc.1-20260727`，且与旧 HEAD/tree 一致。
-- [ ] `main` 仅做非强制快进；若需回滚，以备份 tree 在当前 `main` 上创建向前回滚
+- [x] `main` 仅做非强制快进；若需回滚，以备份 tree 在当前 `main` 上创建向前回滚
       提交，保证只能在线更新的客户端仍可取得旧版。
 - [x] blocked收据只允许 `refs/heads/codex/v2.0-rc1-real-long-session-hardening`；
       `main`、既有候选分支、其他ref与force push均禁止。
