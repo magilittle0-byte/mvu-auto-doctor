@@ -13,7 +13,8 @@
 `codex/backup-main-pre-v2.0.0-rc.1-20260727` 已非强制快进到同一提交。
 候选 tree `ddc4317c1d00241cba2f02bb5f43ae583b4e325e` 经逐 blob 核对后发布为
 `dfb347400ae80b1b1b34e23b07b3faf1d087c8f8`；`main` 与
-`codex/v2-actor-shards` 均指向该提交，未使用 force。Draft PR：
+`codex/v2-actor-shards` 均指向该提交，未使用 force。PR #29 因同一提交已快进到
+`main` 而由 GitHub 自动标记为 merged/closed：
 <https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29>。
 
 当前发布后硬化状态：`blocked-external-database-barrier`。真实 TavernHelper/TavernDB

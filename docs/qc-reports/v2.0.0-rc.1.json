@@ -495,9 +495,10 @@
     "backupRef": "refs/heads/codex/backup-main-pre-v2.0.0-rc.1-20260727",
     "backupVerified": true,
     "forcePushUsed": false,
-    "remotePublicationCommit": "dfb347400ae80b1b1b34e23b07b3faf1d087c8f8",
-    "remotePublicationTree": "ddc4317c1d00241cba2f02bb5f43ae583b4e325e",
-    "draftPullRequest": "https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29"
+    "initialRemotePublicationCommit": "dfb347400ae80b1b1b34e23b07b3faf1d087c8f8",
+    "initialRemotePublicationTree": "ddc4317c1d00241cba2f02bb5f43ae583b4e325e",
+    "pullRequest": "https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29",
+    "pullRequestState": "merged-by-main-fast-forward"
   },
   "baselineReleaseQc": {
     "testedAt": "2026-07-27T23:32:16+08:00",

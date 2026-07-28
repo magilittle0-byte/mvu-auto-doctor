@@ -179,8 +179,8 @@ qc:record与qc:gate。禁止伪造pass、弱化门禁、force push、修改外�
   `identical`；全程未 force。
 - 更新前备份：`codex/backup-main-pre-v2.0.0-rc.1-20260727` 已核对为旧 `main`
   提交。
-- PR状态（draft/ready）：Draft PR #29，
-  <https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29>。
+- PR状态：PR #29 已因同一发布提交快进到 `main` 而由 GitHub 自动标记为
+  merged/closed，<https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29>。
 - 外部事实：真实 fixture 未安装 TavernDB，因此没有伪造 barrier 注册或终态收据；
   真正检测到数据库时仍要求 barrier v1 并 fail-closed。真实3/5实际候选、三类运行中
   stale和Scenario Plan 5A仍按本交接前文列为未决风险。
