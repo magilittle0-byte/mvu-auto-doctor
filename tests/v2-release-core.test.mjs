@@ -44,6 +44,53 @@ function readyEvidence() {
     };
 }
 
+function readyHardeningEvidence() {
+    return {
+        performance: {
+            migrationDurationMs: 80,
+            serializedBytes: 4096,
+            recordCount: 64,
+            longSessionTurns: 32,
+        },
+        privacy: {
+            credentialFindings: 0,
+            privateContentFindings: 0,
+            rawPayloadFindings: 0,
+            absoluteUserPathFindings: 0,
+            derivedNarrativeFindings: 0,
+            fullPromptFindings: 0,
+            privateCanaryFindings: 0,
+        },
+        security: {
+            parameterizedDatabase: true,
+            dependencyAuditPassed: true,
+            packageAllowlistVerified: true,
+        },
+        recovery: {
+            legacyRollbackVerified: true,
+            restartRecoveryVerified: true,
+            lateWritesZero: true,
+            staleDownstreamWritesZero: true,
+            watchdogTerminalVerified: true,
+        },
+        compatibility: {
+            databaseCoexistence: true,
+            externalDatabaseProtocolOptional: true,
+            externalDatabaseUnmanagedAccurate: true,
+            doctorManagedWritesSettledOnly: true,
+            databaseFailedStaleWritesZero: true,
+            rerollLifecycleCompatible: true,
+            companionControlsIsolated: true,
+            otherScriptsPreserved: true,
+            doctorRuntimeConsoleErrorsZero: true,
+            databaseRuntimeConsoleErrorsZero: true,
+            companionRuntimeConsoleErrorsZero: true,
+            thirdPartyErrorAttributionReliable: true,
+            hostConsoleCleanClaimed: false,
+        },
+    };
+}
+
 test('1.x upgrade drill preserves the source chat and provides a verified rollback', () => {
     const chat = {
         id: 'chat-legacy',
@@ -167,14 +214,18 @@ test('hardening gate enforces capacity, privacy, security and recovery budgets',
         },
         compatibility: {
             databaseCoexistence: true,
-            databaseBarrierRegistered: true,
-            databaseSettledAfterBarrier: true,
+            externalDatabaseProtocolOptional: true,
+            externalDatabaseUnmanagedAccurate: true,
+            doctorManagedWritesSettledOnly: true,
             databaseFailedStaleWritesZero: true,
-            databaseTerminalReceiptsVerified: true,
             rerollLifecycleCompatible: true,
             companionControlsIsolated: true,
             otherScriptsPreserved: true,
-            runtimeConsoleErrorsZero: true,
+            doctorRuntimeConsoleErrorsZero: true,
+            databaseRuntimeConsoleErrorsZero: true,
+            companionRuntimeConsoleErrorsZero: true,
+            thirdPartyErrorAttributionReliable: true,
+            hostConsoleCleanClaimed: false,
         },
     });
     assert.equal(result.ok, true);
@@ -213,19 +264,49 @@ test('hardening gate blocks a companion-script lifecycle collision', () => {
         },
         compatibility: {
             databaseCoexistence: true,
-            databaseBarrierRegistered: true,
-            databaseSettledAfterBarrier: true,
+            externalDatabaseProtocolOptional: true,
+            externalDatabaseUnmanagedAccurate: true,
+            doctorManagedWritesSettledOnly: true,
             databaseFailedStaleWritesZero: true,
-            databaseTerminalReceiptsVerified: true,
             rerollLifecycleCompatible: false,
             companionControlsIsolated: true,
             otherScriptsPreserved: true,
-            runtimeConsoleErrorsZero: true,
+            doctorRuntimeConsoleErrorsZero: true,
+            databaseRuntimeConsoleErrorsZero: true,
+            companionRuntimeConsoleErrorsZero: true,
+            thirdPartyErrorAttributionReliable: true,
+            hostConsoleCleanClaimed: false,
         },
     });
     assert.equal(result.ok, false);
     assert.ok(result.issues.some(
         (entry) => entry.code === 'hardening.compatibility.rerollLifecycleCompatible',
+    ));
+});
+
+test('hardening accepts reliably attributed third-party host errors without claiming a clean host', () => {
+    const evidence = readyHardeningEvidence();
+    evidence.compatibility.thirdPartyAttributedErrorCount = 100;
+    evidence.compatibility.thirdPartyErrorOwner = 'JS-Slash-Runner';
+    const result = evaluateReleaseHardening(evidence);
+    assert.equal(result.ok, true);
+});
+
+test('hardening blocks doctor errors and unreliable third-party attribution', () => {
+    const evidence = readyHardeningEvidence();
+    evidence.compatibility.doctorRuntimeConsoleErrorsZero = false;
+    evidence.compatibility.thirdPartyErrorAttributionReliable = false;
+    evidence.compatibility.hostConsoleCleanClaimed = true;
+    const result = evaluateReleaseHardening(evidence);
+    assert.equal(result.ok, false);
+    assert.ok(result.issues.some(
+        (entry) => entry.code === 'hardening.compatibility.doctorRuntimeConsoleErrorsZero',
+    ));
+    assert.ok(result.issues.some(
+        (entry) => entry.code === 'hardening.compatibility.thirdPartyErrorAttributionReliable',
+    ));
+    assert.ok(result.issues.some(
+        (entry) => entry.code === 'hardening.compatibility.hostConsoleCleanClaimed',
     ));
 });
 

@@ -77,12 +77,15 @@ function validateBlockedReport(report) {
     const blocker = report.blocker;
     if (
         !blocker
-        || blocker.code !== 'database.barrier_not_registered'
-        || blocker.message !== '数据库未注册 barrier 协议'
-        || blocker.externalDatabaseDetected !== true
-        || blocker.registrationObserved !== false
+        || blocker.code === 'database.barrier_not_registered'
+        || typeof blocker.code !== 'string'
+        || !blocker.code
+        || typeof blocker.message !== 'string'
+        || !blocker.message
         || blocker.releasePromotionBlocked !== true
-    ) fail('blocked report does not prove the external database barrier failure');
+        || !Array.isArray(blocker.reasons)
+        || blocker.reasons.length < 1
+    ) fail('blocked report does not identify truthful release blockers');
 
     const targeted = report.checks?.longSessionHardening;
     if (
@@ -102,19 +105,199 @@ function validateBlockedReport(report) {
         || targeted.restartExactlyOnceVerified !== true
     ) fail('blocked report long-session evidence is incomplete');
 
+    const realLong = report.checks?.realLongSession;
+    if (
+        !realLong
+        || realLong.turns !== 24
+        || realLong.messages !== 49
+        || realLong.settledTargets !== 24
+        || realLong.distinctTargetIdentities !== 24
+        || realLong.failedTargets !== 0
+        || realLong.staleTargets !== 0
+        || realLong.modelCalls !== 24
+        || realLong.modelCallsSucceeded !== 24
+        || realLong.swipeInfoAligned !== true
+        || realLong.reloadStructureRecovered !== true
+        || realLong.reloadSettledRecords !== 24
+        || realLong.databaseApiVisible !== true
+        || realLong.databaseRefreshStable !== true
+        || !/^[a-f0-9]{64}$/u.test(String(realLong.structureSha256 || ''))
+        || !/^[a-f0-9]{64}$/u.test(String(realLong.databaseSha256 || ''))
+    ) fail('blocked report real 24-turn evidence is incomplete');
+
+    const database = report.checks?.realDatabaseCompatibility;
+    if (
+        !database
+        || database.current?.version !== 'spv8.4'
+        || database.current?.production !== true
+        || database.current?.apiName !== 'AutoCardUpdaterAPI'
+        || database.current?.apiMethods < 100
+        || database.current?.crudRoundTrip !== true
+        || database.current?.refreshVerified !== true
+        || database.current?.callbacksVerified !== true
+        || database.current?.uiVerified !== true
+        || database.current?.chatSwitchRecovered !== true
+        || database.current?.reloadRecovered !== true
+        || database.current?.cleanupVerified !== true
+        || database.legacy?.version !== 'spv5.5.6'
+        || database.legacy?.production !== false
+        || database.legacy?.apiMethods < 80
+        || database.legacy?.crudRoundTrip !== true
+        || database.legacy?.reloadRecovered !== true
+        || database.tableNamesHardcoded !== false
+        || database.columnNamesHardcoded !== false
+        || database.doctorDatabaseApiCalls !== 0
+        || database.doctorRequiresDatabaseProtocol !== false
+        || database.externalMode !== 'unmanaged'
+        || database.externalConsistency !== 'unknown'
+    ) fail('blocked report real TavernDB matrix is incomplete');
+
+    const eventStorm = report.checks?.eventStormDeduplication;
+    if (
+        !eventStorm
+        || eventStorm.sameTargetDeliveries !== 5
+        || eventStorm.maximumCallsPerTask !== 1
+        || eventStorm.settledRecords !== 1
+        || eventStorm.wrongTargetWrites !== 0
+        || eventStorm.databaseApiVisible !== true
+    ) fail('blocked report event-storm deduplication evidence is incomplete');
+
+    const actor = report.checks?.actorShard;
+    if (
+        !actor
+        || actor.realWorkerCounts?.join(',') !== '1,3,5'
+        || actor.selected?.join(',') !== '1,3,5'
+        || actor.succeeded?.join(',') !== '1,3,5'
+        || actor.failed?.some((count) => count !== 0)
+        || actor.staleRegenerateWrites !== 0
+        || actor.staleSwipeWrites !== 0
+        || actor.staleChatSwitchWrites !== 0
+        || actor.strictWhitelistExampleVerified !== true
+    ) fail('blocked report Actor Shard evidence is incomplete');
+
+    const universal = report.checks?.universalCompatibility;
+    if (
+        !universal
+        || universal.coreUsesDynamicJsonPointers !== true
+        || universal.unknownSchemaReadOnlyAuditPassed !== true
+        || universal.unknownSchemaReshaped !== false
+        || universal.databaseTablesInspectedByDoctor !== false
+        || universal.frontendFunctionsInvokedByDoctor !== false
+        || universal.legacyDialectAdaptersConservative !== true
+        || universal.currentCardIsFixtureOnly !== true
+    ) fail('blocked report universal-compatibility evidence is incomplete');
+
+    const regressions = report.checks?.regressionMatrix;
+    if (
+        !regressions
+        || regressions.evidenceSource !== 'sanitized-real-records'
+        || !Array.isArray(regressions.items)
+        || regressions.items.length < 8
+        || regressions.items.some((item) => (
+            typeof item.id !== 'string'
+            || !item.id
+            || !['critical', 'high', 'medium', 'environment'].includes(item.severity)
+            || !['fixed', 'blocked', 'unknown-nonmanaged'].includes(item.disposition)
+            || typeof item.evidence !== 'string'
+            || !item.evidence
+        ))
+    ) fail('blocked report regression matrix is incomplete');
+
+    const corePathsPassed = blocker.code === 'release_evidence_incomplete';
     const real = report.checks?.realEnvironment;
     if (
         !real
         || real.deployedRuntime !== true
         || real.servedSourceMatchesFingerprint !== true
-        || real.tavernHelperDetected !== true
-        || real.databaseBarrierRegistered !== false
-        || real.selfCheckKind !== 'error'
-        || real.selfCheckCode !== 'database.barrier_not_registered'
-        || real.selfCheckMessage !== '数据库未注册 barrier 协议'
-        || real.externalDatabaseCompatibilityClaimed !== false
+        || real.separateHeadlessProfile !== true
+        || real.originalChatModified !== false
+        || real.originalCardModified !== false
         || real.companionScriptsModified !== false
+        || real.externalDatabaseProtocolOptional !== true
+        || real.tavernDbRegistrationRequired !== false
+        || !['not-detected', 'unmanaged', 'cooperative'].includes(
+            real.externalDatabaseMode,
+        )
+        || real.unmanagedProbeMode !== 'unmanaged'
+        || real.externalDatabaseWriteConsistency !== 'unknown'
+        || real.doctorManagedWritesSettledOnly !== true
+        || real.failedStaleLateDoctorWrites !== 0
+        || real.mobile?.width !== 390
+        || real.mobile?.height !== 844
+        || real.mobile?.minimumVisibleControlHeight < 42
+        || real.mobile?.horizontalOverflow !== false
+        || real.desktop?.width !== 1280
+        || real.desktop?.height !== 720
+        || real.desktop?.horizontalOverflow !== false
+        || real.hostConsoleErrorCount < 1
+        || (
+            corePathsPassed
+                ? (
+                    real.runtimeMvuApiAvailable !== true
+                    || real.environmentStatus !== 'ok'
+                    || real.realStrictMvuWritebackVerified !== true
+                    || real.realRegenerateStaleVerified !== true
+                    || real.realSwipeStaleVerified !== true
+                    || real.realChatSwitchStaleVerified !== true
+                    || real.doctorConsoleErrorCount !== 0
+                )
+                : (
+                    real.runtimeMvuApiAvailable !== false
+                    || real.environmentStatus !== 'error'
+                )
+        )
     ) fail('blocked report real-environment evidence is incomplete');
+
+    const model = report.checks?.realModel;
+    if (
+        !model
+        || model.attempts < 1
+        || !Array.isArray(model.proxyStatuses)
+        || model.proxyStatuses.length !== model.attempts
+        || model.proxyStopped !== true
+        || model.credentialPersisted !== false
+        || model.rawPayloadPersisted !== false
+        || (
+            corePathsPassed
+                ? (
+                    model.result !== 'core-paths-passed-release-still-blocked'
+                    || model.attempts < 6
+                    || model.succeeded !== model.attempts
+                    || model.failed !== 0
+                    || model.evidenceEligibleAttempts < 6
+                    || model.supportingDiagnosticAttempts < 2
+                    || model.proxyStatuses.some((status) => status !== 200)
+                    || !Array.isArray(model.inputBytes)
+                    || model.inputBytes.length !== model.attempts
+                    || model.inputBytes.some((bytes) => bytes < 1)
+                    || model.appliedStrictRepairCalls < 1
+                    || model.appliedContinuityCalls < 1
+                    || model.appliedForumCalls < 1
+                    || model.staleRegenerateCalls < 1
+                    || model.staleSwipeCalls < 1
+                    || model.staleChatSwitchCalls < 1
+                    || model.staleTargetWrites !== 0
+                    || model.oldSuccessfulRunReusedAsCurrentEvidence !== false
+                )
+                : (
+                    model.result !== 'blocked'
+                    || model.succeeded !== 0
+                    || model.failed !== model.attempts
+                )
+        )
+    ) fail('blocked report real-model evidence is incomplete');
+
+    const card = report.checks?.cardCompatibility;
+    if (
+        !card
+        || card.sourceFormat !== 'png-v3'
+        || card.originalModified !== false
+        || card.worldbookEntries !== 77
+        || card.tavernHelperScripts !== 3
+        || card.regexScripts !== 8
+        || card.standardAndLegacyContainersSupported !== true
+        || card.cardSideChangesRequired !== false
+    ) fail('blocked report card-compatibility evidence is incomplete');
 
     const publication = report.publication;
     if (
@@ -126,7 +309,7 @@ function validateBlockedReport(report) {
         || !Array.isArray(publication.allowedRemoteRefs)
         || publication.allowedRemoteRefs.length !== 1
         || publication.allowedRemoteRefs[0]
-            !== 'refs/heads/codex/v2.0-rc1-real-long-session-hardening'
+            !== 'refs/heads/codex/v2-rc-regression-repair'
     ) fail('blocked report publication scope is not fail-closed');
 
     const privacy = report.privacy;
@@ -335,7 +518,13 @@ function loadAndValidateReport() {
         || companion.rerollControlNamespaceIsolated !== true
         || companion.otherScriptsPreserved !== true
         || companion.loadedExtensionScriptCount < 12
-        || companion.runtimeConsoleErrorCount !== 0
+        || companion.doctorRuntimeConsoleErrorCount !== 0
+        || companion.databaseRuntimeConsoleErrorCount !== 0
+        || companion.companionRuntimeConsoleErrorCount !== 0
+        || companion.thirdPartyErrorAttributionReliable !== true
+        || companion.thirdPartyErrorOwner !== 'JS-Slash-Runner'
+        || companion.thirdPartyAttributedErrorCount < 1
+        || companion.hostConsoleCleanClaimed !== false
         || !/^[a-f0-9]{64}$/u.test(String(companion.rerollSourceSha256 || ''))
     ) fail('companion-script coexistence evidence is incomplete');
 

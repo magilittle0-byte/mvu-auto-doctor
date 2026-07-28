@@ -17,6 +17,7 @@ import {
     parsePatchBlock,
     preparePatch,
     pointerGet,
+    replaceUpdateBlocks,
     restoreTouchedPaths,
     statDataOf,
     stripAutomaticallyComputedOps,
@@ -71,6 +72,7 @@ import {
     auditCorrectionAgencyGuard,
     auditHardContracts,
     extractHardContractCorrection,
+    repairUnclosedContentTag,
     verifyHardContractEvidence,
 } from './protocol-core.mjs';
 import {
@@ -112,6 +114,8 @@ const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
 const SOCIAL_INJECTION_SENTINEL = '【MVU医生·人物动机与自主性合同】';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
+const MIN_MODEL_TIMEOUT_MS = 10_000;
+const MAX_MODEL_TIMEOUT_MS = 180_000;
 const DEFAULTS = Object.freeze({
     enabled: true,
     normalizeOpeningResources: true,
@@ -291,6 +295,7 @@ let lastFocusedBeforeForumPanel = null;
 let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
+let internalSwipeMutationDepth = 0;
 let generationSerial = 0;
 let lastGeneration = {
     serial: 0,
@@ -1374,23 +1379,23 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
     ));
 
     const databaseBarrier = await barrierProtocolStatus();
-    if (databaseBarrier.required) {
+    if (databaseBarrier.externalDatabaseDetected) {
         checks.push(databaseBarrier.registered
             ? environmentCheck(
                 'ok',
-                'TavernDB 稳定屏障',
-                '数据库已注册 barrier 协议；只允许 settled 写入并确认 failed/stale 放弃收据',
+                'TavernDB 可选协作',
+                '已观察到可选 barrier 协作；医生只为自身托管写入保证 settled-only',
             )
             : environmentCheck(
-                'error',
-                'TavernDB 稳定屏障',
-                '数据库未注册 barrier 协议',
+                'info',
+                'TavernDB 可选协作',
+                '检测到外部 TavernDB，但未观察到可选协作协议；医生正常运行，外部写入时序为未知/非托管',
             ));
     } else {
         checks.push(environmentCheck(
             'info',
-            'TavernDB 稳定屏障',
-            '未检测到 TavernDB；如后续启用，必须先注册 barrier 协议',
+            'TavernDB 可选协作',
+            '未检测到 TavernDB；医生内部 settled/stale/late 写入保护正常工作',
         ));
     }
 
@@ -1431,6 +1436,7 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
     lastEnvironmentReport = {
         checkedAt: Date.now(),
         checks,
+        barrierProtocol: databaseBarrier,
         status: checks.some((check) => check.kind === 'error')
             ? 'error'
             : checks.some((check) => check.kind === 'warn')
@@ -1494,23 +1500,22 @@ function diagnosticPayload() {
         maxPosts: getSettings().forumMaxPosts,
         maxComments: getSettings().forumMaxComments,
     });
-    const databaseBarrierCheck = lastEnvironmentReport?.checks?.find(
-        (check) => check?.label === 'TavernDB 稳定屏障',
-    );
+    const databaseBarrier = lastEnvironmentReport?.barrierProtocol || {
+        required: false,
+        externalDatabaseDetected: tavernDatabaseDetected(context),
+        registered: false,
+        clientCount: 0,
+        errorCode: '',
+        mode: tavernDatabaseDetected(context) ? 'unmanaged' : 'not-detected',
+        externalWriteConsistency: 'unknown',
+    };
     return {
         exportedAt: new Date().toISOString(),
         ...createPrivacySafeDiagnosticProjection({
             userAgent: navigator.userAgent,
             plugin: { id: PLUGIN_ID, version: VERSION },
             environment: lastEnvironmentReport,
-            barrierProtocol: {
-                required: tavernDatabaseDetected(context),
-                registered: databaseBarrierCheck?.kind === 'ok',
-                clientCount: databaseBarrierCheck?.kind === 'ok' ? 1 : 0,
-                errorCode: databaseBarrierCheck?.kind === 'error'
-                    ? 'database.barrier_not_registered'
-                    : '',
-            },
+            barrierProtocol: databaseBarrier,
             actorShards: latestActorShardDiagnostics,
             userPrompts: {
                 continuity: userPromptSlotMetadata(settings.continuityPromptAddon),
@@ -1904,8 +1909,12 @@ function tavernHelperScriptRecords(context = getContext()) {
     const records = [];
     const pending = roots.filter(Array.isArray).flat();
     const seen = new Set();
-    while (pending.length > 0 && records.length < 1000) {
-        const record = pending.shift();
+    for (
+        let index = 0;
+        index < pending.length && records.length < 1000;
+        index += 1
+    ) {
+        const record = pending[index];
         if (!record || typeof record !== 'object' || seen.has(record)) continue;
         seen.add(record);
         if (Array.isArray(record.scripts)) {
@@ -1937,7 +1946,7 @@ function tavernDatabaseScriptDetected(context = getContext()) {
             || '',
         );
         return (
-            /(?:TavernDBAPI|SP_DATABASE|tavern[_ .-]?db)/iu.test(content)
+            /(?:AutoCardUpdaterAPI|TavernDBAPI|SP_DATABASE|tavern[_ .-]?db|AlbusKen\/shujuku)/iu.test(content)
             || (
                 /(?:MESSAGE_RECEIVED|message_received)/u.test(content)
                 && /(?:tableEdit|database|数据库|SQL)/iu.test(content)
@@ -1950,8 +1959,8 @@ function tavernDatabaseDetected(context = getContext()) {
     const pending = [context?.extensionSettings];
     const keys = [];
     const seen = new Set();
-    while (pending.length > 0 && keys.length < 5000) {
-        const value = pending.shift();
+    for (let index = 0; index < pending.length && keys.length < 5000; index += 1) {
+        const value = pending[index];
         if (!value || typeof value !== 'object' || seen.has(value)) continue;
         seen.add(value);
         for (const [key, nested] of Object.entries(value)) {
@@ -1960,7 +1969,8 @@ function tavernDatabaseDetected(context = getContext()) {
         }
     }
     return !!(
-        window.TavernDB
+        window.AutoCardUpdaterAPI
+        || window.TavernDB
         || window.TavernDBAPI
         || window.SP_DATABASE
         || /(?:tavern[_ -]?db|sp[_ -]?database|酒馆数据库)/iu.test(keys.join(' '))
@@ -1995,20 +2005,26 @@ async function barrierProtocolStatus(clientId = 'taverndb') {
     const detected = tavernDatabaseDetected();
     if (!protocol) {
         return {
-            required: detected,
+            required: false,
+            externalDatabaseDetected: detected,
             registered: false,
             clientCount: 0,
-            errorCode: detected ? 'database.barrier_not_registered' : '',
+            errorCode: '',
+            mode: detected ? 'unmanaged' : 'not-detected',
+            externalWriteConsistency: 'unknown',
         };
     }
     const status = await protocol.clientStatus(clientId);
     return {
-        required: detected,
+        required: false,
+        externalDatabaseDetected: detected,
         registered: status.ok,
         clientCount: status.ok ? 1 : 0,
-        errorCode: detected && !status.ok
-            ? 'database.barrier_not_registered'
-            : '',
+        errorCode: '',
+        mode: status.ok ? 'cooperative' : detected ? 'unmanaged' : 'not-detected',
+        externalWriteConsistency: status.ok
+            ? 'cooperative-settled-only'
+            : 'unknown',
     };
 }
 
@@ -2884,8 +2900,9 @@ async function runHardContractAudit(targetId, {
 
     let currentData = null;
     let previousData = null;
+    let Mvu = null;
     try {
-        const Mvu = await getMvu();
+        Mvu = await getMvu();
         if (Mvu && typeof Mvu.getMvuData === 'function') {
             currentData = await mvuDataAt(Mvu, resolved);
             previousData = await previousMvuData(Mvu, context, resolved);
@@ -2895,6 +2912,28 @@ async function runHardContractAudit(targetId, {
     }
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+
+    let correctedTarget = null;
+    let deterministicCorrection = null;
+    if (settings.hardContractCorrectionEnabled && Mvu) {
+        const deterministic = repairUnclosedContentTag(
+            context.chat[resolved]?.mes || '',
+        );
+        if (deterministic.repaired) {
+            deterministicCorrection = await applyCorrectionAsSwipe({
+                index: resolved,
+                correctedText: deterministic.text,
+                Mvu,
+                expectedFingerprint: captured.fingerprint,
+                reason: deterministic.reason,
+                fixedCodes: [deterministic.code],
+                verification: 'deterministic-structure',
+            });
+            if (deterministicCorrection.status === 'applied') {
+                correctedTarget = deterministicCorrection.target;
+            }
+        }
+    }
 
     const result = auditHardContracts({
         replyText: context.chat[resolved]?.mes || '',
@@ -2913,8 +2952,20 @@ async function runHardContractAudit(targetId, {
         ...result,
         checkedAt: new Date().toISOString(),
         targetIndex: resolved,
-        messageId: captured.messageId,
-        swipeId: captured.swipeId,
+        messageId: correctedTarget?.messageId || captured.messageId,
+        swipeId: correctedTarget?.swipeId ?? captured.swipeId,
+        ...(deterministicCorrection?.status === 'applied'
+            ? {
+                correction: {
+                    applied: true,
+                    reason: deterministicCorrection.reason
+                        || '已补齐唯一缺失的正文闭标签',
+                    fixedCodes: ['content-tag-count'],
+                    agencyGuard: deterministicCorrection.agency,
+                    verification: 'deterministic-structure',
+                },
+            }
+            : {}),
     };
     const errorCount = result.issues.filter((issue) => issue.severity === 'error').length;
     const warningCount = result.issues.filter((issue) => issue.severity === 'warning').length;
@@ -2936,7 +2987,12 @@ async function runHardContractAudit(targetId, {
             );
         }
     }
-    return { status: 'audited', ...latestHardContractAudit };
+    return {
+        status: 'audited',
+        ...latestHardContractAudit,
+        correctedTarget,
+        deterministicCorrection,
+    };
 }
 
 function enqueueHardContractAudit(targetId, options = {}) {
@@ -3598,7 +3654,10 @@ async function withTimeout(promise, milliseconds, label, {
     signal = null,
     onTimeout = null,
 } = {}) {
-    const timeout = Math.max(10000, Number(milliseconds) || 120000);
+    const timeout = Math.min(
+        MAX_MODEL_TIMEOUT_MS,
+        Math.max(MIN_MODEL_TIMEOUT_MS, Number(milliseconds) || 120000),
+    );
     let timer;
     let abortHandler;
     try {
@@ -3937,9 +3996,12 @@ async function callModel(messages, options = {}) {
         1024,
         Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
     );
-    const timeoutMs = Math.max(
-        10000,
-        Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
+    const timeoutMs = Math.min(
+        MAX_MODEL_TIMEOUT_MS,
+        Math.max(
+            MIN_MODEL_TIMEOUT_MS,
+            Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
+        ),
     );
     const controller = new AbortController();
     const externalSignal = options.signal || null;
@@ -4931,14 +4993,13 @@ function applyBlockToCurrentSwipe(message, block, includeBlock, removeBlock = ''
     if (!message || typeof message.mes !== 'string') return false;
     const before = message.mes;
     let content = message.mes.split(STATUS_PLACEHOLDER).join('').trimEnd();
-    if (removeBlock && content.includes(removeBlock)) {
+    if (includeBlock && block) {
+        content = replaceUpdateBlocks(content, block);
+    } else if (removeBlock && content.includes(removeBlock)) {
         content = content
             .replace(removeBlock, '')
             .replace(/\n{3,}/gu, '\n\n')
             .trimEnd();
-    }
-    if (includeBlock && block && !content.includes(block)) {
-        content = `${content}\n\n${block}`.trim();
     }
     message.mes = `${content}\n\n${STATUS_PLACEHOLDER}`.trim();
     if (
@@ -5021,6 +5082,13 @@ function addSwipeToMessage(message, text, info) {
     }
     if (!Array.isArray(message.swipe_info)) {
         message.swipe_info = message.swipes.map(() => ({}));
+    } else if (message.swipe_info.length !== message.swipes.length) {
+        message.swipe_info = message.swipes.map((_, index) => (
+            message.swipe_info[index]
+            && typeof message.swipe_info[index] === 'object'
+                ? message.swipe_info[index]
+                : {}
+        ));
     }
     message.swipes.push(String(text || ''));
     message.swipe_info.push(info || {});
@@ -5035,6 +5103,7 @@ function addSwipeToMessage(message, text, info) {
 async function applyCorrectionAsSwipe({
     index,
     correction,
+    correctedText = null,
     Mvu,
     expectedFingerprint,
     reason = '',
@@ -5051,7 +5120,9 @@ async function applyCorrectionAsSwipe({
     ) {
         return { status: 'stale', reason: '正文校正应用前目标回复已经变化' };
     }
-    const spliced = applyHardContractCorrection(message.mes, correction);
+    const spliced = typeof correctedText === 'string'
+        ? { text: correctedText }
+        : applyHardContractCorrection(message.mes, correction);
     if (spliced.error) return { status: 'failed', reason: spliced.error };
 
     let mvuSnapshot = null;
@@ -5124,6 +5195,7 @@ async function applyCorrectionAsSwipe({
     } catch (error) {
         console.warn('[MVU Auto Doctor] 修正版 swipe 重绘失败：', error);
     }
+    internalSwipeMutationDepth += 1;
     try {
         const types = context.eventTypes || context.event_types || {};
         await Promise.resolve(
@@ -5134,6 +5206,8 @@ async function applyCorrectionAsSwipe({
         );
     } catch (error) {
         console.warn('[MVU Auto Doctor] 修正版 swipe 刷新事件发送失败：', error);
+    } finally {
+        internalSwipeMutationDepth = Math.max(0, internalSwipeMutationDepth - 1);
     }
     return {
         status: 'applied',
@@ -5677,6 +5751,8 @@ async function runTarget(targetId, {
             ...candidate,
             correction: correctionResult || correctionPlan,
             correctedTarget: correctionResult?.target || null,
+            finalTarget: correctionResult?.target
+                || captureTarget(getContext(), resolved),
         };
     }
     if (candidate?.status !== 'ready') {
@@ -5773,6 +5849,13 @@ async function runTarget(targetId, {
     } else {
         setStatus(`已跳过：${result.reason}`, 'error');
         toast('warning', `未改动变量。\n${result.reason}`);
+    }
+    if (['applied', 'nochange'].includes(result.status)) {
+        result = {
+            ...result,
+            finalTarget: result.correctedTarget
+                || captureTarget(getContext(), resolved),
+        };
     }
     return result;
     } finally {
@@ -5957,6 +6040,27 @@ async function createTargetSettlementRecord(captured) {
     return record;
 }
 
+function existingTargetSettlementRecord(captured) {
+    if (!captured) return null;
+    const key = targetSettlementKey(captured.chatId, captured.index);
+    const identityKey = targetSettlementIdentityKey(captured);
+    const record = targetSettlementRecords.get(key);
+    return record?.identityKey === identityKey ? record : null;
+}
+
+async function waitExistingTargetSettlement(record, timeoutMs = 2000) {
+    if (!record) return null;
+    if (!record.pending && record.result) return record.result;
+    const startedAt = Date.now();
+    while (!record.promise && Date.now() - startedAt < timeoutMs) {
+        await sleep(10);
+    }
+    if (record.promise) return record.promise;
+    return safeSettlementResult(record, 'busy', {
+        reason: '同一目标的医生流程正在登记，已合并重复宿主事件',
+    });
+}
+
 function attachTargetSettlement(record, settlementPromise) {
     if (!record) return null;
     record.promise = Promise.resolve(record.ready)
@@ -5964,14 +6068,33 @@ function attachTargetSettlement(record, settlementPromise) {
         .then((workflowResult) => {
             const context = getContext();
             const current = captureTarget(context, record.targetIndex);
+            const workflowTarget = workflowResult?.finalTarget
+                || workflowResult?.correctedTarget
+                || null;
+            const expected = workflowTarget || {
+                chatId: record.chatId,
+                index: record.targetIndex,
+                messageId: record.messageId,
+                swipeId: record.initialSwipeId,
+                fingerprint: record.initialFingerprint,
+                generationId: record.generationId,
+                branchId: record.branchId,
+            };
             if (
                 context?.chatId !== record.chatId
                 || !current
-                || current.messageId !== record.messageId
-                || current.generationId !== record.generationId
-                || current.branchId !== record.branchId
+                || current.chatId !== expected.chatId
+                || current.index !== expected.index
+                || current.messageId !== expected.messageId
+                || current.swipeId !== expected.swipeId
+                || current.fingerprint !== expected.fingerprint
+                || current.generationId !== expected.generationId
+                || current.branchId !== expected.branchId
             ) {
                 return safeSettlementResult(record, 'stale', {
+                    messageId: record.messageId,
+                    swipeId: record.initialSwipeId,
+                    fingerprint: record.initialFingerprint,
                     reason: '聊天、楼层或回复分支已经变化',
                 });
             }
@@ -6273,7 +6396,9 @@ function enqueue(targetId, options = {}) {
             }
             if (
                 dedupeKey
-                && ['applied', 'nochange'].includes(result?.status)
+                && ['applied', 'nochange', 'failed', 'blocked', 'timeout'].includes(
+                    result?.status,
+                )
             ) {
                 automaticCompletedKeys.add(dedupeKey);
                 const landedKey = automaticTargetKey(targetId);
@@ -11024,6 +11149,10 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
+            const existingSettlement = existingTargetSettlementRecord(captured);
+            if (existingSettlement) {
+                return waitExistingTargetSettlement(existingSettlement);
+            }
             const barrierRecord = await createTargetSettlementRecord(captured);
             if (barrierRecord.recoveredTerminal) {
                 return barrierRecord.result;
@@ -11057,20 +11186,26 @@ function bindEvents() {
                     })
                     : result
             ));
-            const socialAudit = stateCommitting.then((result) => (
-                result.status === 'settled'
-                    ? runSocialAuditTarget(result.captured)
-                    : result
-            ));
-            const repair = Promise.all([settled, socialAudit]).then(([result, socialResult]) => (
-                result.status === 'settled' && socialResult?.status !== 'failed'
-                    ? enqueue(resolved, {
-                        queuedTarget: socialResult?.correctedTarget || result.captured,
-                        after: hardAudit,
-                        skipDelay: true,
-                    })
-                    : socialResult?.status === 'failed' ? socialResult : result
-            ));
+            const socialAudit = Promise.all([stateCommitting, hardAudit])
+                .then(([result, hardAuditResult]) => (
+                    result.status === 'settled'
+                        ? runSocialAuditTarget(
+                            hardAuditResult?.correctedTarget || result.captured,
+                        )
+                        : result
+                ));
+            const repair = Promise.all([settled, socialAudit, hardAudit])
+                .then(([result, socialResult, hardAuditResult]) => (
+                    result.status === 'settled' && socialResult?.status !== 'failed'
+                        ? enqueue(resolved, {
+                            queuedTarget: socialResult?.correctedTarget
+                                || hardAuditResult?.correctedTarget
+                                || result.captured,
+                            after: hardAudit,
+                            skipDelay: true,
+                        })
+                        : socialResult?.status === 'failed' ? socialResult : result
+                ));
             const openingSync = repair.then((repairResult) => (
                 ['stale', 'failed', 'blocked', 'busy'].includes(repairResult?.status)
                     ? repairResult
@@ -11088,6 +11223,9 @@ function bindEvents() {
                         status,
                         reason: repairResult?.reason || openingResult?.reason || '',
                         correctedTarget: repairResult?.correctedTarget || null,
+                        finalTarget: repairResult?.finalTarget
+                            || repairResult?.correctedTarget
+                            || captureTarget(getContext(), resolved),
                     };
                 });
             attachTargetSettlement(barrierRecord, finalReplySettlement);
@@ -11118,6 +11256,7 @@ function bindEvents() {
                 }
                 let effectiveHardAudit = hardAuditResult;
                 let continuityExpectedTarget = socialAuditResult?.correctedTarget
+                    || hardAuditResult?.correctedTarget
                     || settledTarget
                     || captured;
                 let hardErrors = (effectiveHardAudit?.issues || [])
@@ -11135,7 +11274,8 @@ function bindEvents() {
                 if (blockingHardErrors.length) {
                     const repairResult = await repair;
                     await openingSync;
-                    const postRepairTarget = repairResult?.correctedTarget
+                    const postRepairTarget = repairResult?.finalTarget
+                        || repairResult?.correctedTarget
                         || captureTarget(getContext(), resolved);
                     if (postRepairTarget) continuityExpectedTarget = postRepairTarget;
                     effectiveHardAudit = postRepairTarget
@@ -11178,7 +11318,8 @@ function bindEvents() {
                     setForumStatus('论坛：上游回复尚未稳定，本回合未自动刷新', '');
                     return continuityResult;
                 }
-                const expectedTarget = repairResult?.correctedTarget
+                const expectedTarget = repairResult?.finalTarget
+                    || repairResult?.correctedTarget
                     || captureTarget(getContext(), resolved)
                     || settledTarget
                     || captured;
@@ -11191,9 +11332,12 @@ function bindEvents() {
     );
     context.eventSource.on(
         types.MESSAGE_SWIPED || 'message_swiped',
-        (value) => restoreBranchCheckpointsForSwipe(value, { force: true }).catch((error) => {
-            console.warn('[MVU Auto Doctor] swipe 存档点恢复失败：', error);
-        }),
+        (value) => {
+            if (internalSwipeMutationDepth > 0) return undefined;
+            return restoreBranchCheckpointsForSwipe(value, { force: true }).catch((error) => {
+                console.warn('[MVU Auto Doctor] swipe 存档点恢复失败：', error);
+            });
+        },
     );
     const onChatChanged = () => {
             clearTimeout(pendingChatSaveTimer);

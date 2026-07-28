@@ -95,14 +95,17 @@ export function evaluateReleaseHardening(evidence = {}, limits = {}) {
     }
     for (const field of [
         'databaseCoexistence',
-        'databaseBarrierRegistered',
-        'databaseSettledAfterBarrier',
+        'externalDatabaseProtocolOptional',
+        'externalDatabaseUnmanagedAccurate',
+        'doctorManagedWritesSettledOnly',
         'databaseFailedStaleWritesZero',
-        'databaseTerminalReceiptsVerified',
         'rerollLifecycleCompatible',
         'companionControlsIsolated',
         'otherScriptsPreserved',
-        'runtimeConsoleErrorsZero',
+        'doctorRuntimeConsoleErrorsZero',
+        'databaseRuntimeConsoleErrorsZero',
+        'companionRuntimeConsoleErrorsZero',
+        'thirdPartyErrorAttributionReliable',
     ]) {
         if (compatibility[field] !== true) {
             issues.push(failure(
@@ -110,6 +113,12 @@ export function evaluateReleaseHardening(evidence = {}, limits = {}) {
                 `${field} 必须通过。`,
             ));
         }
+    }
+    if (compatibility.hostConsoleCleanClaimed !== false) {
+        issues.push(failure(
+            'hardening.compatibility.hostConsoleCleanClaimed',
+            '宿主存在已归属的第三方错误时不得宣称整个控制台干净。',
+        ));
     }
 
     return {

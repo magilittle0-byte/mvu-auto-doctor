@@ -12,6 +12,7 @@ import {
     countHanCharacters,
     detectContentTag,
     extractHardContractCorrection,
+    repairUnclosedContentTag,
     verifyHardContractEvidence,
 } from '../protocol-core.mjs';
 
@@ -321,6 +322,31 @@ test('reports an explicit safe degradation when the narrative wrapper is unknown
     assert.ok(!audit.issues.some((issue) => issue.code === 'content-under-budget'));
 });
 
+test('repairs only an unambiguous single missing content close tag', () => {
+    const reply = [
+        '<content>正文保持原样。',
+        '<options>>选项一：[等待]</options>',
+        '<UpdateVariable><JSONPatch>[]</JSONPatch></UpdateVariable>',
+    ].join('\n');
+    const repaired = repairUnclosedContentTag(reply);
+    assert.equal(repaired.repaired, true);
+    assert.match(
+        repaired.text,
+        /正文保持原样。\n<\/content>\n<options>/u,
+    );
+    assert.equal(
+        auditReplyProtocol(repaired.text).issues.some(
+            (issue) => issue.code === 'content-tag-count',
+        ),
+        false,
+    );
+    assert.equal(
+        repairUnclosedContentTag('<content>一</content><content>二').repaired,
+        false,
+        '多开标签存在歧义时不得猜测',
+    );
+});
+
 test('combines reply and equipment findings into one read-only audit', () => {
     const result = auditHardContracts({
         replyText: '<content>短正文</content>',
@@ -336,4 +362,52 @@ test('combines reply and equipment findings into one read-only audit', () => {
     });
     assert.ok(result.issues.some((issue) => issue.code === 'content-under-budget'));
     assert.ok(result.issues.some((issue) => issue.code === 'equipment-slot-contract-gap'));
+});
+
+test('treats an unfamiliar schema and front-end envelope as a black box', () => {
+    const state = {
+        nebulaLedger: {
+            ticks: 7,
+            sealed: false,
+        },
+        actors: [{
+            id: 'actor-a',
+            energy: {
+                now: 3,
+                cap: 9,
+            },
+        }],
+        uiEnvelope: {
+            renderer: 'unfamiliar-front-end',
+        },
+    };
+    const before = structuredClone(state);
+    const result = auditHardContracts({
+        replyText: [
+            '<content>Black-box neutral output.</content>',
+            '<UpdateVariable>',
+            '<Analysis>No state change.</Analysis>',
+            '<JSONPatch>[]</JSONPatch>',
+            '</UpdateVariable>',
+            '<StatusPlaceHolderImpl/>',
+        ].join('\n'),
+        contractTexts: ['Only declared JSON Pointer paths may be changed.'],
+        statData: state,
+        previousStatData: structuredClone(state),
+        schemaTexts: [
+            'registerMvuSchema(z.object({',
+            'nebulaLedger:z.object({ticks:z.number(),sealed:z.boolean()}),',
+            'actors:z.array(z.object({id:z.string(),energy:z.object({',
+            'now:z.number(),cap:z.number()}),',
+            '})),',
+            'uiEnvelope:z.object({renderer:z.string()}),',
+            '}))',
+        ].join(''),
+        ruleTexts: ['Unknown UI integrations are display-only.'],
+    });
+    assert.deepEqual(result.issues, []);
+    assert.deepEqual(state, before, 'a read-only audit must never reshape an unknown schema');
+    assert.equal(result.inventory.bagCount, 0);
+    assert.equal(result.equipment.equippedCount, 0);
+    assert.equal(result.resources.checkedSkills, 0);
 });

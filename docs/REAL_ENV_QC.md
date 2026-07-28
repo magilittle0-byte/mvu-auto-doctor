@@ -10,8 +10,19 @@ passes a real SillyTavern host, a real model response, and mobile interaction ch
   posts into that chat's extension metadata.
 - Keep the model credential in memory only. Do not place it in repository files,
   SillyTavern configuration, shell history, screenshots, logs, reports, or archives.
-- Do not upload `data/`, private chats, browser state, raw prompts, raw model responses,
-  or user profiles.
+- "Do not upload" here means do not copy private runtime data into the repository,
+  reports, archives, delegated tasks, or unrelated services. It does not forbid the
+  normal model request that real QC is intended to test.
+- An author-published character card and its model-intended card, preset, world-book,
+  regex-derived, or synthetic QC context may be sent to the explicitly configured
+  model during an authorized real test. This permission does not authorize preserving
+  the raw prompt or response in QC artifacts.
+- A private user-chat original requires explicit authorization. Otherwise use an
+  isolated chat copy or a sanitized/synthetic fixture. API keys, cookies, browser
+  state, user profiles, unrelated files, and private canaries are never model input.
+- If one case cannot prove its data boundary, block that case and switch to a public
+  or synthetic fixture. Do not skip all live model, writeback, lifecycle, and mobile
+  checks merely because content is present.
 - The reproducible environment recipe is archived in this repository. The private
   runtime instance and its user data remain local.
 
@@ -232,11 +243,14 @@ downstream behavior changes.
    durations. Do not record final narrative, a full prompt, raw payload or
    credential. Use `docs/2.0/PHASE_6_REAL_QC_TEMPLATE.json`.
 
-### 5C.1 External TavernDB registration
+### 5C.1 Optional external TavernDB cooperation
 
-TavernDB may run inside TavernHelper without exposing a stable global. Therefore the
-presence of TavernHelper is treated as a potential external database writer until one
-concrete database client registers API v5 barrier protocol v1 with all of:
+TavernDB and TavernHelper are third-party components. Their presence, script name,
+event listener, or lack of an Auto Doctor protocol must never turn the extension red
+or block normal use. Do not modify those components for QC and do not require their
+maintainers to adopt an Auto Doctor API.
+
+If a third-party database voluntarily exposes this compatible tuple:
 
 ```json
 {
@@ -247,16 +261,16 @@ concrete database client registers API v5 barrier protocol v1 with all of:
 }
 ```
 
-The real database integration must then prove that it consumes the terminal receipt,
-re-reads the final target only for `settled`, acknowledges `read-final-and-write`, and
-acknowledges `abandon` for `failed/stale`. A database listener that still consumes
-`MESSAGE_RECEIVED` directly is not compatible, even when its writes appear successful.
+the cooperative path may prove that it consumes terminal receipts, re-reads only a
+`settled` target, and abandons `failed/stale`. Without that tuple, record
+`mode=unmanaged` and `externalWriteConsistency=unknown`; this is an informational
+compatibility state, not a failure. Never infer or fabricate a third-party settlement.
 
-If registration is absent, require the environment self-check to show exactly
-`数据库未注册 barrier 协议`. Record `result=blocked`, do not run or claim the remaining
-release-promotion checks, and do not update `main` or the release-candidate branch.
-The scoped blocked-evidence receipt may authorize only the exact independent review
-branch named in the report; the tracked pre-push hook rejects every other remote ref.
+Independently prove that every Auto Doctor-managed write is bound to the complete
+chat/message/swipe/generation/branch/fingerprint identity, starts only after the
+doctor's own `settled`, and performs zero writes for failed, stale, timed-out, or late
+results. Those internal invariants remain mandatory even when all third-party scripts
+are non-cooperative.
 
 ## 6. Automated suite
 
@@ -289,9 +303,9 @@ git push
 `qc:record` binds the ignored local receipt to the exact committed `HEAD` and report
 hash. Any later code edit, amended commit, version change, report change, expiration,
 or dirty tracked file invalidates the receipt and blocks the tracked pre-push hook.
-For a fail-closed external-database result, these commands validate and bind the
-blocked evidence rather than converting it into a release pass. Only the report's
-single independent branch ref can be pushed; promotion refs remain forbidden.
+For any blocked result, these commands validate and bind the evidence rather than
+converting it into a release pass. Only the report's single independent branch ref can
+be pushed; promotion refs remain forbidden.
 
 ## Failure rule
 

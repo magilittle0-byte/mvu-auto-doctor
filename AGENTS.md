@@ -29,3 +29,15 @@ report, recommit, and record a new receipt before pushing.
 
 Never include API keys, raw private chats, user data directories, cookies, browser
 profiles, or unredacted model payloads in a QC report or archive.
+
+That reporting rule does not prohibit normal, explicitly authorized model inference.
+Author-published character cards and the card, preset, world-book, or synthetic QC
+context that would normally be sent to the user's selected model may be used in real
+QC. Private user-chat originals require explicit authorization or an isolated,
+sanitized copy. In every case, keep credentials and raw request/response payloads out
+of repository files, reports, screenshots, archives, and delegated tasks.
+
+Privacy uncertainty is not a reason to skip real QC. Isolate the test, minimize the
+data, use a public/synthetic fixture when needed, and continue testing. Block only the
+specific case whose boundary cannot be proved; do not convert that uncertainty into a
+claim that the product passed.

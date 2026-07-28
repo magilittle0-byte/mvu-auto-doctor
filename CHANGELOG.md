@@ -1,5 +1,11 @@
 # 更新日志
 
+## 2.0.0-rc.1 回归修复（未发布）
+
+- **TavernDB改为可选协作**：撤销“第三方数据库必须注册医生 barrier 协议”的产品要求。观察到兼容客户端时可共享终态；没有协议时自检为 info，模式为 `unmanaged`、外部写入一致性为 `unknown`，不再标红或阻止医生。医生自身的 failed/stale/late 写入门、完整目标身份和终态收据保持强制。
+- **从真实记录修复根因链**：唯一确定的缺失 `</content>` 现在生成新 swipe 并在 options/UpdateVariable/状态占位符前闭合；重复完整 UpdateVariable 块归一为一个；自动终态失败事件去重且模型超时上限为180秒；TavernHelper新旧脚本容器、`swipe_info` 长度和手机端宿主 CSS 覆盖均新增回归。
+- **旧 QC pass 作废**：2026-07-28 用户记录与旧161/161结论矛盾。当前真实 fixture 缺 MVU API、宿主控制台不干净，最新三次真实模型请求均失败；报告重建为 blocked。下方旧阶段7—10“未注册 TavernDB 必须 fail-closed / 已最终 pass”条目仅保留为历史，不再是当前产品或发布依据。
+
 ## 2.0.0-rc.1（2026-07-27）
 
 - **阶段10 TavernHelper 误报修复与发布解锁**：真实 fixture 的全局、预设、角色和活动脚本中均不存在 TavernDB；此前仅因加载了普通 TavernHelper 主机就报 `database.barrier_not_registered`，属于 fail-closed 误报。检测现改为要求具体证据（公开 TavernDB 全局、活动脚本名、脚本树签名，或数据库脚本直接监听 `MESSAGE_RECEIVED`）。真实酒馆自检显示“未检测到 TavernDB”；自动浏览器回归同时证明隐藏 TavernDB 脚本出现时仍会阻断，直到 `id=taverndb`、`settledOnly=true`、`terminalReceipts=true` 注册。完整161/161、Actor定点14/14和17/17回放通过，候选包已重建。

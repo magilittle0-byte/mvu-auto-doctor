@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-28T12:45:00+08:00",
+  "testedAt": "2026-07-29T03:40:53+08:00",
   "result": "pass",
-  "codeFingerprint": "9ebedb872ab8e01bde0c3b0d586559128c74362389ae07277a95770ad94fa65f",
+  "codeFingerprint": "6fefc4300ee7bbc54f6269dec9a3d5239f937e7baf6cd1bea2181152bf9a9673",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
     "url": "http://127.0.0.1:8011",
-    "browser": "Codex in-app Browser",
+    "browser": "headless Playwright with isolated profile",
     "viewport": {
       "width": 390,
       "height": 844
@@ -25,34 +25,356 @@
         "role": "mobile-touch"
       }
     ],
-    "extensionSource": {
-      "userDirectoryVerified": true,
-      "publicMirrorVerified": true,
-      "runtimeFilesCompared": 63,
-      "runtimeFileMismatches": 0
-    }
-  },
-  "resolvedBlocker": {
-    "code": "tavernhelper_false_positive",
-    "message": "数据库未注册 barrier 协议",
-    "externalDatabaseDetected": false,
-    "registrationObserved": false,
-    "releasePromotionBlocked": false,
-    "resolution": "The real fixture has TavernHelper but no global, preset, character, or active TavernDB script. Detection now requires concrete database evidence; an actual hidden TavernDB script remains fail-closed until protocol registration."
+    "runtimeFilesCompared": 63,
+    "runtimeFileMismatches": 0
   },
   "checks": {
     "testSuite": {
-      "total": 161,
-      "passed": 161,
+      "total": 169,
+      "passed": 169,
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 148713.4813
+      "durationMs": 157770.4316
     },
-    "actorTargeted": {
-      "total": 14,
-      "passed": 14,
-      "failed": 0
+    "targeted": {
+      "coreAndProtocolPassed": 27,
+      "browserRuntimePassed": 1,
+      "browserRuntimeDurationMs": 157387.6516,
+      "phase7ReplayCases": 17,
+      "phase7ReplayPassed": 17,
+      "phase7ReplayFailed": 0
+    },
+    "regressionMatrix": {
+      "evidenceSource": "sanitized-real-records",
+      "items": [
+        {
+          "id": "RC-DB-01",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Real spv8.4 and legacy spv5.5.6 exposed AutoCardUpdaterAPI and passed structurally discovered CRUD, refresh, callbacks, UI, switch, reload and cleanup; the doctor stayed unmanaged/unknown/info."
+        },
+        {
+          "id": "RC-CONTENT-02",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Latest assistant target had one recognized content opener and zero closers; continuity and forum were blocked."
+        },
+        {
+          "id": "RC-UPDATE-03",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "Logical message index 4 contained two complete UpdateVariable blocks after repair."
+        },
+        {
+          "id": "RC-MODEL-04",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Five concurrent deliveries of one complete target produced one settlement record and at most one call per task, without duplicate or wrong-target writes."
+        },
+        {
+          "id": "RC-SWIPE-05",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "Swipe append path did not normalize swipe_info length before adding a new identity."
+        },
+        {
+          "id": "RC-CARD-06",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "The 5.5.3 card is only one fixture. A black-box English schema and randomized external table/front-end names passed without state reshaping or external API invocation."
+        },
+        {
+          "id": "RC-MOBILE-07",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "Real host min-content and display rules collapsed action buttons and overrode hidden controls."
+        },
+        {
+          "id": "RC-PERF-08",
+          "severity": "medium",
+          "disposition": "fixed",
+          "evidence": "Breadth-first scans repeatedly shifted large arrays in long-session paths."
+        },
+        {
+          "id": "RC-QC-09",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "The previous pass report contradicted current real records, model results and host-console evidence."
+        },
+        {
+          "id": "RC-ENV-10",
+          "severity": "environment",
+          "disposition": "fixed",
+          "evidence": "Unsandboxed headless SillyTavern exposed complete MVU and 114-method AutoCardUpdater APIs; the 24-turn run completed 24/24 model calls with HTTP 200 while third-party resource errors remained separately attributed."
+        },
+        {
+          "id": "RC-FORUM-11",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "Current-source isolated-chat continuity and forum calls both applied; 2/2 model calls succeeded and produced four posts with twelve comments."
+        },
+        {
+          "id": "RC-ACTOR-12",
+          "severity": "medium",
+          "disposition": "fixed",
+          "evidence": "Real worker counts 1, 3 and 5 selected and succeeded 1/1, 3/3 and 5/5. The strict example now uses candidate facts instead of invalid placeholders."
+        },
+        {
+          "id": "RC-LIFECYCLE-13",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Internal correction swipes preserve finalTarget; real regenerate, swipe and chat-switch late responses all became stale with zero old-target writes while TavernDB remained loaded."
+        }
+      ]
+    },
+    "longSessionHardening": {
+      "syntheticMessages": 65,
+      "syntheticSwipes": 48,
+      "syntheticBytes": 3670016,
+      "unknownFieldsPreserved": true,
+      "tavernDbFieldsPreserved": true,
+      "rerollHelperFieldsPreserved": true,
+      "currentSwipeIdentityPreserved": true,
+      "monthlyReceiptCases": 1000,
+      "monthlyLedgerIdempotent": true,
+      "structureRepairRetryVerified": true,
+      "failedStaleContinuitySkipped": true,
+      "fullIdentityBarrierHistoryVerified": true,
+      "restartExactlyOnceVerified": true
+    },
+    "realLongSession": {
+      "fixture": "black-box-English-schema",
+      "turns": 24,
+      "messages": 49,
+      "settledTargets": 24,
+      "distinctTargetIdentities": 24,
+      "failedTargets": 0,
+      "staleTargets": 0,
+      "modelCalls": 24,
+      "modelCallsSucceeded": 24,
+      "swipeInfoAligned": true,
+      "finalCounterBeforeReload": 24,
+      "syntheticMvuStateClaimedAfterFixtureRemoval": false,
+      "reloadStructureRecovered": true,
+      "reloadSettledRecords": 24,
+      "databaseApiVisible": true,
+      "databaseRefreshStable": true,
+      "structureSha256": "c9272c89994e2eb23af9b670cde27995d5fce14fa680ccdceb85fe91e9dc4069",
+      "databaseSha256": "7f38504f7a61c32ee4d65f97476d243df70c847a82531edaef74bffbb7611147"
+    },
+    "realDatabaseCompatibility": {
+      "current": {
+        "version": "spv8.4",
+        "production": true,
+        "apiName": "AutoCardUpdaterAPI",
+        "apiMethods": 114,
+        "crudRoundTrip": true,
+        "refreshVerified": true,
+        "callbacksVerified": true,
+        "updateCallbackCount": 8,
+        "fillStartCallbackCount": 1,
+        "uiVerified": true,
+        "chatSwitchRecovered": true,
+        "reloadRecovered": true,
+        "cleanupVerified": true,
+        "bundleSha256": "53c9cdd770df9f0fa22173fcf6eef5feb91b66af4384976cdf17f449b4a67b42"
+      },
+      "legacy": {
+        "version": "spv5.5.6",
+        "production": false,
+        "apiName": "AutoCardUpdaterAPI",
+        "apiMethods": 88,
+        "crudRoundTrip": true,
+        "refreshVerified": true,
+        "callbacksVerified": true,
+        "updateCallbackCount": 6,
+        "fillStartCallbackCount": 1,
+        "uiVerified": true,
+        "chatSwitchRecovered": true,
+        "reloadRecovered": true,
+        "cleanupVerified": true,
+        "bundleSha256": "bc09e5b16b8704b1da28fc4bc2a8c9c7714c71972f4c6376523a99768d6a2529"
+      },
+      "tableNamesHardcoded": false,
+      "columnNamesHardcoded": false,
+      "doctorDatabaseApiCalls": 0,
+      "doctorRequiresDatabaseProtocol": false,
+      "externalMode": "unmanaged",
+      "externalConsistency": "unknown"
+    },
+    "eventStormDeduplication": {
+      "sameTargetDeliveries": 5,
+      "maximumCallsPerTask": 1,
+      "settledRecords": 1,
+      "wrongTargetWrites": 0,
+      "databaseApiVisible": true
+    },
+    "actorShard": {
+      "realWorkerCounts": [
+        1,
+        3,
+        5
+      ],
+      "selected": [
+        1,
+        3,
+        5
+      ],
+      "succeeded": [
+        1,
+        3,
+        5
+      ],
+      "failed": [
+        0,
+        0,
+        0
+      ],
+      "staleRegenerateWrites": 0,
+      "staleSwipeWrites": 0,
+      "staleChatSwitchWrites": 0,
+      "strictWhitelistExampleVerified": true
+    },
+    "universalCompatibility": {
+      "coreUsesDynamicJsonPointers": true,
+      "unknownSchemaReadOnlyAuditPassed": true,
+      "unknownSchemaReshaped": false,
+      "databaseTablesInspectedByDoctor": false,
+      "frontendFunctionsInvokedByDoctor": false,
+      "legacyDialectAdaptersConservative": true,
+      "currentCardIsFixtureOnly": true
+    },
+    "internalSafety": {
+      "doctorManagedWritesSettledOnly": true,
+      "failedDoctorWrites": 0,
+      "staleDoctorWrites": 0,
+      "lateDoctorWrites": 0,
+      "messageIdentityBound": true,
+      "swipeIdentityBound": true,
+      "generationIdentityBound": true,
+      "branchIdentityBound": true,
+      "contentFingerprintBound": true,
+      "automaticTerminalFailureDeduplicated": true,
+      "manualRetryStillAvailable": true,
+      "maximumModelTimeoutMs": 180000
+    },
+    "realEnvironment": {
+      "deployedRuntime": true,
+      "servedSourceMatchesFingerprint": true,
+      "separateHeadlessProfile": true,
+      "isolatedHostStopped": true,
+      "isolatedHostPortClosed": true,
+      "originalChatModified": false,
+      "originalCardModified": false,
+      "companionScriptsModified": false,
+      "doctorExtensionOnlyModified": true,
+      "runtimeMvuApiAvailable": true,
+      "environmentStatus": "ok",
+      "externalDatabaseProtocolOptional": true,
+      "tavernDbRegistrationRequired": false,
+      "externalDatabaseMode": "unmanaged",
+      "unmanagedProbeMode": "unmanaged",
+      "externalDatabaseWriteConsistency": "unknown",
+      "doctorManagedWritesSettledOnly": true,
+      "failedStaleLateDoctorWrites": 0,
+      "realStrictMvuWritebackVerified": true,
+      "realRegenerateStaleVerified": true,
+      "realSwipeStaleVerified": true,
+      "realChatSwitchStaleVerified": true,
+      "desktop": {
+        "width": 1280,
+        "height": 720,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false,
+        "closeButtonWidth": 42,
+        "closeButtonHeight": 42,
+        "actionButtonWidth": 140,
+        "actionButtonHeight": 42,
+        "hiddenCancelVisible": false
+      },
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "panelLeft": 6,
+        "panelRight": 384,
+        "panelTop": 172.1875,
+        "panelBottom": 780,
+        "minimumVisibleControlHeight": 42,
+        "actionButtonWidth": 332,
+        "actionButtonHeight": 42,
+        "horizontalOverflow": false,
+        "hiddenCancelVisible": false
+      },
+      "hostConsoleErrorCount": 100,
+      "doctorConsoleErrorCount": 0,
+      "hostConsoleErrorClasses": [
+        "third_party_js_slash_runner_resource_404",
+        "third_party_js_slash_runner_mime_rejection",
+        "third_party_resource_load_failure"
+      ],
+      "hostConsoleCleanClaimed": false,
+      "thirdPartyErrorsModified": false
+    },
+    "realModel": {
+      "result": "all-real-paths-passed",
+      "attempts": 8,
+      "succeeded": 8,
+      "failed": 0,
+      "evidenceEligibleAttempts": 6,
+      "supportingDiagnosticAttempts": 2,
+      "proxyStatuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200,
+        200
+      ],
+      "inputBytes": [
+        10922,
+        11049,
+        11049,
+        11049,
+        11049,
+        11049,
+        50868,
+        4153
+      ],
+      "appliedStrictRepairCalls": 1,
+      "appliedContinuityCalls": 1,
+      "appliedForumCalls": 1,
+      "staleRegenerateCalls": 1,
+      "staleSwipeCalls": 1,
+      "staleChatSwitchCalls": 1,
+      "staleTargetWrites": 0,
+      "forumPostCount": 4,
+      "forumCommentCount": 12,
+      "proxyStopped": true,
+      "credentialPersisted": false,
+      "rawPayloadPersisted": false,
+      "oldSuccessfulRunReusedAsCurrentEvidence": false,
+      "additionalSuccessfulCalls": {
+        "eventStormOutbound": 1,
+        "actorShardModelCalls": 17,
+        "realLongSessionModelCalls": 24
+      }
+    },
+    "cardCompatibility": {
+      "sourceFormat": "png-v3",
+      "originalModified": false,
+      "worldbookEntries": 77,
+      "tavernHelperScripts": 3,
+      "regexScripts": 8,
+      "characterVersionPresent": false,
+      "legacyCardWorldbookEntries": 75,
+      "legacyCardTavernHelperScripts": 2,
+      "standardAndLegacyContainersSupported": true,
+      "cardSideChangesRequired": false,
+      "fixtureOnly": true,
+      "unknownEnglishSchemaPassed": true
     },
     "phase6Barrier": {
       "apiVersion": 4,
@@ -96,74 +418,31 @@
       "diagnosticTargetIndexReceiptVerified": true,
       "sameMainModelAblation": true,
       "candidateGuardLogicUnchanged": true,
-      "longSessionTurns": 44,
+      "longSessionTurns": 24,
       "realAndSimulationAgree": true,
       "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
-      "packageSha256": "5c14f38ac3069573fc1212c83858ff4771d14a4c2612045806f0dfe5146db9b5",
+      "packageSha256": "ebeedc65832ef3ff9002b04400cbe4c486f8bad2c3857af3f29de1aa76526343",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true
     },
-    "migration": {
-      "recordCount": 256,
-      "serializedBytes": 136502,
-      "durationMs": 20.599,
-      "defaultLimitBytes": 8388608,
-      "realRecordMessageCount": 57,
-      "realRecordSwipeCount": 44,
-      "realRecordSerializedBytes": 3321711,
-      "realRecordMigrationMs": 156.712,
-      "realRecordRollbackMs": 148.232,
-      "realRecordReady": true,
-      "unknownFieldsPreserved": true,
-      "sourceChatUnchanged": true,
-      "fallbackHasNoPartialSidecar": true,
-      "rollbackDigestVerified": true
-    },
-    "hardening": {
-      "capacityBudgetPassed": true,
-      "realLegacyCapacityVerified": true,
-      "dependencyAuditVulnerabilities": 0,
-      "parameterizedDatabase": true,
-      "restartRecoveryVerified": true,
-      "lateWrites": 0,
-      "staleDownstreamWrites": 0,
-      "watchdogTerminalVerified": true
-    },
     "deepSeek": {
-      "models": [
-        "deepseek-v4-pro",
-        "deepseek-v4-flash"
-      ],
-      "calls": 19,
+      "model": "deepseek-v4-flash",
+      "calls": 4,
       "httpStatuses": [
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
         200,
         200,
         200,
         200
       ],
+      "reviewerOnlyForSocialProof": false,
       "credentialPersisted": false,
       "proxyStopped": true
     },
     "forum": {
-      "generatedPages": 5,
-      "topicCount": 21,
-      "commentCount": 53,
+      "generatedPages": 1,
+      "topicCount": 4,
+      "commentCount": 11,
       "openWithPointerOrTouch": true,
       "expand": true,
       "collapse": true,
@@ -173,14 +452,14 @@
       "legacyBodyControlCount": 0,
       "legacyReplyControlCount": 0,
       "opBodyMatchesSource": true,
+      "opBodySha256": "32217b908b96df74afe8a85078e99f1407882a818833d0cc64df3d500f56ce86",
       "opFinalTextVisible": true,
       "opBodyClipped": false,
       "repliesExpandedTogether": true,
       "collapsedRepliesHidden": true,
       "visibleReplyCount": 2,
       "totalReplyCount": 2,
-      "persistedAfterReload": true,
-      "deepSeekRefreshHttpStatus": 200
+      "refreshHttpStatus": 200
     },
     "scenarioPlan": {
       "baselineCreated": true,
@@ -198,6 +477,11 @@
       "exactBeforeAfterVerified": true,
       "preservedAchievementCount": 5,
       "amendmentSourceRefVerified": true,
+      "baselineSourceSha256": "aae14b2caa9241a52c055cc9fd23a1e45cb456ff5f7a03b0fcc564ea68c73378",
+      "amendmentSourceSha256": "d5599f9b5f17dfc697ba969080d1005c62609f076addcf01527eeb4ffc9e62c6",
+      "baselineSha256": "d1c7b04211fef8aa43dfed9cb0ea851e536b3266e1f2991fc82f5a849c14c55c",
+      "currentSha256": "3c2126e94bbbd07dd38c8ed76051dc9fccc9f01cfcce9aa049817336f0147bfb",
+      "amendmentSha256": "56c71c204d2969611a452cb334814a158dd0209643ac64b272f6c482f5987865",
       "uiTraceVisible": true,
       "summaryTouchTargetHeight": 42,
       "sameTurnWorldRewriteRejected": true,
@@ -206,29 +490,79 @@
       "apexRemovalAllowed": true,
       "terminalReopenRejected": true,
       "promptInjectionVerified": true,
-      "evidenceScope": "The 2026-07-27 real baseline proved Scenario Plan 5A; the current bounded 44-message chat produced no additional genuine plan and none was synthesized."
+      "originalChatRestored": true,
+      "modelCallDelta": 0
     },
     "socialGuard": {
       "sameMainModelAblation": true,
       "mainModel": "gpt-5.4-mini",
+      "mainPreset": "01_主预设_外置兼容终版",
       "pairedSamples": 2,
-      "phase7SyntheticPairCalls": 3,
-      "phase7SyntheticPairStatuses": [
-        200,
-        200,
-        200
-      ],
-      "phase7BoundedRetryUsed": true,
-      "phase7StoredChatMutations": 0,
       "deepSeekExcludedAsMainProof": true,
       "contractLandedInFinalPrompt": true,
+      "contractSentinelByArm": {
+        "A": [
+          false,
+          false
+        ],
+        "B": [
+          true,
+          true
+        ]
+      },
       "unselectedOptionsRemovedFromModelHistory": true,
+      "assistantOptionBlockCountInFinalPayload": 0,
       "storedChatUnchanged": true,
       "systemFormatInstructionsPreserved": true,
       "actualUserChoicePreserved": true,
       "ordinaryCareCases": 4,
+      "darkCharacterHelpCaseCovered": true,
+      "limitedSuspicionCaseCovered": true,
       "unsupportedMotiveAttributionReduced": true,
+      "unsupportedMotiveLabelCounts": {
+        "A": [
+          0,
+          1
+        ],
+        "B": [
+          0,
+          0
+        ],
+        "totalA": 1,
+        "totalB": 0
+      },
       "npcSuspicionStillAllowed": true,
+      "forcedTrustCount": 0,
+      "mainModelUsage": [
+        {
+          "arm": "A",
+          "promptTokens": 274,
+          "completionTokens": 283,
+          "totalTokens": 557,
+          "httpStatus": 200
+        },
+        {
+          "arm": "B",
+          "promptTokens": 896,
+          "completionTokens": 248,
+          "totalTokens": 1144,
+          "httpStatus": 200
+        },
+        {
+          "arm": "A",
+          "promptTokens": 275,
+          "completionTokens": 245,
+          "totalTokens": 520,
+          "httpStatus": 200
+        },
+        {
+          "arm": "B",
+          "promptTokens": 897,
+          "completionTokens": 249,
+          "totalTokens": 1146,
+          "httpStatus": 200
+        }
+      ],
       "relationshipRollbackVerified": true,
       "unrelatedMvuPreserved": true,
       "auditSourceTraceVisible": true,
@@ -237,24 +571,19 @@
       "reviewerDidNotRewriteNarrative": true,
       "noRiskTurnSkippedSemanticCall": true,
       "usageAndCostRecorded": true,
-      "fixedHostileReplayPassed": true
+      "fixedHostileReplayPassed": true,
+      "rawPromptPersisted": false,
+      "rawResponsePersisted": false
     },
     "mobile": {
-      "screenshotWidth": 390,
-      "screenshotHeight": 844,
-      "touchTargetWidth": 351,
+      "touchTargetWidth": 81.5,
       "touchTargetHeight": 42,
-      "minimumTouchTarget": 42,
       "tuckedOrbTouchWidth": 44,
       "tuckedOrbRightRealProbeHit": true,
       "tuckedOrbLeftAutomatedProbeHit": true,
       "tuckedOrbClipInset": 6,
-      "floatingPanelLeft": 6,
-      "floatingPanelRight": 384,
-      "floatingPanelTop": 464.984375,
+      "floatingPanelTop": 172.1875,
       "floatingPanelBottom": 780,
-      "forumPanelLeft": 0,
-      "forumPanelRight": 390,
       "forumPanelTop": 0,
       "forumPanelBottom": 844,
       "forumShellClientWidth": 390,
@@ -262,249 +591,71 @@
     },
     "companionScripts": {
       "databaseCoexistence": true,
-      "databasePresentInCurrentFixture": false,
-      "tavernHelperFalsePositiveResolved": true,
-      "hiddenDatabaseScriptStillFailClosed": true,
+      "databaseApiMethodCount": 114,
+      "tableTemplateVerified": true,
+      "diceFrontendVerified": true,
       "rerollHelperAnalyzed": true,
-      "rerollSourceSha256": "ffc93ebefd15c695a011b528433476e779164df3c863766aab849fac58933e2f",
       "rerollLifecycleCompatible": true,
       "rerollEvent": "chat_id_changed",
       "rerollStorageNamespaceIsolated": true,
       "rerollControlNamespaceIsolated": true,
-      "rerollDirectMessageMutationDoesNotBypassDoctorBarrier": true,
+      "rerollControlCount": 3,
+      "rerollDuplicateMounts": 0,
+      "stitchesDatabasePresetVerified": true,
+      "stitchesRegexLayerVerified": true,
+      "stitchesTaskCount": 2,
+      "stitchesReloadVerified": true,
+      "stitchesExplicitUiRefreshVerified": true,
+      "chatMessageCount": 49,
+      "chatUnchanged": true,
+      "modelRequestCount": 0,
       "otherScriptsPreserved": true,
-      "loadedExtensionScriptCount": 12,
-      "runtimeConsoleErrorCount": 0
-    },
-    "phase7Replay": {
-      "cases": 17,
-      "passed": 17,
-      "failed": 0,
-      "todo": 0,
-      "realEnvironmentEvidenceWins": true
-    },
-    "longSessionHardening": {
-      "syntheticMessages": 65,
-      "syntheticSwipes": 48,
-      "syntheticBytes": 3670016,
-      "syntheticBytesMeasurement": "confirmed-minimum",
-      "unknownFieldsPreserved": true,
-      "tavernDbFieldsPreserved": true,
-      "rerollHelperFieldsPreserved": true,
-      "currentSwipeIdentityPreserved": true,
-      "monthlyReceiptCases": 1000,
-      "monthlyLedgerIdempotent": true,
-      "monthlySoftReminderVerified": true,
-      "monthlyHardStopVerified": true,
-      "structureRepairRetryVerified": true,
-      "structureRepairRetryMaximum": 1,
-      "structureFailureCode": "social.invalid_structure_after_repair",
-      "failedStaleContinuitySkipped": true,
-      "continuityReceiptsPersisted": true,
-      "fullIdentityBarrierHistoryVerified": true,
-      "restartExactlyOnceVerified": true,
-      "browserRuntimePassed": true
-    },
-    "actorSyntheticLongSession": {
-      "floors": 40,
-      "workerSelections": [
-        0,
-        1,
-        3,
-        5
+      "loadedExtensionScriptCount": 32,
+      "doctorRuntimeConsoleErrorCount": 0,
+      "databaseRuntimeConsoleErrorCount": 0,
+      "companionRuntimeConsoleErrorCount": 0,
+      "thirdPartyErrorAttributionReliable": true,
+      "thirdPartyErrorOwner": "JS-Slash-Runner",
+      "thirdPartyAttributedErrorCount": 75,
+      "thirdPartyErrorDigests": [
+        "01771b1f0eaa6472c646c67a3abbe6d4638a8d5627834a29f7fb94af3b3a3720",
+        "ef0a74a98b28c64673681f081b370a4de5286f803b11cd4029b9e97f6ba5f2cf"
       ],
-      "outOfOrderCompletionDeterministic": true,
-      "singleWorkerFailureDegrades": true,
-      "singleWorkerTimeoutDegrades": true,
-      "regenerateBatchStaleZeroWrites": true,
-      "swipeBatchStaleZeroWrites": true,
-      "chatSwitchBatchStaleZeroWrites": true,
-      "zeroWriteTargets": [
-        "mvu",
-        "worldbook",
-        "forum",
-        "message",
-        "database",
-        "task"
+      "hostConsoleCleanClaimed": false,
+      "rerollSourceSha256": "ffc93ebefd15c695a011b528433476e779164df3c863766aab849fac58933e2f"
+    },
+    "cleanup": {
+      "credentialsDeletedAndUnloaded": true,
+      "credentialPorts": [
+        9328,
+        9331,
+        9332
       ],
-      "multipleBranchesAndSwipes": true,
-      "largeTextVerified": true,
-      "timeLocationCausalConflictsVerified": true,
-      "disabledPathByteEquivalent": true,
-      "arbitraryCanaryPrivacyVerified": true
-    },
-    "realEnvironment": {
-      "deployedRuntime": true,
-      "servedSourceMatchesFingerprint": true,
-      "tavernHelperDetected": true,
-      "databaseBarrierRegistered": false,
-      "databaseBarrierRequired": false,
-      "concreteDatabaseDetected": false,
-      "selfCheckKind": "info",
-      "selfCheckCode": "",
-      "selfCheckObservedText": "No TavernDB detected; future database scripts must register barrier protocol v1 before writes.",
-      "selfCheckMessage": "数据库未注册 barrier 协议",
-      "externalDatabaseCompatibilityClaimed": false,
-      "companionScriptsModified": false,
-      "doctorExtensionOnlyModified": true,
-      "hiddenDatabaseScriptFailClosedVerified": true,
-      "mainModelRequestRunAfterBlocker": true,
-      "remainingPromotionChecksClaimed": false,
-      "consoleErrors": 0,
-      "worldbookCoexistenceObserved": true,
-      "companionMessageIframesObserved": 7
-    },
-    "realLongSession": {
-      "chatMessages": 44,
-      "minimumRequired": 24,
-      "messageIdsContiguous": true,
-      "worldEntries": 4,
-      "eventEntries": 2,
-      "forumEntries": 21,
-      "reloadCountsPreserved": true,
-      "scenarioPlan5A": {
-        "result": "blocked",
-        "reason": "Real continuity calls succeeded, but the selected bounded chat still produced no genuine active plan or revision; no plan was synthesized or simulated."
-      }
-    },
-    "realModel": {
-      "proxyHealthVerified": true,
-      "proxyStoppedAfterQc": true,
-      "credentialClearedAfterQc": true,
-      "credentialValueReadOrLogged": false,
-      "models": [
-        "deepseek-v4-pro",
-        "deepseek-v4-flash"
-      ],
-      "attempts": 26,
-      "status599": 2,
-      "status401": 5,
-      "status200": 19,
-      "successfulCredentialRun": {
-        "attempts": 19,
-        "status200": 19,
-        "non200": 0,
-        "loggedFields": [
-          "model",
-          "status",
-          "durationMs",
-          "inputBytes"
-        ]
-      },
-      "strictChannelConnectionStatus": 200,
-      "fastChannelConnectionStatus": 200,
-      "successfulStrictJsonClaimed": true,
-      "actorWorkerCountsConfiguredAndPersisted": [
-        1,
-        3,
-        5
-      ],
-      "actorModeDisabledExtraCalls": 0,
-      "actorCandidatesInSelectedChats": 1,
-      "actualWorkerCountsObserved": [
-        1,
-        1,
-        1
-      ],
-      "workerSelectionLimitedByEligibleCandidates": true,
-      "realActorShardSuccessClaimed": true,
-      "realStaleZeroWriteSuccessClaimed": false,
-      "failureDegradationVisible": true,
-      "hardContractBlockedActorAndContinuityCalls": true,
-      "mainStoryRequestViaMemoryProxySucceeded": true,
-      "openCodeMinimalCompatibilityProbeStatus": 200,
-      "openCodeFullSillyTavernRequestCompatible": false
-    },
-    "freePromptCanary": {
-      "continuitySlotSystemPlacementVerified": true,
-      "continuitySlotLabelVerified": true,
-      "hardBoundaryPrecedesSlot": true,
-      "actorSlotDispatchVerified": true,
-      "actorSlotIndependentInstructionVerified": true,
-      "continuitySlotIndependentInstructionVerified": true,
-      "diagnosticsContainFullPrompt": false,
-      "diagnosticsContainCanary": false,
-      "settingsRestoredAndCanariesCleared": true
-    },
-    "desktopForum": {
-      "viewportWidth": 1280,
-      "viewportHeight": 720,
-      "fullForumWithinViewport": true,
-      "horizontalOverflow": false,
-      "pointerOpened": true
-    },
-    "mobileForum": {
-      "viewportWidth": 390,
-      "viewportHeight": 844,
-      "fullForumWidth": 390,
-      "horizontalOverflow": false,
-      "pointerExpandedAndCollapsed": true,
-      "ariaStateCorrect": true,
-      "fullTextAndRepliesVisibleWhenExpanded": true,
-      "toggleMinimumWidth": 351,
-      "toggleMinimumHeight": 42,
-      "floatingPanelWithinViewport": true,
-      "visibleButtonsMinimumHeight": 42
-    },
-    "databaseBarrier": {
-      "requiredId": "taverndb",
-      "requiredProtocolVersion": 1,
-      "requiredSettledOnly": true,
-      "requiredTerminalReceipts": true,
-      "concreteDatabaseDetected": false,
-      "registrationRequiredInCurrentFixture": false,
-      "registrationTupleObserved": false,
-      "realSettledReceiptAcknowledgementObserved": false,
-      "realFailedReceiptAcknowledgementObserved": false,
-      "realStaleReceiptAcknowledgementObserved": false,
-      "failClosed": true,
-      "benignTavernHelperDoesNotTriggerDatabaseGate": true,
-      "hiddenTavernDbScriptTriggersGate": true,
-      "syntheticTerminalReceiptContractVerified": true
-    },
-    "privacyCanary": {
-      "credentialFindings": 0,
-      "privateContentFindings": 0,
-      "derivedNarrativeFindings": 0,
-      "fullPromptFindings": 0,
-      "rawPayloadFindings": 0,
-      "absoluteUserPathFindings": 0,
-      "fullUserAgentFindings": 0
-    },
-    "package": {
-      "name": "05_MVU自动医生_v2.0.0-rc.1_离线候选.zip",
-      "sha256": "5c14f38ac3069573fc1212c83858ff4771d14a4c2612045806f0dfe5146db9b5",
-      "files": 67,
-      "bytes": 1455272,
-      "promotionAuthorized": true
+      "isolatedSettingsRestored": true,
+      "safeDatabaseScriptCount": 1,
+      "isolatedPresetRestored": true,
+      "temporaryRegexDirectoryRemoved": true,
+      "originalArchiveTouched": false,
+      "closedPorts": [
+        8011,
+        9328,
+        9331,
+        9332
+      ]
     }
   },
   "publication": {
-    "scope": "release-candidate-and-main-fast-forward",
+    "scope": "maintainer-authorized-main-fast-forward",
     "allowedRemoteRefs": [
-      "refs/heads/codex/v2-actor-shards",
       "refs/heads/main"
     ],
     "mainAllowed": true,
     "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
-    "pullRequestUpdateAllowed": true,
-    "maintainerAuthorizationObserved": true,
-    "prePromotionMainCommit": "d659167ce3a861dbef3391800057ec7f0d54dbfd",
-    "prePromotionMainTree": "a19a5a0bc4d7e3e7cebad6694af10c80ad8e5f35",
-    "backupRef": "refs/heads/codex/backup-main-pre-v2.0.0-rc.1-20260727",
-    "backupVerified": true,
-    "forcePushUsed": false,
-    "initialRemotePublicationCommit": "dfb347400ae80b1b1b34e23b07b3faf1d087c8f8",
-    "initialRemotePublicationTree": "ddc4317c1d00241cba2f02bb5f43ae583b4e325e",
-    "pullRequest": "https://github.com/magilittle0-byte/mvu-auto-doctor/pull/29",
-    "pullRequestState": "merged-by-main-fast-forward"
-  },
-  "baselineReleaseQc": {
-    "testedAt": "2026-07-27T23:32:16+08:00",
-    "result": "pass",
-    "codeFingerprint": "543b141df501b308558b7895f90bc9a3e297a4c6cffbc378d33c682fdac12947",
-    "scope": "pre-hardening published baseline only"
+    "pullRequestUpdateAllowed": false,
+    "maintainerAuthorizationObservedForThisRepair": true,
+    "releaseTagAllowed": false,
+    "githubReleaseAllowed": false
   },
   "privacy": {
     "apiKeyIncluded": false,
@@ -514,6 +665,11 @@
     "derivedNarrativeFindings": 0,
     "fullPromptFindings": 0,
     "privateCanaryFindings": 0,
-    "fullUserAgentIncluded": false
+    "fullUserAgentIncluded": false,
+    "originalEvidenceModified": false,
+    "authorPublishedCardInferenceAuthorized": true,
+    "privateChatModelEgress": false,
+    "isolatedQcChatUsed": true,
+    "syntheticFixtureUsedForStrictWriteback": true
   }
 }

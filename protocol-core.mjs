@@ -228,6 +228,46 @@ export function detectContentTag(replyText) {
     };
 }
 
+export function repairUnclosedContentTag(replyText) {
+    const text = asText(replyText);
+    const detection = detectContentTag(text);
+    if (!detection || detection.open !== 1 || detection.close !== 0) {
+        return {
+            repaired: false,
+            text,
+            reason: detection
+                ? '正文标签结构不属于可无歧义修复的单开零闭情形'
+                : '没有识别到正文标签',
+        };
+    }
+    const escaped = detection.tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const open = new RegExp(`<${escaped}(?=[\\s>/])[^>]*>`, 'iu').exec(text);
+    if (!open) {
+        return {
+            repaired: false,
+            text,
+            reason: '没有定位到正文开标签',
+        };
+    }
+    const contentStart = open.index + open[0].length;
+    const tail = text.slice(contentStart);
+    const structuralBoundary = /<(?:options|UpdateVariable|StatusPlaceHolderImpl)\b/iu.exec(tail);
+    const insertAt = structuralBoundary
+        ? contentStart + structuralBoundary.index
+        : text.length;
+    const before = text.slice(0, insertAt).trimEnd();
+    const after = text.slice(insertAt).trimStart();
+    return {
+        repaired: true,
+        text: after
+            ? `${before}\n</${detection.tag}>\n${after}`
+            : `${before}\n</${detection.tag}>`,
+        tag: detection.tag,
+        code: 'content-tag-count',
+        reason: `补齐唯一缺失的 </${detection.tag}>，未改写正文内容`,
+    };
+}
+
 export function applyHardContractCorrection(replyText, correction) {
     if (!correction || correction.error) {
         return { error: correction?.error || '没有可应用的正文校正' };

@@ -85,6 +85,13 @@ button, select, input {
   color: var(--SmartThemeBodyColor);
   background: #162432;
 }
+.menu_button {
+  display: flex;
+  width: min-content;
+  margin: 5px 0;
+  align-items: center;
+  justify-content: center;
+}
 input[type="checkbox"] { min-height: auto; }
 </style></head><body>
 <div id="extensions_settings2"></div>
@@ -864,8 +871,35 @@ try {
         document.body.append(hiddenDatabaseScript);
         const databaseScriptBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
         hiddenDatabaseScript.remove();
+        let externalApiCalls = 0;
+        window.AutoCardUpdaterAPI = {
+            exportTableAsJson() {
+                externalApiCalls += 1;
+                return {
+                    'sheet-with-random-name': {
+                        content: [
+                            ['unfamiliar-column-a', 'unfamiliar-column-b'],
+                        ],
+                    },
+                };
+            },
+            refreshDataAndWorldbook() {
+                externalApiCalls += 1;
+                return true;
+            },
+        };
+        window.UnfamiliarDiceFrontend = {
+            resolve() {
+                externalApiCalls += 1;
+            },
+        };
+        const autoCardUpdaterBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const externalApiCallsAfterInspection = externalApiCalls;
+        delete window.AutoCardUpdaterAPI;
+        delete window.UnfamiliarDiceFrontend;
         window.TavernDB = {};
         const databaseBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const diagnosticBefore = window.MvuAutoDoctorAPI.getDiagnosticProjection();
         const databaseRegistration = await window.MvuAutoDoctorAPI
             .registerBarrierProtocolClient({
                 id: 'taverndb',
@@ -892,7 +926,10 @@ try {
             ),
             helperOnly,
             databaseScriptBefore,
+            autoCardUpdaterBefore,
+            externalApiCallsAfterInspection,
             databaseBefore,
+            diagnosticBefore,
             databaseRegistration,
             databaseAfter,
             diagnostic,
@@ -900,6 +937,11 @@ try {
     });
     assert.equal(diagnosticsUi.apiCompatible, true);
     assert.equal(diagnosticsUi.apiAcceptsBarrierV4, true);
+    assert.equal(
+        diagnosticsUi.externalApiCallsAfterInspection,
+        0,
+        'generic coexistence detection must not read tables or invoke an unknown front end',
+    );
     assert.ok(diagnosticsUi.healthItems >= 6, '设置页必须给出可读环境自检清单');
     assert.ok(diagnosticsUi.promptInfo.totalChars > 0, '必须保存上次真实提示词的分段规模');
     assert.equal(diagnosticsUi.modelCalls.total, 3, '变量、活世界、手动论坛应分别计为一次模型调用');
@@ -945,25 +987,51 @@ try {
         'benign TavernHelper scripts must not be mistaken for TavernDB',
     );
     assert.equal(
-        diagnosticsUi.databaseScriptBefore.checks.find(
-            (check) => check.label.startsWith('TavernDB '),
+        diagnosticsUi.autoCardUpdaterBefore.checks.find(
+            (check) => check.label === 'TavernDB 可选协作',
         ).kind,
-        'error',
-        'a hidden TavernDB userscript must remain fail-closed until registration',
+        'info',
+        'the real public AutoCardUpdaterAPI must be detected without requiring a doctor protocol',
+    );
+    assert.equal(
+        diagnosticsUi.autoCardUpdaterBefore.barrierProtocol.mode,
+        'unmanaged',
+    );
+    assert.equal(
+        diagnosticsUi.autoCardUpdaterBefore.barrierProtocol.externalWriteConsistency,
+        'unknown',
+    );
+    assert.equal(
+        diagnosticsUi.databaseScriptBefore.checks.find(
+            (check) => check.label === 'TavernDB 可选协作',
+        ).kind,
+        'info',
+        'a hidden TavernDB userscript without cooperation must remain compatible',
     );
     assert.equal(diagnosticsUi.databaseRegistration.ok, true);
     assert.equal(
         diagnosticsUi.databaseBefore.checks.find(
-            (check) => check.label === 'TavernDB 稳定屏障',
+            (check) => check.label === 'TavernDB 可选协作',
         ).kind,
-        'error',
+        'info',
     );
     assert.equal(
         diagnosticsUi.databaseAfter.checks.find(
-            (check) => check.label === 'TavernDB 稳定屏障',
+            (check) => check.label === 'TavernDB 可选协作',
         ).kind,
         'ok',
     );
+    assert.equal(diagnosticsUi.diagnosticBefore.environment.barrierProtocol.required, false);
+    assert.equal(
+        diagnosticsUi.diagnosticBefore.environment.barrierProtocol.externalDatabaseDetected,
+        true,
+    );
+    assert.equal(diagnosticsUi.diagnosticBefore.environment.barrierProtocol.mode, 'unmanaged');
+    assert.equal(
+        diagnosticsUi.diagnosticBefore.environment.barrierProtocol.externalWriteConsistency,
+        'unknown',
+    );
+    assert.equal(diagnosticsUi.diagnosticBefore.environment.barrierProtocol.errorCode, '');
     assert.equal(typeof diagnosticsUi.diagnostic.environment.userAgent, 'object');
 
     const reloadBarrierPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -996,6 +1064,101 @@ try {
     assert.equal(recoveredAfterReload.recovered.workflowStatus, 'recovered-terminal');
     assert.equal(recoveredAfterReload.modelCallDelta, 0);
     await reloadBarrierPage.close();
+
+    const eventStormPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await eventStormPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await eventStormPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const eventStorm = await eventStormPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('social-rollback');
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            enabled: true,
+            socialNarrativeGuardEnabled: true,
+            socialAuditMode: 'balanced',
+            socialMonthlySoftCny: 5,
+            socialMonthlyHardCny: 10,
+        });
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
+            { is_user: true, is_system: false, mes: '我给她带一份晚饭。', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: '她把普通照顾理解成控制并立刻宣誓忠诚。\\n<UpdateVariable><Analysis>关系变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: {
+                账户: { 代币: 2 },
+                角色: { 她: { 好感度: 5, 关系: '同行者' } },
+            },
+            display_data: {},
+        };
+        const after = {
+            stat_data: {
+                账户: { 代币: 2 },
+                角色: { 她: { 好感度: 40, 关系: '狂热追随者' } },
+            },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const modelBefore = window.MvuAutoDoctorAPI.getModelCallStats();
+        const replaceBefore = t.calls.replace.length;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await Promise.all(Array.from(
+            { length: 5 },
+            () => t.context.eventSource.emit('message_received', 2),
+        ));
+        const settled = await window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 20000 },
+        );
+        const modelAfter = window.MvuAutoDoctorAPI.getModelCallStats();
+        const modelTypes = t.calls.model.slice(modelBefore.total);
+        const typeCounts = Object.fromEntries(
+            [...new Set(modelTypes)].map((type) => [
+                type,
+                modelTypes.filter((candidate) => candidate === type).length,
+            ]),
+        );
+        const records = Object.values(
+            t.context.chatMetadata?.mvu_auto_doctor?.phase6Runtime?.records || {},
+        ).map((entry) => entry?.value).filter((entry) => (
+            entry?.state && entry?.targetIndex === 2
+        ));
+        return {
+            settled,
+            modelCallDelta: modelAfter.total - modelBefore.total,
+            typeCounts,
+            socialRuns: t.calls.socialRuns,
+            socialAuditCount: window.MvuAutoDoctorAPI.getSocialAudits().length,
+            replacementDelta: t.calls.replace.length - replaceBefore,
+            barrierRecordCount: records.length,
+            barrierStates: [...new Set(records.map((record) => record.state))],
+        };
+    });
+    assert.equal(
+        eventStorm.settled.status,
+        'settled',
+        `事件风暴目标必须 settled：${JSON.stringify(eventStorm)}`,
+    );
+    assert.equal(eventStorm.socialRuns, 1, '重复宿主事件不得重复触发人物关系模型二审');
+    assert.equal(eventStorm.socialAuditCount, 1, '同一完整目标身份只能持久化一条人物关系二审');
+    assert.ok(
+        Object.values(eventStorm.typeCounts).every((count) => count <= 1),
+        `同一完整目标身份的每类自动模型任务最多一次：${JSON.stringify(eventStorm.typeCounts)}`,
+    );
+    assert.equal(
+        eventStorm.replacementDelta,
+        2,
+        '关系回滚与变量修复各提交一次；事件风暴不得产生第三次写入',
+    );
+    assert.equal(eventStorm.barrierRecordCount, 1, '事件风暴必须合并到同一持久屏障');
+    assert.deepEqual(eventStorm.barrierStates, ['settled']);
+    await eventStormPage.close();
 
     const socialPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await socialPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -1562,6 +1725,44 @@ try {
         await page.screenshot({ path: process.env.MVUAD_FLOATING_SCREENSHOT });
     }
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="tools"]');
+    const floatingToolControls = await page.evaluate(() => {
+        const panel = document.querySelector('#mvuad-floating-panel');
+        const actions = [...panel.querySelectorAll('.mvuad-floating-actions > button')];
+        const visible = actions.filter((button) => !button.hidden);
+        return {
+            close: (() => {
+                const box = panel.querySelector('.mvuad-floating-close')
+                    ?.getBoundingClientRect();
+                return {
+                    width: box?.width || 0,
+                    height: box?.height || 0,
+                };
+            })(),
+            visibleCount: visible.length,
+            hiddenCancel: panel.querySelector('.mvuad-floating-cancel-task')?.hidden,
+            controls: visible.map((button) => {
+                const box = button.getBoundingClientRect();
+                return {
+                    width: box.width,
+                    height: box.height,
+                    lines: Math.round(box.height / 20),
+                };
+            }),
+        };
+    });
+    assert.equal(floatingToolControls.hiddenCancel, true);
+    assert.equal(floatingToolControls.visibleCount, 4);
+    assert.ok(
+        floatingToolControls.close.width >= 42
+        && floatingToolControls.close.height >= 42,
+        `悬浮面板关闭按钮必须达到 42×42：${JSON.stringify(floatingToolControls.close)}`,
+    );
+    assert.ok(
+        floatingToolControls.controls.every(
+            (control) => control.width >= 42 && control.height >= 42,
+        ),
+        `真实宿主 min-content 规则下工具按钮仍须横向可读：${JSON.stringify(floatingToolControls.controls)}`,
+    );
     if (process.env.MVUAD_FLOATING_TOOLS_SCREENSHOT) {
         await page.locator('#mvuad-floating-panel').screenshot({ path: process.env.MVUAD_FLOATING_TOOLS_SCREENSHOT });
     }
@@ -3449,6 +3650,164 @@ try {
         (issue) => issue.code === 'content-under-budget',
     ));
     await correctionPage.close();
+
+    const deterministicStructurePage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await deterministicStructurePage.goto(
+        `http://127.0.0.1:${port}/`,
+        { waitUntil: 'networkidle' },
+    );
+    await deterministicStructurePage.waitForFunction(
+        () => !!window.MvuAutoDoctorAPI,
+    );
+    const deterministicStructure = await deterministicStructurePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.chat[2].mes = [
+            '<content>你观察门边的守卫。',
+            '<options>',
+            '>选项一：[继续观察]',
+            '>选项二：[等待变化]',
+            '>选项三：[保持警戒]',
+            '>选项四：[结束回合]',
+            '</options>',
+            '<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        ].join('\n');
+        delete t.context.chat[2].swipes;
+        delete t.context.chat[2].swipe_info;
+        const modelCallsBefore = t.calls.model.length;
+        const replaceCallsBefore = t.calls.replace.length;
+        const result = await window.MvuAutoDoctorAPI.auditHardContracts();
+        return {
+            result,
+            message: structuredClone(t.context.chat[2]),
+            modelCallDelta: t.calls.model.length - modelCallsBefore,
+            replaceCallDelta: t.calls.replace.length - replaceCallsBefore,
+        };
+    });
+    assert.equal(deterministicStructure.result.status, 'audited');
+    assert.equal(deterministicStructure.result.deterministicCorrection.status, 'applied');
+    assert.equal(deterministicStructure.modelCallDelta, 0);
+    assert.equal(deterministicStructure.replaceCallDelta, 1, '修正版 swipe 必须复制原 MVU 快照');
+    assert.equal(deterministicStructure.message.swipe_id, 1);
+    assert.match(
+        deterministicStructure.message.mes,
+        /你观察门边的守卫。\n<\/content>\n<options>/u,
+    );
+    assert.equal(
+        (deterministicStructure.message.mes.match(/<UpdateVariable\b/giu) || []).length,
+        1,
+    );
+    assert.ok(!deterministicStructure.result.issues.some(
+        (issue) => issue.code === 'content-tag-count',
+    ));
+    await deterministicStructurePage.close();
+
+    const internalSwipeLifecyclePage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await internalSwipeLifecyclePage.goto(`http://127.0.0.1:${port}/`, {
+        waitUntil: 'networkidle',
+    });
+    await internalSwipeLifecyclePage.waitForFunction(
+        () => !!window.MvuAutoDoctorAPI,
+    );
+    const internalSwipeLifecycle = await internalSwipeLifecyclePage.evaluate(async () => {
+        const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            builtInContinuityEnabled: false,
+            builtInForumEnabled: false,
+            delayMs: 300,
+        });
+        t.context.chat[2].mes = [
+            '<content>你观察门边的守卫。',
+            '<options>',
+            '>选项一：[继续观察]',
+            '>选项二：[等待变化]',
+            '>选项三：[保持警戒]',
+            '>选项四：[结束回合]',
+            '</options>',
+            '<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        ].join('\n');
+        delete t.context.chat[2].swipes;
+        delete t.context.chat[2].swipe_info;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        const namespace = (
+            t.context.chatMetadata.mvu_auto_doctor ||= {}
+        );
+        namespace.continuity = {
+            ...(namespace.continuity || {}),
+            internalSwipeMarker: 'current-state',
+        };
+        namespace.continuityCheckpoint = {
+            targetIndex: 2,
+            state: {
+                ...(namespace.continuity || {}),
+                internalSwipeMarker: 'checkpoint-state',
+            },
+        };
+        await t.context.eventSource.emit('message_received', 2);
+        const barrier = await window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 20000 },
+        );
+        return {
+            barrier,
+            current: structuredClone(t.context.chat[2]),
+            marker: t.context.chatMetadata.mvu_auto_doctor
+                ?.continuity?.internalSwipeMarker,
+        };
+    });
+    assert.equal(
+        internalSwipeLifecycle.barrier.status,
+        'settled',
+        '医生自己的修正版 swipe 必须作为同一工作流的继任目标结算',
+    );
+    assert.equal(internalSwipeLifecycle.current.swipe_id, 1);
+    assert.equal(
+        internalSwipeLifecycle.barrier.swipeId,
+        1,
+        '终态 barrier 必须绑定修正版 swipe，而不是原始坏结构',
+    );
+    assert.equal(
+        internalSwipeLifecycle.marker,
+        'current-state',
+        '内部修正版事件不得被当作用户切换并回滚连续性存档点',
+    );
+    assert.match(
+        internalSwipeLifecycle.current.mes,
+        /你观察门边的守卫。\n<\/content>\n<options>/u,
+    );
+    await internalSwipeLifecyclePage.close();
+
+    const duplicateUpdatePage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await duplicateUpdatePage.goto(`http://127.0.0.1:${port}/`, {
+        waitUntil: 'networkidle',
+    });
+    await duplicateUpdatePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const duplicateUpdate = await duplicateUpdatePage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.chat[2].mes = [
+            '<content>正文</content>',
+            '<UpdateVariable><Analysis>旧块一</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+            '<UpdateVariable><Analysis>旧块二</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+        ].join('\n');
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            message: structuredClone(t.context.chat[2]),
+        };
+    });
+    assert.equal(duplicateUpdate.result.status, 'applied');
+    assert.equal(
+        (duplicateUpdate.message.mes.match(/<UpdateVariable\b/giu) || []).length,
+        1,
+        '修复提交后同一 swipe 只能保留一个可重放 MVU 区块',
+    );
+    assert.doesNotMatch(duplicateUpdate.message.mes, /旧块一|旧块二/u);
+    await duplicateUpdatePage.close();
 
     const ruleBackedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await ruleBackedPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

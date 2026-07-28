@@ -536,21 +536,23 @@ interface MigrationState {
 4. 自然语言与UI入口只允许阶段4原生物品、装备、技能、社会和任务命令；阶段3 Fact/Knowledge/H2/H3命令继续使用各自证据与分支入口，不能伪装成本目录动作。
 5. 390×844触控视口的可见控件不得小于44px；对话框必须约束横向溢出、捕获Tab焦点、支持Escape关闭，并把焦点归还开启控件。
 
-## 21. 发布后真实长局终态协议
+## 21. 发布后真实长局终态与外部协作
 
-### 21.1 下游注册与收据
+### 21.1 医生托管写入与可选外部协作
 
 生产兼容 API v5 提供 `registerBarrierProtocolClient`、
-`getBarrierProtocolStatus` 和 `acknowledgeBarrierReceipt`。任何数据库写入方必须
-注册稳定客户端ID、`protocolVersion=1`、`settledOnly=true` 与
-`terminalReceipts=true`。每个 barrier 的 `settled/failed/stale` 终态生成持久、
-幂等收据：
+`getBarrierProtocolStatus` 和 `acknowledgeBarrierReceipt`，但这些接口只用于
+自愿协作，不是 TavernDB、TavernHelper 或角色卡脚本的产品前置条件。医生托管的
+变量、修正版 swipe、连续性、记忆和论坛写入始终受完整目标身份与持久终态约束：
 
-- `settled` 只允许 `read-final-and-write`，客户端必须按收据目标摘要重新读取最终目标；
-- `failed/stale` 只允许 `abandon`，任何 write 动作永久拒绝；
+- `settled` 后才允许医生托管下游重新读取最终目标并继续；
+- `failed/stale/late` 永久禁止医生托管下游写入；
 - 收据目标绑定 chat、logical floor、message、swipe、generation、branch 与内容指纹；
-- TavernHelper存在但数据库未注册时，真实发布门必须报
-  `database.barrier_not_registered`，不能以数据库仍有写入为通过。
+- 外部客户端若注册 `protocolVersion=1`、`settledOnly=true` 与
+  `terminalReceipts=true`，可额外消费同一终态收据；
+- 未注册或无法观察合作能力时，状态必须为 `unmanaged`，外部写入一致性必须为
+  `unknown`。环境自检不得报错、不得阻止扩展，也不得声称第三方已经 settled；
+- 医生不得修改第三方脚本、拦截其私有写入或把自定义协议强加给外部维护者。
 
 ### 21.2 历史、连续性与重启
 

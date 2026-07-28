@@ -1,12 +1,16 @@
-# MVU Auto Doctor 2.0 阶段10交接
+# MVU Auto Doctor 2.0 阶段10交接（历史，已作废）
 
-## 0. 最终补充（2026-07-28）
+## 0. 2026-07-28 RC 回归勘误
 
-- 发布阻断已修复：真实 fixture 中未安装或加载 TavernDB，只有普通 TavernHelper 主机、`mvu` 与“变量结构”角色脚本；此前仅凭 TavernHelper 主机存在就判定数据库未注册是误报。
-- 医生现在只在发现公开 TavernDB 全局、活动 TavernHelper 数据库脚本名、脚本树数据库签名，或数据库脚本直接监听 `MESSAGE_RECEIVED` 时要求 barrier v1 注册。隐藏 `TavernDB` 脚本测试仍返回 error，未弱化真实数据库门禁。
-- 真实 SillyTavern 1.18.0 自检已从 `database.barrier_not_registered` 变为 info“未检测到 TavernDB”；两处医生部署源与候选 `index.js` 一致，未修改 TavernHelper、角色卡或聊天。
-- 最新自动结果：Actor 14/14、完整套件161/161、阶段7回放17/17、`qc:ci`通过；候选包67文件、1,455,272字节、SHA-256 `5c14f38ac3069573fc1212c83858ff4771d14a4c2612045806f0dfe5146db9b5`。
-- 下文中“外部 TavernDB 未注册”的旧结论是修复前记录；结构化报告 `docs/qc-reports/v2.0.0-rc.1.json` 的最终 `result=pass` 为当前发布依据。
+- 本交接的 `pass`、控制台0错误、19/19模型成功和强制 TavernDB barrier 结论已被
+  用户2026-07-28真实记录推翻，不再是发布依据。
+- 第三方 TavernDB 协议已改为可选协作；无协议时为非托管/一致性未知，不标红、
+  不阻止医生，也不要求第三方修改。
+- 当前权威交接是
+  [`RC_REGRESSION_REPAIR_HANDOFF.md`](RC_REGRESSION_REPAIR_HANDOFF.md)，结构化报告
+  必须保持 `blocked`，直到修复后的真实 MVU、模型、宿主控制台和长局门重新通过。
+- 下文完整保留，仅供追溯旧结论如何形成；其中任何发布许可、远端状态或外部协议
+  要求都不能用于当前任务。
 
 ## 1. 身份
 

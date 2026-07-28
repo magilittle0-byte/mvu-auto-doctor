@@ -73,7 +73,7 @@ test('monthly social cost ledger is monotonic and idempotent at 31, 100 and 1000
     );
 });
 
-test('TavernDB must register the barrier protocol and failed/stale receipts permanently reject writes', async () => {
+test('optional cooperative clients get receipts whose failed/stale states permanently reject writes', async () => {
     const adapter = new MemoryVersionedAdapter();
     const first = new DownstreamBarrierProtocol(adapter, { now: () => 10 });
     assert.equal((await first.clientStatus('taverndb')).ok, false);
@@ -248,6 +248,15 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
             reason: canary,
             rawPayload: canary,
         }],
+        barrierProtocol: {
+            required: false,
+            externalDatabaseDetected: true,
+            registered: false,
+            clientCount: 0,
+            errorCode: '',
+            mode: 'unmanaged',
+            externalWriteConsistency: 'unknown',
+        },
     });
     assert.deepEqual(diagnostic.environment.userAgent, {
         platform: 'Android',
@@ -256,6 +265,15 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
     });
     assert.equal(JSON.stringify(diagnostic).includes('PrivateDevice'), false);
     assert.equal(JSON.stringify(diagnostic).includes(canary), false);
+    assert.deepEqual(diagnostic.environment.barrierProtocol, {
+        required: false,
+        externalDatabaseDetected: true,
+        registered: false,
+        clientCount: 0,
+        errorCode: '',
+        mode: 'unmanaged',
+        externalWriteConsistency: 'unknown',
+    });
     assert.deepEqual(diagnosticPrivacyCanaryFindings(diagnostic, [canary]), {
         credentialFindings: 0,
         absoluteUserPathFindings: 0,

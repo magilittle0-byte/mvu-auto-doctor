@@ -1,6 +1,7 @@
 import http from 'node:http';
 
 const port = Number(process.env.OPENCODE_QC_PORT || 9331);
+const upstreamBase = 'https://opencode.ai/zen/go/v1';
 const metrics = [];
 let apiKey = '';
 
@@ -82,7 +83,7 @@ const server = http.createServer(async (request, response) => {
         const parsed = await readJson(request);
         metric.inputBytes = Buffer.byteLength(JSON.stringify(parsed));
         metric.model = String(parsed.model || '');
-        const upstream = await fetch('https://opencode.ai/zen/v1/chat/completions', {
+        const upstream = await fetch(`${upstreamBase}/chat/completions`, {
             method: 'POST',
             headers: {
                 authorization: `Bearer ${apiKey}`,

@@ -237,15 +237,15 @@ export function buildActorShardMessages(candidate, {
         JSON.stringify({
             actorId: candidate?.id,
             actorName: candidate?.name,
-            time: '游戏内具体时段；未知则写unknown',
-            location: '一个具体地点；未知则写unknown',
-            knowledgeBasis: ['角色确实可知的有限依据'],
-            currentGoal: '当前目标',
-            candidateAction: '候选行动（尚未发生）',
-            interactionTargets: [{ actorId: '稳定ID', actorName: '姓名' }],
+            time: 'unknown',
+            location: candidate?.locations?.[0] || 'unknown',
+            knowledgeBasis: candidate?.knowledgeBasis || [],
+            currentGoal: candidate?.goals?.[0] || '继续既定目标',
+            candidateAction: `围绕“${candidate?.goals?.[0] || '既定目标'}”继续行动（候选，尚未发生）`,
+            interactionTargets: [],
             sourceThreads: candidate?.sourceThreads || [],
-            evidence: ['来源线程或摘要哈希'],
-            causalChain: ['因果链稳定ID'],
+            evidence: candidate?.evidence || [],
+            causalChain: candidate?.causalChain || [],
         }),
     ].join('\n');
     return [{ role: 'system', content: system }, { role: 'user', content: user }];

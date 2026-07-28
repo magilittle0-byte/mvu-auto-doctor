@@ -20,6 +20,15 @@
     font-size: var(--mvuad-fs-body);
 }
 
+:is(
+    #mvu-auto-doctor-settings,
+    #mvuad-floating-panel,
+    #mvuad-forum-panel,
+    .mvuad-surface-panel
+) [hidden] {
+    display: none !important;
+}
+
 #mvu-auto-doctor-settings .mvuad-body {
     display: flex;
     flex-direction: column;
@@ -722,7 +731,10 @@
     border: 1px solid color-mix(in srgb, var(--mvuad-accent) 30%, var(--SmartThemeBorderColor));
     border-radius: var(--mvuad-panel-radius);
     color: var(--SmartThemeBodyColor);
-    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, transparent);
+    /* Tool text must remain readable above dense character-card UIs. The
+       previous translucent root allowed host prose and banners to bleed
+       through every nested semi-transparent card, especially on mobile. */
+    background: var(--SmartThemeBlurTintColor);
     box-shadow: 0 18px 46px rgba(0, 0, 0, 0.5);
     overflow: hidden;
     backdrop-filter: blur(14px);
@@ -756,8 +768,11 @@
 }
 
 #mvuad-floating-panel .mvuad-floating-close {
-    width: 34px;
-    height: 34px;
+    flex: none;
+    width: var(--mvuad-touch);
+    min-width: var(--mvuad-touch);
+    height: var(--mvuad-touch);
+    min-height: var(--mvuad-touch);
     padding: 0;
     border: 0;
     border-radius: 50%;
@@ -848,6 +863,14 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 7px;
+}
+
+#mvuad-floating-panel .mvuad-floating-actions > .menu_button {
+    width: 100%;
+    min-width: 0;
+    min-height: var(--mvuad-touch);
+    margin: 0;
+    white-space: normal;
 }
 
 /* 悬浮面板复用状态栏账本组件，不复制另一套数据源。 */

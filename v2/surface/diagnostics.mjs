@@ -81,9 +81,15 @@ export function createPrivacySafeDiagnosticProjection({
             },
             barrierProtocol: {
                 required: barrierProtocol?.required === true,
+                externalDatabaseDetected:
+                    barrierProtocol?.externalDatabaseDetected === true,
                 registered: barrierProtocol?.registered === true,
                 clientCount: Math.max(0, Number(barrierProtocol?.clientCount) || 0),
                 errorCode: String(barrierProtocol?.errorCode || ''),
+                mode: String(barrierProtocol?.mode || 'not-detected'),
+                externalWriteConsistency: String(
+                    barrierProtocol?.externalWriteConsistency || 'unknown',
+                ),
             },
         },
         currentChat: {

@@ -258,6 +258,29 @@ test('a reroll during workers makes the whole batch stale with zero candidate ou
     assert.deepEqual(result.convergence, { jointEvents: [], independent: [] });
 });
 
+test('actor shard output example is directly valid against the candidate evidence whitelist', () => {
+    const candidate = {
+        id: 'actor-1',
+        name: 'Actor One',
+        locations: ['QC Lab'],
+        knowledgeBasis: ['allowed-knowledge'],
+        goals: ['inspect-manifest'],
+        sourceThreads: ['thread-1'],
+        evidence: ['evidence-1'],
+        causalChain: ['cause-1'],
+    };
+    const messages = buildActorShardMessages(candidate);
+    const shape = JSON.parse(messages[1].content.split('\n').at(-1));
+    assert.deepEqual(shape.knowledgeBasis, candidate.knowledgeBasis);
+    assert.deepEqual(shape.sourceThreads, candidate.sourceThreads);
+    assert.deepEqual(shape.evidence, candidate.evidence);
+    assert.deepEqual(shape.causalChain, candidate.causalChain);
+    assert.deepEqual(shape.interactionTargets, []);
+    assert.equal(shape.location, 'QC Lab');
+    assert.equal(shape.currentGoal, 'inspect-manifest');
+    assert.equal(parseActorShardProposal(JSON.stringify(shape), { candidate }).error, undefined);
+});
+
 test('custom prompts enter only labeled narrative model messages and diagnostics expose metadata', () => {
     const candidate = selectActorShardCandidates({
         continuity: { threads: [thread('T1', '艾达')] },

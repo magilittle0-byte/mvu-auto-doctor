@@ -117,6 +117,28 @@ export function extractLastUpdateBlock(text) {
     return source.slice(open, close + '</UpdateVariable>'.length);
 }
 
+export function replaceUpdateBlocks(text, replacement) {
+    const source = String(text || '');
+    const block = String(replacement || '').trim();
+    const pattern = /<UpdateVariable\b[^>]*>[\s\S]*?<\/UpdateVariable\s*>/giu;
+    const matches = [...source.matchAll(pattern)];
+    if (!matches.length) {
+        return block ? `${source.trimEnd()}\n\n${block}`.trim() : source;
+    }
+    let normalized = '';
+    let cursor = 0;
+    matches.forEach((match, index) => {
+        normalized += source.slice(cursor, match.index);
+        if (index === 0) normalized += block;
+        cursor = match.index + match[0].length;
+    });
+    normalized += source.slice(cursor);
+    return normalized
+        .replace(/[ \t]+\n/gu, '\n')
+        .replace(/\n{3,}/gu, '\n\n')
+        .trim();
+}
+
 function balancedJsonArrayEnd(source, start) {
     if (start < 0 || source[start] !== '[') return -1;
     return balancedJsonValueEnd(source, start);
@@ -963,14 +985,30 @@ export function extractSchemaScripts(character) {
     const found = [];
     const seen = new Set();
     for (const extensions of extensionRoots(character)) {
-        const scripts = extensions?.tavern_helper?.scripts;
-        if (!Array.isArray(scripts)) continue;
-        for (const script of scripts) {
-            if (!script || script.enabled === false || typeof script.content !== 'string') {
+        const roots = [
+            extensions?.tavern_helper?.scripts,
+            extensions?.tavern_helper?.script?.scripts,
+            extensions?.TavernHelper?.scripts,
+            extensions?.TavernHelper?.script?.scripts,
+            extensions?.TavernHelper_scripts,
+        ].filter(Array.isArray);
+        const pending = roots.flat();
+        for (let index = 0; index < pending.length && index < 1000; index += 1) {
+            const script = pending[index];
+            if (!script || typeof script !== 'object') continue;
+            if (Array.isArray(script.scripts)) pending.push(...script.scripts);
+            const rawContent = script.content ?? script.code ?? script.script;
+            if (script.enabled === false || typeof rawContent !== 'string') {
                 continue;
             }
-            const name = String(script.name || '');
-            const content = script.content.trim();
+            const name = String(
+                script.name
+                || script.scriptName
+                || script.displayName
+                || script.label
+                || '',
+            );
+            const content = rawContent.trim();
             if (
                 !content
                 || !(
