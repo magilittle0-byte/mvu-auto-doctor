@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "analyzedAt": "2026-07-29",
+  "privacy": {
+    "rawChatIncluded": false,
+    "rawPromptIncluded": false,
+    "rawResponseIncluded": false,
+    "credentialIncluded": false,
+    "privateNamesIncluded": false,
+    "originalEvidenceModified": false
+  },
+  "sources": {
+    "diagnostic": {
+      "bytes": 19649,
+      "sha256": "c432451bac3ea6c1161e5d573e7bd539827d55303643b35bea9e04c89d7c655a"
+    },
+    "chatArchive": {
+      "bytes": 1674574,
+      "sha256": "6147c3f20fb065eac3f04dfd053f846866d0bf7667dd2db38d07938dbc201d98",
+      "logicalRecords": 14,
+      "messages": 13
+    }
+  },
+  "longRun": {
+    "assistantMessages": 7,
+    "userMessages": 6,
+    "modelCalls": {
+      "total": 17,
+      "variable": 8,
+      "social": 7,
+      "continuity": 2,
+      "forum": 0
+    },
+    "modelDiagnostics": {
+      "total": 28,
+      "transportSucceeded": 17,
+      "parseOrValidationFailed": 10,
+      "recovered": 1,
+      "legacySocialSecondModelAttempts": 3,
+      "legacySocialSecondModelRecovered": 1,
+      "legacySocialSecondModelFailed": 2,
+      "projectedCallsAfterRemovingSecondModelRepair": 14
+    },
+    "repairJournal": {
+      "applied": 2,
+      "failed": 0
+    },
+    "structure": {
+      "selectedAssistantMismatchCount": 0,
+      "archivedNonselectedMismatchCount": 1,
+      "swipeMetadataMisalignmentCount": 0
+    },
+    "databaseEnvelopePresentOnEveryAssistant": true,
+    "staleWriteObserved": false
+  },
+  "databaseCompatibility": {
+    "requestedVersion": "spv8.7.4",
+    "legacyLoader": {
+      "targetVersion": "spv8.4",
+      "chars": 35617,
+      "sha256": "1eba153e7983fe7550fa4ce001042f0949b727c88f59d04d03e36a0ad79ed638",
+      "rewritesDownloadedAuthorBundle": true,
+      "injectsDoctorBarrierCalls": true
+    },
+    "authorUpdate": {
+      "commitsAheadOfSpv84": 60,
+      "bundleReportedSize": "7.97 MB",
+      "architectureChanged": true,
+      "observedNewModules": [
+        "update-orchestrator",
+        "write-transaction",
+        "checkpoint",
+        "schema-migration",
+        "chat-service"
+      ]
+    },
+    "isolatedProbe": {
+      "cleanAuthorLoader": true,
+      "authorBundleRequests": 1,
+      "authorBundleResponses": 0,
+      "databaseApiVisible": false,
+      "doctorVersionVisible": "2.0.0-rc.1",
+      "doctorRuntimeErrors": 0,
+      "result": "blocked-network",
+      "originalUserDataModified": false,
+      "temporaryDataRemoved": true,
+      "portClosed": true
+    }
+  },
+  "responsibility": {
+    "doctor": [
+      "legacy source-rewriting database bridge was not identified before update",
+      "social JSON structure repair spent a second model call with low recovery yield"
+    ],
+    "legacyDatabaseLoader": [
+      "exact source-string replacements are coupled to the spv8.4 bundle layout",
+      "the compatibility layer cannot be carried forward as a black-box integration"
+    ],
+    "authorDatabase": [
+      "spv8.7.4 source architecture differs materially from spv8.4",
+      "no runtime defect is assigned because the latest bundle did not execute in the isolated network"
+    ],
+    "hostOrOtherThirdParty": [
+      "one malformed archived nonselected swipe is outside the current selected target",
+      "no evidence assigns database-envelope corruption or stale writes to the doctor"
+    ]
+  }
+}

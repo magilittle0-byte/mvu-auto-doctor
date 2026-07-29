@@ -272,6 +272,26 @@ doctor's own `settled`, and performs zero writes for failed, stale, timed-out, o
 results. Those internal invariants remain mandatory even when all third-party scripts
 are non-cooperative.
 
+### 5C.2 Database update integrity
+
+The database entry used for QC must be the author's unmodified loader. A legacy entry
+that downloads the author bundle and then performs source-string replacements,
+especially one that injects `MvuAutoDoctorAPI` calls into that bundle, is not an
+eligible compatibility fixture. Do not update its version in place and do not patch
+the new database bundle until it passes.
+
+When such an entry is detected:
+
+1. Keep the original and database data backed up, but disable the legacy entry.
+2. Import a fresh author-distributed database loader and set only the version published
+   by the author.
+3. Verify a successful bundle response and standalone database initialization before
+   enabling Auto Doctor.
+4. Require Auto Doctor to remain black-box: no table/column discovery, database API
+   call, source rewrite, or private protocol requirement.
+5. A missing bundle response, missing database API, or legacy-layer warning blocks the
+   newest-version claim. An older version's pass cannot substitute for it.
+
 ## 6. Automated suite
 
 Run the complete suite and wait for the browser runtime file to finish:

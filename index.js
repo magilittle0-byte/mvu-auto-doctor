@@ -1378,6 +1378,15 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
                     : '已注册，等待下一次真实生成验证',
     ));
 
+    const legacyDatabasePatch = legacyDoctorDatabasePatchDetected(context);
+    if (legacyDatabasePatch) {
+        checks.push(environmentCheck(
+            'error',
+            '数据库遗留兼容层',
+            '检测到会改写作者数据库源码的旧兼容层；它与新版 bundle 不兼容。请恢复数据库作者原版加载器后再更新，医生不会修改数据库。',
+        ));
+    }
+
     const databaseBarrier = await barrierProtocolStatus();
     if (databaseBarrier.externalDatabaseDetected) {
         checks.push(databaseBarrier.registered
@@ -1924,6 +1933,31 @@ function tavernHelperScriptRecords(context = getContext()) {
         }
     }
     return records;
+}
+
+function legacyDoctorDatabasePatchDetected(context = getContext()) {
+    return tavernHelperScriptRecords(context).some((record) => {
+        const content = String(
+            record?.content
+            || record?.code
+            || record?.script
+            || '',
+        );
+        if (!content) return false;
+        const rewritesDownloadedSource = (
+            /(?:patchDatabaseSource|PATCH_OPTIONS|__TT_DB_COMPAT_OPTIONS__)/u.test(content)
+            && /(?:source|databaseSource|patchedSource)\s*\.\s*replace\s*\(/u.test(content)
+        );
+        const injectsDoctorBarrier = (
+            (
+                /MvuAutoDoctorAPI/u.test(content)
+                && /waitForTargetSettled/u.test(content)
+            )
+            || /waitForTargetSettled\s*\(\s*targetIndex/u.test(content)
+        );
+        const loadsAuthorBundle = /AlbusKen\/shujuku|TARGET_VERSION/u.test(content);
+        return rewritesDownloadedSource && injectsDoctorBarrier && loadsAuthorBundle;
+    });
 }
 
 function tavernDatabaseScriptDetected(context = getContext()) {
@@ -4211,30 +4245,6 @@ function combineSocialUsage(entries) {
     };
 }
 
-function buildSocialStructureRepairMessages(output, changes) {
-    return [
-        {
-            role: 'system',
-            content: [
-                '你是结构修复器，只修复上一份人物关系二审输出的JSON结构。',
-                '不得重新阅读或补写剧情，不得新增路径、事实、证据或判断。',
-                '每个给定路径必须恰好返回一次，action只能是allow或revert。',
-                '只返回一个合法JSON对象，不要代码围栏。',
-                '{"verdict":"pass|warning|violation","summary":"短结论","findings":[],"decisions":[{"path":"给定路径","action":"allow|revert","reason":"短原因","evidence":""}]}',
-            ].join('\n'),
-        },
-        {
-            role: 'user',
-            content: [
-                '=== 允许的路径 ===',
-                safeJson((changes || []).map((change) => ({ path: change.path }))),
-                '=== 待修复输出 ===',
-                cropText(output || '', 6000, '待修复结构'),
-            ].join('\n'),
-        },
-    ];
-}
-
 function persistSocialCostReceipt(record) {
     if (!record?.id || !record?.modelCall?.completed) {
         return socialMonthSpend(readChatNamespace(), record?.createdAt);
@@ -4378,6 +4388,7 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
     let modelCallCompleted = false;
     let modelAttempts = 0;
     let structureRepairAttempted = false;
+    let localStructureRepairAttempted = false;
     const auditId = `social_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
     const messages = buildSocialAuditMessages({
         userText,
@@ -4415,8 +4426,10 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
                 output.length,
             ));
             parsed = parseSocialAuditOutput(output, relationship.changes);
+            localStructureRepairAttempted = parsed.localRepairAttempted === true;
             if (parsed.error) {
-                structureRepairAttempted = true;
+                failureReason = parsed.error;
+                failureCode = 'social.invalid_structure';
                 recordModelDiagnostic({
                     phase: 'validation',
                     task: '人物关系二审',
@@ -4429,67 +4442,24 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
                     outputChars: output.length,
                     ...structuredOutputShape(output),
                 });
-                guard = targetIsCurrent(target, token);
-                if (!guard.ok) return { status: 'stale', reason: guard.reason };
-                const repairMessages = buildSocialStructureRepairMessages(
-                    output,
-                    relationship.changes,
-                );
-                let repairUsage = null;
-                const repairedOutput = await callModel(repairMessages, {
-                    maxTokens: settings.socialAuditMaxTokens,
-                    task: '人物关系二审结构修复',
+            } else if (parsed.repaired) {
+                recordModelDiagnostic({
+                    phase: 'validation',
+                    task: '人物关系二审',
                     channel: 'fast',
+                    status: 'recovered',
+                    attempt: 1,
                     targetIndex: target.index,
-                    jsonMode: true,
-                    onUsage: (value) => {
-                        repairUsage = value;
-                    },
+                    failureKind: 'social-structure-repaired-locally',
+                    outputChars: output.length,
+                    ...structuredOutputShape(output),
+                    recovered: true,
+                    recoveryReason: parsed.repairKinds.join(','),
                 });
-                modelAttempts += 1;
-                usageAttempts.push(estimateSocialUsageCost(
-                    repairUsage,
-                    repairMessages.reduce(
-                        (sum, message) => sum + message.content.length,
-                        0,
-                    ),
-                    repairedOutput.length,
-                ));
-                parsed = parseSocialAuditOutput(repairedOutput, relationship.changes);
-                if (parsed.error) {
-                    failureReason = parsed.error;
-                    failureCode = 'social.invalid_structure_after_repair';
-                    recordModelDiagnostic({
-                        phase: 'validation',
-                        task: '人物关系二审结构修复',
-                        channel: 'fast',
-                        status: 'failed',
-                        attempt: 2,
-                        targetIndex: target.index,
-                        failureKind: failureCode,
-                        reason: parsed.error,
-                        outputChars: repairedOutput.length,
-                        ...structuredOutputShape(repairedOutput),
-                    });
-                } else {
-                    recordModelDiagnostic({
-                        phase: 'validation',
-                        task: '人物关系二审结构修复',
-                        channel: 'fast',
-                        status: 'recovered',
-                        attempt: 2,
-                        targetIndex: target.index,
-                        failureKind: 'social-structure-repaired',
-                        outputChars: repairedOutput.length,
-                        ...structuredOutputShape(repairedOutput),
-                    });
-                }
             }
         } catch (error) {
             failureReason = `二审调用失败：${error.message || error}`;
-            failureCode = structureRepairAttempted
-                ? 'social.structure_repair_transport'
-                : 'social.transport_failure';
+            failureCode = 'social.transport_failure';
         }
     } else {
         failureReason = '达到月度费用硬上限';
@@ -4558,6 +4528,7 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
             completed: modelCallCompleted,
             attempts: modelAttempts,
             structureRepairAttempted,
+            localStructureRepairAttempted,
             fallback: overHardCap || reviewFailed,
             failureReason: reviewFailed ? failureReason : '',
             failureCode: reviewFailed || overHardCap ? failureCode : '',

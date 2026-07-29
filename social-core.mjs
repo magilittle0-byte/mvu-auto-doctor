@@ -143,27 +143,136 @@ export function classifySocialAuditNeed({
     return { needed: reasons.length > 0, reasons: [...new Set(reasons)] };
 }
 
-function extractJsonObject(text) {
+function parseErrorPosition(error) {
+    const match = String(error?.message || error).match(/position\s+(\d+)/iu);
+    return match ? Number(match[1]) : -1;
+}
+
+function previousNonWhitespace(text, from) {
+    for (let index = from; index >= 0; index -= 1) {
+        if (!/\s/u.test(text[index])) return { char: text[index], index };
+    }
+    return { char: '', index: -1 };
+}
+
+function nextNonWhitespace(text, from) {
+    for (let index = from; index < text.length; index += 1) {
+        if (!/\s/u.test(text[index])) return { char: text[index], index };
+    }
+    return { char: '', index: -1 };
+}
+
+function removeTrailingCommasOutsideStrings(source) {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    const repairs = [];
+    for (let index = 0; index < source.length; index += 1) {
+        const character = source[index];
+        if (inString) {
+            output += character;
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+        }
+        if (character === '"') {
+            inString = true;
+            output += character;
+            continue;
+        }
+        if (character === ',') {
+            const next = nextNonWhitespace(source, index + 1);
+            if (/[\]}]/u.test(next.char)) {
+                repairs.push('remove-trailing-comma');
+                continue;
+            }
+        }
+        output += character;
+    }
+    return { source: output, repairs };
+}
+
+function parseJsonObjectWithSafePunctuationRepair(text) {
     const source = String(text || '').trim()
         .replace(/^```(?:json)?\s*/iu, '')
         .replace(/\s*```$/u, '');
+    const start = source.indexOf('{');
+    const end = source.lastIndexOf('}');
+    const candidate = start >= 0 && end > start
+        ? source.slice(start, end + 1)
+        : source;
     try {
-        return JSON.parse(source);
-    } catch {
-        const start = source.indexOf('{');
-        const end = source.lastIndexOf('}');
-        if (start < 0 || end <= start) return null;
-        try {
-            return JSON.parse(source.slice(start, end + 1));
-        } catch {
-            return null;
+        return {
+            value: JSON.parse(candidate),
+            repaired: false,
+            repairKinds: [],
+            repairAttempted: false,
+        };
+    } catch (initialError) {
+        const normalized = removeTrailingCommasOutsideStrings(candidate);
+        let repairedSource = normalized.source;
+        const repairs = [...normalized.repairs];
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+            try {
+                return {
+                    value: JSON.parse(repairedSource),
+                    repaired: repairs.length > 0,
+                    repairKinds: [...new Set(repairs)],
+                    repairAttempted: true,
+                };
+            } catch (error) {
+                const position = parseErrorPosition(error);
+                if (position < 0 || position > repairedSource.length) break;
+                const message = String(error.message || error);
+                const previous = previousNonWhitespace(repairedSource, position - 1);
+                const next = nextNonWhitespace(repairedSource, position);
+                const expectsComma = /Expected\s*['"]?,['"]?\s*or\s*['"]?[\]}]['"]?\s*after|expected\s+comma/iu.test(message);
+                const startsValueOrKey = /[{"\[\d\-tfn]/u.test(next.char);
+                const endsValue = /[\]}"\d]/u.test(previous.char)
+                    || /(?:true|false|null)$/u.test(
+                        repairedSource.slice(Math.max(0, previous.index - 4), previous.index + 1),
+                    );
+                if (expectsComma && startsValueOrKey && endsValue) {
+                    repairedSource = `${repairedSource.slice(0, next.index)},${repairedSource.slice(next.index)}`;
+                    repairs.push('insert-missing-comma');
+                    continue;
+                }
+                break;
+            }
         }
+        return {
+            value: null,
+            repaired: false,
+            repairKinds: [],
+            repairAttempted: true,
+            error: initialError,
+        };
     }
 }
 
+function extractJsonObject(text) {
+    const parsed = parseJsonObjectWithSafePunctuationRepair(text);
+    if (!isPlainObject(parsed.value)) {
+        return {
+            value: null,
+            repaired: false,
+            repairKinds: [],
+            repairAttempted: parsed.repairAttempted,
+        };
+    }
+    return parsed;
+}
+
 export function parseSocialAuditOutput(output, knownChanges = []) {
-    const value = extractJsonObject(output);
-    if (!isPlainObject(value)) return { error: '社会语义二审没有返回合法 JSON 对象' };
+    const extracted = extractJsonObject(output);
+    const value = extracted.value;
+    if (!isPlainObject(value)) {
+        return {
+            error: '社会语义二审没有返回合法 JSON 对象',
+            localRepairAttempted: extracted.repairAttempted === true,
+        };
+    }
     const known = new Map((knownChanges || []).map((change) => [change.path, change]));
     const verdict = ['pass', 'warning', 'violation'].includes(value.verdict)
         ? value.verdict
@@ -197,6 +306,9 @@ export function parseSocialAuditOutput(output, knownChanges = []) {
         summary: String(value.summary || '').slice(0, 800),
         findings,
         decisions,
+        repaired: extracted.repaired === true,
+        repairKinds: extracted.repairKinds,
+        localRepairAttempted: extracted.repairAttempted === true,
     };
 }
 

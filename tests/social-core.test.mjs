@@ -118,3 +118,38 @@ test('auditor may allow traceable dark relationship changes', () => {
     }), changes);
     assert.deepEqual(buildSocialRollbackOps(changes, parsed.decisions), []);
 });
+
+test('social audit repairs punctuation locally without changing semantic fields', () => {
+    const changes = [{
+        path: '/characters/Mia/trust',
+        beforeExists: true,
+        afterExists: true,
+        before: 5,
+        after: 40,
+    }];
+    const parsed = parseSocialAuditOutput(
+        '{"verdict":"violation" "summary":"unsupported","findings":[],"decisions":[{"path":"/characters/Mia/trust","action":"revert","reason":"no evidence",},],}',
+        changes,
+    );
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.repaired, true);
+    assert.deepEqual(
+        [...parsed.repairKinds].sort(),
+        ['insert-missing-comma', 'remove-trailing-comma'].sort(),
+    );
+    assert.deepEqual(parsed.decisions, [{
+        path: '/characters/Mia/trust',
+        action: 'revert',
+        reason: 'no evidence',
+        evidence: '',
+    }]);
+});
+
+test('social audit never invents missing semantics for truncated JSON', () => {
+    const parsed = parseSocialAuditOutput(
+        '{"verdict":"pass","decisions":[{"path":"/characters/Mia/trust"',
+        [{ path: '/characters/Mia/trust' }],
+    );
+    assert.equal(parsed.error, '社会语义二审没有返回合法 JSON 对象');
+    assert.equal(parsed.localRepairAttempted, true);
+});

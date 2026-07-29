@@ -1,9 +1,19 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-29T03:40:53+08:00",
-  "result": "pass",
-  "codeFingerprint": "6fefc4300ee7bbc54f6269dec9a3d5239f937e7baf6cd1bea2181152bf9a9673",
+  "testedAt": "2026-07-29T05:45:29.798Z",
+  "result": "blocked",
+  "codeFingerprint": "c57bff0c132f0b2e6ecf07acafa38743dc7db32820b9a80c42ba0d42a2966d89",
+  "blocker": {
+    "code": "database_latest_bundle_unavailable",
+    "message": "The clean author spv8.7.4 loader issued one bundle request but received no response in the isolated real host, so latest database load and update compatibility remain unverified.",
+    "releasePromotionBlocked": true,
+    "reasons": [
+      "The deployed doctor 2.0.0-rc.1 loaded with zero doctor runtime errors, but the spv8.7.4 database API never became visible.",
+      "The old local loader rewrites the downloaded spv8.4 bundle and injects doctor barrier calls; it is not an eligible latest-version compatibility fixture.",
+      "No older spv8.4 or spv5.5.6 receipt is reused as evidence that spv8.7.4 loads."
+    ]
+  },
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -30,17 +40,17 @@
   },
   "checks": {
     "testSuite": {
-      "total": 169,
-      "passed": 169,
+      "total": 171,
+      "passed": 171,
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 157770.4316
+      "durationMs": 158733.1906
     },
     "targeted": {
       "coreAndProtocolPassed": 27,
       "browserRuntimePassed": 1,
-      "browserRuntimeDurationMs": 157387.6516,
+      "browserRuntimeDurationMs": 158685.6259,
       "phase7ReplayCases": 17,
       "phase7ReplayPassed": 17,
       "phase7ReplayFailed": 0
@@ -125,6 +135,24 @@
           "severity": "critical",
           "disposition": "fixed",
           "evidence": "Internal correction swipes preserve finalTarget; real regenerate, swipe and chat-switch late responses all became stale with zero old-target writes while TavernDB remained loaded."
+        },
+        {
+          "id": "RC-DB-14",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "The doctor now identifies a legacy loader only when author-bundle loading, source-string rewriting and doctor barrier injection coexist; clean spv8.7.4-style loaders remain unmanaged black boxes."
+        },
+        {
+          "id": "RC-MODEL-15",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "The sanitized long run showed three second-model JSON repair attempts with one recovery and two failures. Safe punctuation is now repaired locally; otherwise relationship changes fail closed after one call."
+        },
+        {
+          "id": "RC-DB-16",
+          "severity": "environment",
+          "disposition": "blocked",
+          "evidence": "A clean author spv8.7.4 loader made one bundle request in the isolated real host but received zero responses; latest API, update, UI and reload compatibility cannot be claimed."
         }
       ]
     },
@@ -138,7 +166,11 @@
       "currentSwipeIdentityPreserved": true,
       "monthlyReceiptCases": 1000,
       "monthlyLedgerIdempotent": true,
-      "structureRepairRetryVerified": true,
+      "structureRepairRetryVerified": false,
+      "localStructureRepairVerified": true,
+      "modelStructureRepairRetryRemoved": true,
+      "sanitizedLatestRunModelCalls": 17,
+      "sanitizedLatestRunProjectedCalls": 14,
       "failedStaleContinuitySkipped": true,
       "fullIdentityBarrierHistoryVerified": true,
       "restartExactlyOnceVerified": true
@@ -166,7 +198,8 @@
     "realDatabaseCompatibility": {
       "current": {
         "version": "spv8.4",
-        "production": true,
+        "production": false,
+        "evidenceRole": "historical-baseline",
         "apiName": "AutoCardUpdaterAPI",
         "apiMethods": 114,
         "crudRoundTrip": true,
@@ -195,6 +228,21 @@
         "reloadRecovered": true,
         "cleanupVerified": true,
         "bundleSha256": "bc09e5b16b8704b1da28fc4bc2a8c9c7714c71972f4c6376523a99768d6a2529"
+      },
+      "latest": {
+        "version": "spv8.7.4",
+        "production": true,
+        "cleanAuthorLoader": true,
+        "legacySourceRewriteRemovedInIsolatedCopy": true,
+        "legacySourceRewriteDetectedByDoctor": true,
+        "bundleRequestCount": 1,
+        "bundleResponseCount": 0,
+        "apiVisible": false,
+        "result": "blocked-network",
+        "doctorRuntimeErrorCount": 0,
+        "originalUserDataModified": false,
+        "temporaryDataRemoved": true,
+        "isolatedHostPortClosed": true
       },
       "tableNamesHardcoded": false,
       "columnNamesHardcoded": false,
@@ -269,8 +317,8 @@
       "originalCardModified": false,
       "companionScriptsModified": false,
       "doctorExtensionOnlyModified": true,
-      "runtimeMvuApiAvailable": true,
-      "environmentStatus": "ok",
+      "runtimeMvuApiAvailable": false,
+      "environmentStatus": "error",
       "externalDatabaseProtocolOptional": true,
       "tavernDbRegistrationRequired": false,
       "externalDatabaseMode": "unmanaged",
@@ -314,53 +362,46 @@
         "third_party_resource_load_failure"
       ],
       "hostConsoleCleanClaimed": false,
-      "thirdPartyErrorsModified": false
+      "thirdPartyErrorsModified": false,
+      "currentLatestDatabaseProbe": {
+        "doctorVersionVisible": "2.0.0-rc.1",
+        "doctorRuntimeErrorCount": 0,
+        "databaseVersion": "spv8.7.4",
+        "databaseBundleRequestCount": 1,
+        "databaseBundleResponseCount": 0,
+        "databaseApiVisible": false,
+        "failureCode": "database_bundle_network_unavailable",
+        "headless": true,
+        "isolatedDataCopy": true,
+        "originalUserDataModified": false,
+        "temporaryDataRemoved": true,
+        "portClosed": true
+      }
     },
     "realModel": {
-      "result": "all-real-paths-passed",
-      "attempts": 8,
-      "succeeded": 8,
+      "result": "not-run-latest-database-bundle-blocked",
+      "attempts": 0,
+      "succeeded": 0,
       "failed": 0,
-      "evidenceEligibleAttempts": 6,
-      "supportingDiagnosticAttempts": 2,
-      "proxyStatuses": [
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200,
-        200
-      ],
-      "inputBytes": [
-        10922,
-        11049,
-        11049,
-        11049,
-        11049,
-        11049,
-        50868,
-        4153
-      ],
-      "appliedStrictRepairCalls": 1,
-      "appliedContinuityCalls": 1,
-      "appliedForumCalls": 1,
-      "staleRegenerateCalls": 1,
-      "staleSwipeCalls": 1,
-      "staleChatSwitchCalls": 1,
+      "evidenceEligibleAttempts": 0,
+      "supportingDiagnosticAttempts": 0,
+      "proxyStatuses": [],
+      "inputBytes": [],
+      "appliedStrictRepairCalls": 0,
+      "appliedContinuityCalls": 0,
+      "appliedForumCalls": 0,
+      "staleRegenerateCalls": 0,
+      "staleSwipeCalls": 0,
+      "staleChatSwitchCalls": 0,
       "staleTargetWrites": 0,
-      "forumPostCount": 4,
-      "forumCommentCount": 12,
+      "forumPostCount": 0,
+      "forumCommentCount": 0,
       "proxyStopped": true,
       "credentialPersisted": false,
       "rawPayloadPersisted": false,
       "oldSuccessfulRunReusedAsCurrentEvidence": false,
-      "additionalSuccessfulCalls": {
-        "eventStormOutbound": 1,
-        "actorShardModelCalls": 17,
-        "realLongSessionModelCalls": 24
-      }
+      "blockedBeforeCredentialUse": true,
+      "historicalBaselineNotCurrentEvidence": true
     },
     "cardCompatibility": {
       "sourceFormat": "png-v3",
@@ -420,7 +461,7 @@
       "candidateGuardLogicUnchanged": true,
       "longSessionTurns": 24,
       "realAndSimulationAgree": true,
-      "releaseStatus": "ready-for-maintainer-review",
+      "releaseStatus": "blocked-latest-database-evidence",
       "automaticMainMerge": false,
       "packageSha256": "ebeedc65832ef3ff9002b04400cbe4c486f8bad2c3857af3f29de1aa76526343",
       "packageAllowlistVerified": true,
@@ -645,15 +686,15 @@
     }
   },
   "publication": {
-    "scope": "maintainer-authorized-main-fast-forward",
+    "scope": "independent-branch-only",
     "allowedRemoteRefs": [
-      "refs/heads/main"
+      "refs/heads/codex/july29-db-compat-longrun"
     ],
-    "mainAllowed": true,
-    "releaseCandidateAllowed": true,
+    "mainAllowed": false,
+    "releaseCandidateAllowed": false,
     "forcePushAllowed": false,
     "pullRequestUpdateAllowed": false,
-    "maintainerAuthorizationObservedForThisRepair": true,
+    "maintainerAuthorizationObservedForThisRepair": false,
     "releaseTagAllowed": false,
     "githubReleaseAllowed": false
   },

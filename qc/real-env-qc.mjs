@@ -99,7 +99,11 @@ function validateBlockedReport(report) {
         || targeted.currentSwipeIdentityPreserved !== true
         || targeted.monthlyReceiptCases !== 1000
         || targeted.monthlyLedgerIdempotent !== true
-        || targeted.structureRepairRetryVerified !== true
+        || targeted.structureRepairRetryVerified !== false
+        || targeted.localStructureRepairVerified !== true
+        || targeted.modelStructureRepairRetryRemoved !== true
+        || targeted.sanitizedLatestRunModelCalls !== 17
+        || targeted.sanitizedLatestRunProjectedCalls !== 14
         || targeted.failedStaleContinuitySkipped !== true
         || targeted.fullIdentityBarrierHistoryVerified !== true
         || targeted.restartExactlyOnceVerified !== true
@@ -129,7 +133,8 @@ function validateBlockedReport(report) {
     if (
         !database
         || database.current?.version !== 'spv8.4'
-        || database.current?.production !== true
+        || database.current?.production !== false
+        || database.current?.evidenceRole !== 'historical-baseline'
         || database.current?.apiName !== 'AutoCardUpdaterAPI'
         || database.current?.apiMethods < 100
         || database.current?.crudRoundTrip !== true
@@ -144,6 +149,19 @@ function validateBlockedReport(report) {
         || database.legacy?.apiMethods < 80
         || database.legacy?.crudRoundTrip !== true
         || database.legacy?.reloadRecovered !== true
+        || database.latest?.version !== 'spv8.7.4'
+        || database.latest?.production !== true
+        || database.latest?.cleanAuthorLoader !== true
+        || database.latest?.legacySourceRewriteRemovedInIsolatedCopy !== true
+        || database.latest?.legacySourceRewriteDetectedByDoctor !== true
+        || database.latest?.bundleRequestCount !== 1
+        || database.latest?.bundleResponseCount !== 0
+        || database.latest?.apiVisible !== false
+        || database.latest?.result !== 'blocked-network'
+        || database.latest?.doctorRuntimeErrorCount !== 0
+        || database.latest?.originalUserDataModified !== false
+        || database.latest?.temporaryDataRemoved !== true
+        || database.latest?.isolatedHostPortClosed !== true
         || database.tableNamesHardcoded !== false
         || database.columnNamesHardcoded !== false
         || database.doctorDatabaseApiCalls !== 0
@@ -248,17 +266,28 @@ function validateBlockedReport(report) {
         )
     ) fail('blocked report real-environment evidence is incomplete');
 
+    const latestDatabaseBundleBlocked = blocker.code
+        === 'database_latest_bundle_unavailable';
     const model = report.checks?.realModel;
     if (
         !model
-        || model.attempts < 1
         || !Array.isArray(model.proxyStatuses)
         || model.proxyStatuses.length !== model.attempts
         || model.proxyStopped !== true
         || model.credentialPersisted !== false
         || model.rawPayloadPersisted !== false
         || (
-            corePathsPassed
+            latestDatabaseBundleBlocked
+                ? (
+                    model.result !== 'not-run-latest-database-bundle-blocked'
+                    || model.attempts !== 0
+                    || model.succeeded !== 0
+                    || model.failed !== 0
+                    || model.blockedBeforeCredentialUse !== true
+                    || model.historicalBaselineNotCurrentEvidence !== true
+                    || model.oldSuccessfulRunReusedAsCurrentEvidence !== false
+                )
+                : corePathsPassed
                 ? (
                     model.result !== 'core-paths-passed-release-still-blocked'
                     || model.attempts < 6
@@ -308,8 +337,9 @@ function validateBlockedReport(report) {
         || publication.forcePushAllowed !== false
         || !Array.isArray(publication.allowedRemoteRefs)
         || publication.allowedRemoteRefs.length !== 1
-        || publication.allowedRemoteRefs[0]
-            !== 'refs/heads/codex/v2-rc-regression-repair'
+        || !/^refs\/heads\/codex\/[A-Za-z0-9._/-]+$/u.test(
+            publication.allowedRemoteRefs[0],
+        )
     ) fail('blocked report publication scope is not fail-closed');
 
     const privacy = report.privacy;

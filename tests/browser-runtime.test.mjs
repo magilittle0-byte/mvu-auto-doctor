@@ -357,6 +357,18 @@ window.StoryOracleAPI = {
         calls.socialSystem = messages[0].content;
         calls.socialUser = messages[1].content;
         const paths = [...messages[1].content.matchAll(/"path"\s*:\s*"([^"]+)"/g)].map((match) => match[1]);
+        if (mode === 'social-punctuation-repair' && isSocial) {
+          return JSON.stringify({
+            verdict: 'violation',
+            summary: 'Relationship change lacks evidence.',
+            findings: [],
+            decisions: paths.map((path) => ({
+              path,
+              action: 'revert',
+              reason: 'No supporting evidence.',
+            })),
+          }).replace(/\]\}$/u, '],}');
+        }
         if (mode === 'social-invalid-then-valid' && isSocial) {
           return '{"verdict":"warning","decisions":[';
         }
@@ -864,6 +876,28 @@ try {
         });
         await new Promise((resolve) => setTimeout(resolve, 850));
         const helperOnly = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        const characterScripts = t.context.characters[0].data.extensions.tavern_helper.scripts;
+        characterScripts.push({
+            name: 'SP database spv8.7.4',
+            enabled: true,
+            content: [
+                'const TARGET_VERSION = "spv8.7.4";',
+                'const source = "update-orchestrator runTableWriteTransaction chat-service";',
+                'const upstream = "AlbusKen/shujuku";',
+            ].join('\n'),
+        });
+        const latestDatabaseBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        characterScripts.at(-1).content = [
+            'const TARGET_VERSION = "spv8.4";',
+            'const PATCH_OPTIONS = {};',
+            'const upstream = "AlbusKen/shujuku";',
+            'function patchDatabaseSource(source) {',
+            '  const patchedSource = source.replace("old needle", "new source");',
+            '  return window.MvuAutoDoctorAPI?.waitForTargetSettled(targetIndex).then(() => patchedSource);',
+            '}',
+        ].join('\n');
+        const legacyDatabaseBefore = await window.MvuAutoDoctorAPI.inspectEnvironment();
+        characterScripts.pop();
         const hiddenDatabaseScript = document.createElement('iframe');
         hiddenDatabaseScript.id = 'TH-script--TavernDB--qc-client';
         hiddenDatabaseScript.name = hiddenDatabaseScript.id;
@@ -925,6 +959,8 @@ try {
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
             ),
             helperOnly,
+            latestDatabaseBefore,
+            legacyDatabaseBefore,
             databaseScriptBefore,
             autoCardUpdaterBefore,
             externalApiCallsAfterInspection,
@@ -985,6 +1021,26 @@ try {
         ).kind,
         'info',
         'benign TavernHelper scripts must not be mistaken for TavernDB',
+    );
+    assert.equal(
+        diagnosticsUi.latestDatabaseBefore.checks.some(
+            (check) => check.label === '数据库遗留兼容层',
+        ),
+        false,
+        'the clean author loader and new spv8.7.4 architecture must remain black-box compatible',
+    );
+    assert.equal(
+        diagnosticsUi.latestDatabaseBefore.checks.find(
+            (check) => check.label === 'TavernDB 可选协作',
+        ).kind,
+        'info',
+    );
+    assert.equal(
+        diagnosticsUi.legacyDatabaseBefore.checks.find(
+            (check) => check.label === '数据库遗留兼容层',
+        ).kind,
+        'error',
+        'legacy source-rewriting doctor bridges must be identified before a database update',
     );
     assert.equal(
         diagnosticsUi.autoCardUpdaterBefore.checks.find(
@@ -1366,6 +1422,7 @@ try {
         completed: false,
         attempts: 0,
         structureRepairAttempted: false,
+        localStructureRepairAttempted: false,
         fallback: true,
         failureReason: '二审调用失败：connection refused',
         failureCode: 'social.transport_failure',
@@ -1381,7 +1438,7 @@ try {
     await socialRepairPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     const socialRepair = await socialRepairPage.evaluate(async () => {
         const t = window.__TEST__;
-        t.setMode('social-invalid-then-valid');
+        t.setMode('social-punctuation-repair');
         Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
             socialNarrativeGuardEnabled: true,
             socialAuditMode: 'balanced',
@@ -1421,12 +1478,67 @@ try {
         };
     });
     assert.equal(socialRepair.result.status, 'audited');
-    assert.equal(socialRepair.calls.socialRuns, 2);
-    assert.equal(socialRepair.audits[0].modelCall.attempts, 2);
-    assert.equal(socialRepair.audits[0].modelCall.structureRepairAttempted, true);
+    assert.equal(socialRepair.calls.socialRuns, 1);
+    assert.equal(socialRepair.audits[0].modelCall.attempts, 1);
+    assert.equal(socialRepair.audits[0].modelCall.structureRepairAttempted, false);
+    assert.equal(socialRepair.audits[0].modelCall.localStructureRepairAttempted, true);
     assert.equal(socialRepair.audits[0].modelCall.failureCode, '');
     assert.ok(socialRepair.audits[0].usage.cny > 0);
     await socialRepairPage.close();
+
+    const socialMalformedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await socialMalformedPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await socialMalformedPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const socialMalformed = await socialMalformedPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.setMode('social-invalid-then-valid');
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            socialNarrativeGuardEnabled: true,
+            socialAuditMode: 'balanced',
+            fastModelProvider: 'story-oracle',
+            modelRoutingSettingsVersion: 2,
+            socialAuditSettingsVersion: 2,
+            socialMonthlySoftCny: 5,
+            socialMonthlyHardCny: 10,
+            socialMonthlyCostLedger: { version: 1, months: {} },
+        });
+        t.context.chat.splice(0, t.context.chat.length,
+            { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
+            { is_user: true, is_system: false, mes: 'I bring dinner.', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: 'Mia becomes loyal.\n<UpdateVariable><Analysis>jump</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        const before = {
+            stat_data: { characters: { Mia: { trust: 5 } } },
+            display_data: {},
+        };
+        const after = {
+            stat_data: { characters: { Mia: { trust: 40 } } },
+            display_data: {},
+        };
+        t.setLatestData(after);
+        t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
+        return {
+            result,
+            state: t.getLatestData(),
+            audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+            calls: structuredClone(t.calls),
+        };
+    });
+    assert.equal(socialMalformed.result.status, 'failed');
+    assert.equal(socialMalformed.calls.socialRuns, 1);
+    assert.equal(socialMalformed.audits[0].modelCall.attempts, 1);
+    assert.equal(socialMalformed.audits[0].modelCall.structureRepairAttempted, false);
+    assert.equal(socialMalformed.audits[0].modelCall.localStructureRepairAttempted, true);
+    assert.equal(socialMalformed.audits[0].modelCall.failureCode, 'social.invalid_structure');
+    assert.equal(socialMalformed.state.stat_data.characters.Mia.trust, 5);
+    await socialMalformedPage.close();
     await page.bringToFront();
 
     assert.equal(continuity.hasSettingsLedger, false, '设置页不应再复制完整事件账本');
