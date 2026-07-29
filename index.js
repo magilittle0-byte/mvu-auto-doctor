@@ -5916,6 +5916,7 @@ function safeSettlementResult(record, status, extra = {}) {
         serial: Number(record?.serial) || 0,
         generationId: record?.generationId || '',
         branchId: record?.branchId || '',
+        contentChanged: false,
         ...extra,
     };
 }
@@ -5998,6 +5999,13 @@ async function createTargetSettlementRecord(captured) {
             fingerprint: persisted.finalFingerprint || record.initialFingerprint,
             generationId: persisted.generationId || record.generationId,
             branchId: persisted.branchId || record.branchId,
+            contentChanged: Boolean(
+                (persisted.finalSwipeId ?? record.initialSwipeId) !== record.initialSwipeId
+                || (
+                    persisted.finalFingerprint
+                    && persisted.finalFingerprint !== record.initialFingerprint
+                )
+            ),
             workflowStatus: 'recovered-terminal',
             reason: persisted.terminalReason || '',
         });
@@ -6099,6 +6107,10 @@ function attachTargetSettlement(record, settlementPromise) {
                 fingerprint: current.fingerprint,
                 generationId: current.generationId,
                 branchId: current.branchId,
+                contentChanged: (
+                    current.swipeId !== record.initialSwipeId
+                    || current.fingerprint !== record.initialFingerprint
+                ),
                 workflowStatus: workflowResult?.status || 'completed',
                 reason: workflowResult?.reason || '',
             });
@@ -6161,11 +6173,13 @@ function attachTargetSettlement(record, settlementPromise) {
                         status: result.status,
                         chatId: result.chatId,
                         targetIndex: result.targetIndex,
+                        serial: result.serial,
                         messageId: result.messageId,
                         swipeId: result.swipeId,
                         fingerprint: result.fingerprint,
                         generationId: result.generationId,
                         branchId: result.branchId,
+                        contentChanged: result.contentChanged === true,
                         workflowStatus: result.workflowStatus,
                         receipt: result.receipt,
                     },
@@ -6176,11 +6190,13 @@ function attachTargetSettlement(record, settlementPromise) {
                             status: result.status,
                             chatId: result.chatId,
                             targetIndex: result.targetIndex,
+                            serial: result.serial,
                             messageId: result.messageId,
                             swipeId: result.swipeId,
                             fingerprint: result.fingerprint,
                             generationId: result.generationId,
                             branchId: result.branchId,
+                            contentChanged: result.contentChanged === true,
                             workflowStatus: result.workflowStatus,
                             receipt: result.receipt,
                         },

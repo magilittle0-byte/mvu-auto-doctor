@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-29T10:20:06.944Z",
+  "testedAt": "2026-07-29T11:47:06.440Z",
   "result": "pass",
-  "codeFingerprint": "36466e37139a35c6f026846c18e084bf741644f9aecea7acc4fc891462cdf20c",
+  "codeFingerprint": "beb57d39ab475c857ab9066df774e37dac7cfec72f3ac6934524706cc3dca415",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -25,22 +25,22 @@
         "role": "mobile-touch"
       }
     ],
-    "runtimeFilesCompared": 63,
+    "runtimeFilesCompared": 65,
     "runtimeFileMismatches": 0
   },
   "checks": {
     "testSuite": {
-      "total": 171,
-      "passed": 171,
+      "total": 177,
+      "passed": 177,
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 158733.1906
+      "durationMs": 157967.9776
     },
     "targeted": {
       "coreAndProtocolPassed": 27,
       "browserRuntimePassed": 1,
-      "browserRuntimeDurationMs": 158685.6259,
+      "browserRuntimeDurationMs": 157920.0777,
       "phase7ReplayCases": 17,
       "phase7ReplayPassed": 17,
       "phase7ReplayFailed": 0
@@ -241,6 +241,16 @@
         "apiVisible": true,
         "apiMethods": 116,
         "publicUpdateReturnedTruthyObject": true,
+        "independentBridgeInstalled": true,
+        "independentBridgeVersion": "1.0.0",
+        "independentBridgeSourceRewriteUsed": false,
+        "independentBridgePrivateSchemaRead": false,
+        "independentBridgeUnchangedSyncRequests": 0,
+        "independentBridgeChangedSyncRequests": 1,
+        "independentBridgeChangedSyncCompleted": 1,
+        "independentBridgeChangedSyncAttempts": 1,
+        "independentBridgeChangedSyncFailures": 0,
+        "reloadIndependentBridgeReady": true,
         "uiSurfaceCountBeforeReload": 7,
         "reloadApiMethods": 116,
         "reloadUiSurfaceCount": 3,
@@ -386,6 +396,12 @@
         "databaseApiVisible": true,
         "databaseApiMethods": 116,
         "publicUpdateReturnedTruthyObject": true,
+        "independentBridgeVersion": "1.0.0",
+        "independentBridgeUnchangedSyncRequests": 0,
+        "independentBridgeChangedSyncCompleted": 1,
+        "independentBridgeChangedSyncAttempts": 1,
+        "independentBridgeChangedSyncFailures": 0,
+        "reloadIndependentBridgeReady": true,
         "databaseUiSurfaceCountBeforeReload": 7,
         "reloadDatabaseApiMethods": 116,
         "reloadDatabaseUiSurfaceCount": 3,
