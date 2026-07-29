@@ -292,6 +292,20 @@ When such an entry is detected:
 5. A missing bundle response, missing database API, or legacy-layer warning blocks the
    newest-version claim. An older version's pass cannot substitute for it.
 
+For an untrusted remote database bundle, do not copy a real user profile into the test
+root. `qc/july29-real-compat.mjs` creates a sterile data root, installs only the
+TavernHelper runtime, Auto Doctor, and the author import record, then verifies the
+published bundle version, public update entry, UI mount, reload, error ownership, and
+cleanup. It must report that no private settings, chats, characters, or credentials
+were copied.
+
+Run the real-model response check separately with
+`qc/july29-real-model.mjs`. That probe does not load the database bundle, uses only a
+synthetic MVU fixture, consumes the approved credential from the memory-only proxy,
+and requires one HTTP 200 response with no retry or fallback. The valid credential
+must not enter the sterile settings file. HTTP 401 or any other non-200 status remains
+a release blocker even when database compatibility passes.
+
 ## 6. Automated suite
 
 Run the complete suite and wait for the browser runtime file to finish:

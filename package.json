@@ -9,6 +9,8 @@
     "test:browser": "node --test tests/browser-runtime.test.mjs",
     "qc:phase6:replay": "node qc/phase6-replay-report.mjs",
     "qc:phase7:replay": "node qc/phase7-release-report.mjs",
+    "qc:real:database": "node qc/july29-real-compat.mjs",
+    "qc:real:model": "node qc/july29-real-model.mjs",
     "release:build": "node qc/build-release.mjs",
     "qc:fingerprint": "node qc/real-env-qc.mjs fingerprint",
     "qc:ci": "node qc/real-env-qc.mjs ci",

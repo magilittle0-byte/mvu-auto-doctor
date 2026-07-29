@@ -1,19 +1,9 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-29T05:45:29.798Z",
-  "result": "blocked",
-  "codeFingerprint": "c57bff0c132f0b2e6ecf07acafa38743dc7db32820b9a80c42ba0d42a2966d89",
-  "blocker": {
-    "code": "database_latest_bundle_unavailable",
-    "message": "The clean author spv8.7.4 loader issued one bundle request but received no response in the isolated real host, so latest database load and update compatibility remain unverified.",
-    "releasePromotionBlocked": true,
-    "reasons": [
-      "The deployed doctor 2.0.0-rc.1 loaded with zero doctor runtime errors, but the spv8.7.4 database API never became visible.",
-      "The old local loader rewrites the downloaded spv8.4 bundle and injects doctor barrier calls; it is not an eligible latest-version compatibility fixture.",
-      "No older spv8.4 or spv5.5.6 receipt is reused as evidence that spv8.7.4 loads."
-    ]
-  },
+  "testedAt": "2026-07-29T10:20:06.944Z",
+  "result": "pass",
+  "codeFingerprint": "36466e37139a35c6f026846c18e084bf741644f9aecea7acc4fc891462cdf20c",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -151,8 +141,14 @@
         {
           "id": "RC-DB-16",
           "severity": "environment",
-          "disposition": "blocked",
-          "evidence": "A clean author spv8.7.4 loader made one bundle request in the isolated real host but received zero responses; latest API, update, UI and reload compatibility cannot be claimed."
+          "disposition": "fixed",
+          "evidence": "The author import script was normalized in memory to spv8.7.4 inside a sterile real host. The bundle returned HTTP 200 before and after reload, exposed 116 API methods, mounted UI surfaces and returned a truthy object from the public update entry; doctor and database owned errors were both zero."
+        },
+        {
+          "id": "RC-MODEL-17",
+          "severity": "environment",
+          "disposition": "fixed",
+          "evidence": "The current synthetic real-model probe made one request through the memory-only proxy and received HTTP 200. The doctor completed the structured model path in one attempt with no fallback or second model repair; credentials and payloads were not persisted and both QC ports closed."
         }
       ]
     },
@@ -233,13 +229,29 @@
         "version": "spv8.7.4",
         "production": true,
         "cleanAuthorLoader": true,
-        "legacySourceRewriteRemovedInIsolatedCopy": true,
+        "legacySourceRewriteExcludedFromSterileRoot": true,
         "legacySourceRewriteDetectedByDoctor": true,
-        "bundleRequestCount": 1,
-        "bundleResponseCount": 0,
-        "apiVisible": false,
-        "result": "blocked-network",
+        "authorImportSha256": "01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65",
+        "officialBundleSha256": "e10425f786fbadc3ea9bf46f54bba8857e5c0fd25192033cb8e2d1f866e78d6a",
+        "bundleRequestCount": 6,
+        "bundleResponseCount": 6,
+        "bundleSuccessResponseCount": 2,
+        "bundleOptionalResourceNotFoundCount": 4,
+        "responseVersion": "spv8.7.4",
+        "apiVisible": true,
+        "apiMethods": 116,
+        "publicUpdateReturnedTruthyObject": true,
+        "uiSurfaceCountBeforeReload": 7,
+        "reloadApiMethods": 116,
+        "reloadUiSurfaceCount": 3,
+        "result": "pass",
         "doctorRuntimeErrorCount": 0,
+        "databaseRuntimeErrorCount": 0,
+        "sterileDataRoot": true,
+        "privateSettingsCopied": false,
+        "privateChatsCopied": false,
+        "privateCharactersCopied": false,
+        "credentialsCopied": false,
         "originalUserDataModified": false,
         "temporaryDataRemoved": true,
         "isolatedHostPortClosed": true
@@ -366,27 +378,42 @@
       "currentLatestDatabaseProbe": {
         "doctorVersionVisible": "2.0.0-rc.1",
         "doctorRuntimeErrorCount": 0,
+        "databaseRuntimeErrorCount": 0,
         "databaseVersion": "spv8.7.4",
-        "databaseBundleRequestCount": 1,
-        "databaseBundleResponseCount": 0,
-        "databaseApiVisible": false,
-        "failureCode": "database_bundle_network_unavailable",
+        "databaseBundleRequestCount": 6,
+        "databaseBundleResponseCount": 6,
+        "databaseBundleSuccessResponseCount": 2,
+        "databaseApiVisible": true,
+        "databaseApiMethods": 116,
+        "publicUpdateReturnedTruthyObject": true,
+        "databaseUiSurfaceCountBeforeReload": 7,
+        "reloadDatabaseApiMethods": 116,
+        "reloadDatabaseUiSurfaceCount": 3,
+        "result": "pass",
         "headless": true,
-        "isolatedDataCopy": true,
+        "sterileDataRoot": true,
+        "privateSettingsCopied": false,
+        "privateChatsCopied": false,
+        "privateCharactersCopied": false,
+        "credentialsCopied": false,
         "originalUserDataModified": false,
         "temporaryDataRemoved": true,
         "portClosed": true
       }
     },
     "realModel": {
-      "result": "not-run-latest-database-bundle-blocked",
-      "attempts": 0,
-      "succeeded": 0,
+      "result": "affected-paths-passed",
+      "attempts": 1,
+      "succeeded": 1,
       "failed": 0,
-      "evidenceEligibleAttempts": 0,
-      "supportingDiagnosticAttempts": 0,
-      "proxyStatuses": [],
-      "inputBytes": [],
+      "evidenceEligibleAttempts": 1,
+      "supportingDiagnosticAttempts": 1,
+      "proxyStatuses": [
+        200
+      ],
+      "inputBytes": [
+        2576
+      ],
       "appliedStrictRepairCalls": 0,
       "appliedContinuityCalls": 0,
       "appliedForumCalls": 0,
@@ -400,8 +427,20 @@
       "credentialPersisted": false,
       "rawPayloadPersisted": false,
       "oldSuccessfulRunReusedAsCurrentEvidence": false,
-      "blockedBeforeCredentialUse": true,
-      "historicalBaselineNotCurrentEvidence": true
+      "blockedBeforeCredentialUse": false,
+      "externalCredentialRejected": false,
+      "doctorModelCallDelta": 1,
+      "doctorRetryCount": 0,
+      "doctorModelCompleted": true,
+      "doctorFallbackUsed": false,
+      "secondModelStructureRepairAttempted": false,
+      "databaseRuntimeLoadedDuringModelProbe": false,
+      "syntheticFixtureUsed": true,
+      "privateChatModelEgress": false,
+      "credentialClearedFromBrowserMemory": true,
+      "credentialClearedFromProxy": true,
+      "hostPortClosed": true,
+      "proxyPortClosed": true
     },
     "cardCompatibility": {
       "sourceFormat": "png-v3",
@@ -461,19 +500,16 @@
       "candidateGuardLogicUnchanged": true,
       "longSessionTurns": 24,
       "realAndSimulationAgree": true,
-      "releaseStatus": "blocked-latest-database-evidence",
+      "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
       "packageSha256": "ebeedc65832ef3ff9002b04400cbe4c486f8bad2c3857af3f29de1aa76526343",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true
     },
     "deepSeek": {
-      "model": "deepseek-v4-flash",
-      "calls": 4,
+      "model": "deepseek-v4-pro",
+      "calls": 1,
       "httpStatuses": [
-        200,
-        200,
-        200,
         200
       ],
       "reviewerOnlyForSocialProof": false,
@@ -686,15 +722,17 @@
     }
   },
   "publication": {
-    "scope": "independent-branch-only",
+    "scope": "release",
     "allowedRemoteRefs": [
-      "refs/heads/codex/july29-db-compat-longrun"
+      "refs/heads/codex/july29-db-compat-longrun",
+      "refs/heads/main"
     ],
-    "mainAllowed": false,
-    "releaseCandidateAllowed": false,
+    "mainAllowed": true,
+    "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
     "pullRequestUpdateAllowed": false,
-    "maintainerAuthorizationObservedForThisRepair": false,
+    "maintainerAuthorizationObservedForThisRepair": true,
+    "mainAuthorizationConditionalOnAllRealTests": true,
     "releaseTagAllowed": false,
     "githubReleaseAllowed": false
   },
@@ -711,6 +749,10 @@
     "authorPublishedCardInferenceAuthorized": true,
     "privateChatModelEgress": false,
     "isolatedQcChatUsed": true,
-    "syntheticFixtureUsedForStrictWriteback": true
+    "syntheticFixtureUsedForStrictWriteback": true,
+    "sterileDatabaseDataRootUsed": true,
+    "credentialInjectedOnlyIntoMemoryProcesses": true,
+    "validCredentialStoredOnlyInProxyMemory": true,
+    "credentialRejectedByProvider": false
   }
 }

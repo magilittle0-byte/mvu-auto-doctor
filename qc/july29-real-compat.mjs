@@ -8,12 +8,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const doctorRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceRoot = path.dirname(doctorRoot);
 const stRoot = path.join(workspaceRoot, 'real-sillytavern-qc', 'app');
-const sourceUserRoot = path.join(stRoot, 'data', 'default-user');
-const authorLoaderPath = path.join(
-    process.env.USERPROFILE || '',
-    'Downloads',
-    '酒馆助手脚本-数据库本体.json',
+const sourceTavernHelperRoot = path.join(
+    stRoot,
+    'data',
+    'default-user',
+    'extensions',
+    'TavernHelper',
 );
+const authorLoaderPath = [
+    path.join(
+        process.env.USERPROFILE || '',
+        'Downloads',
+        '酒馆助手脚本-数据库本体 (1).json',
+    ),
+    path.join(
+        process.env.USERPROFILE || '',
+        'Downloads',
+        '酒馆助手脚本-数据库本体.json',
+    ),
+].find((candidate) => fs.existsSync(candidate));
 const targetDatabaseVersion = 'spv8.7.4';
 const port = 8011;
 const bundledNodeModules = path.join(
@@ -74,7 +87,8 @@ function visitStrings(value, callback) {
     Object.values(value).forEach((entry) => visitStrings(entry, callback));
 }
 
-function cleanAuthorLoader() {
+function cleanAuthorScript() {
+    if (!authorLoaderPath) throw new Error('Author loader is unavailable');
     const imported = JSON.parse(fs.readFileSync(authorLoaderPath, 'utf8'));
     const candidates = [];
     visitStrings(imported, (value) => {
@@ -92,30 +106,38 @@ function cleanAuthorLoader() {
     ) {
         throw new Error('Author loader normalization failed');
     }
-    return source;
+    return {
+        source,
+        record: {
+            type: imported.type,
+            enabled: imported.enabled === true,
+            name: imported.name,
+            id: imported.id,
+            content: source,
+        },
+    };
 }
 
-function replaceLegacyLoader(value, replacement, state) {
-    if (typeof value === 'string') {
-        const legacy = (
-            /patchDatabaseSource|PATCH_OPTIONS|__TT_DB_COMPAT_OPTIONS__/u.test(value)
-            && /MvuAutoDoctorAPI/u.test(value)
-            && /waitForTargetSettled/u.test(value)
-            && /AlbusKen\/shujuku/u.test(value)
-        );
-        if (!legacy) return value;
-        state.replaced += 1;
-        state.legacySha256 = sha256(value);
-        return replacement;
-    }
-    if (Array.isArray(value)) {
-        return value.map((entry) => replaceLegacyLoader(entry, replacement, state));
-    }
-    if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
-        key,
-        replaceLegacyLoader(entry, replacement, state),
-    ]));
+function createSterileSettings(authorScript) {
+    return {
+        extension_settings: {
+            disabledExtensions: [],
+            tavern_helper: {
+                script: {
+                    enabled: {
+                        global: true,
+                        characters: [],
+                        presets: [],
+                    },
+                    popuped: {
+                        characters: [],
+                        presets: [],
+                    },
+                    scripts: [authorScript],
+                },
+            },
+        },
+    };
 }
 
 function copyDoctorRuntime(targetRoot) {
@@ -225,7 +247,7 @@ const report = {
         version: '1.18.0',
         port,
         headless: true,
-        isolatedDataCopy: true,
+        sterileDataRoot: true,
     },
     setup: {},
     runtime: {},
@@ -234,24 +256,33 @@ const report = {
 
 try {
     const tempUserRoot = path.join(tempRoot, 'default-user');
-    fs.cpSync(sourceUserRoot, tempUserRoot, { recursive: true });
+    fs.mkdirSync(tempUserRoot, { recursive: true });
     const settingsPath = path.join(tempUserRoot, 'settings.json');
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    const authorLoader = cleanAuthorLoader();
-    const replacement = { replaced: 0, legacySha256: '' };
-    const isolatedSettings = replaceLegacyLoader(settings, authorLoader, replacement);
-    if (replacement.replaced !== 1) {
-        throw new Error(`Expected one legacy loader, found ${replacement.replaced}`);
+    const authorScript = cleanAuthorScript();
+    if (!fs.existsSync(sourceTavernHelperRoot)) {
+        throw new Error('TavernHelper runtime is unavailable');
     }
-    fs.writeFileSync(settingsPath, `${JSON.stringify(isolatedSettings, null, 2)}\n`);
+    fs.writeFileSync(
+        settingsPath,
+        `${JSON.stringify(createSterileSettings(authorScript.record), null, 2)}\n`,
+    );
+    fs.cpSync(
+        sourceTavernHelperRoot,
+        path.join(tempUserRoot, 'extensions', 'TavernHelper'),
+        { recursive: true },
+    );
     copyDoctorRuntime(path.join(tempUserRoot, 'extensions', 'mvu-auto-doctor'));
     report.setup = {
-        legacyLoaderCount: replacement.replaced,
-        legacyLoaderSha256: replacement.legacySha256,
-        cleanAuthorLoaderSha256: sha256(authorLoader),
-        cleanAuthorLoaderChars: authorLoader.length,
+        authorImportSha256: sha256(fs.readFileSync(authorLoaderPath)),
+        cleanAuthorLoaderSha256: sha256(authorScript.source),
+        cleanAuthorLoaderChars: authorScript.source.length,
+        privateSettingsCopied: false,
+        privateChatsCopied: false,
+        privateCharactersCopied: false,
+        credentialsCopied: false,
         originalUserDataModified: false,
-        doctorSourceInstalledInIsolatedCopy: true,
+        doctorSourceInstalledInSterileRoot: true,
+        tavernHelperRuntimeInstalledInSterileRoot: true,
     };
 
     server = spawn(process.execPath, [
@@ -300,9 +331,12 @@ try {
     });
     page.on('response', (response) => {
         if (!response.url().includes(`AlbusKen/shujuku@${targetDatabaseVersion}`)) return;
+        const headers = response.headers();
         databaseResponses.push({
             status: response.status(),
             sha256: sha256(response.url()),
+            version: headers['x-jsd-version'] || '',
+            contentLength: Number(headers['content-length'] || 0),
         });
     });
     await page.goto(`http://127.0.0.1:${port}/`, {
@@ -375,6 +409,25 @@ try {
             || window.SP_DATABASE;
         const diagnostic = api.getDiagnosticProjection();
         const before = api.getModelCallStats();
+        let databaseUpdate = {
+            status: 'not-run',
+            resultType: '',
+            truthy: false,
+        };
+        try {
+            const result = await databaseApi.triggerUpdate();
+            databaseUpdate = {
+                status: 'returned',
+                resultType: typeof result,
+                truthy: !!result,
+            };
+        } catch {
+            databaseUpdate = {
+                status: 'threw',
+                resultType: '',
+                truthy: false,
+            };
+        }
         let social = { status: 'not-run' };
         try {
             social = await api.auditSocialRelations();
@@ -394,11 +447,58 @@ try {
             databaseApiMethodCount: Object.keys(databaseApi || {}).filter(
                 (key) => typeof databaseApi[key] === 'function',
             ).length,
+            databaseUpdate,
+            databaseUiSurfaceCount: [...document.querySelectorAll(
+                '[id], [class]',
+            )].filter((element) => (
+                /(?:^|[\s_-])acu(?:$|[\s_-])|auto.?card.?updater|sp.?database/iu.test(
+                    `${element.id || ''} ${element.className || ''}`,
+                )
+            )).length,
             socialStatus: social?.status || '',
             socialModelCallDelta: Number(after.total || 0) - Number(before.total || 0),
             socialAttemptCount: Number(social?.audit?.modelCall?.attempts || 0),
             socialLocalRepairAttempted:
                 social?.audit?.modelCall?.localStructureRepairAttempted === true,
+        };
+    });
+    const responseCountBeforeReload = databaseResponses.length;
+    await page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 60_000,
+    });
+    await page.waitForFunction(() => !!window.MvuAutoDoctorAPI, null, {
+        timeout: 60_000,
+    });
+    await page.waitForFunction(() => (
+        !!window.AutoCardUpdaterAPI
+        || !!window.TavernDBAPI
+        || !!window.SP_DATABASE
+    ), null, {
+        timeout: 120_000,
+    });
+    const reload = await page.evaluate(async () => {
+        const doctorApi = window.MvuAutoDoctorAPI;
+        const databaseApi = window.AutoCardUpdaterAPI
+            || window.TavernDBAPI
+            || window.SP_DATABASE;
+        const environment = await doctorApi.inspectEnvironment();
+        return {
+            doctorVersion: doctorApi.getDiagnosticProjection().plugin.version,
+            databaseApiMethodCount: Object.keys(databaseApi || {}).filter(
+                (key) => typeof databaseApi[key] === 'function',
+            ).length,
+            environmentStatus: environment.status,
+            legacyPatchDetected: environment.checks.some(
+                (check) => check.label === '数据库遗留兼容层',
+            ),
+            databaseUiSurfaceCount: [...document.querySelectorAll(
+                '[id], [class]',
+            )].filter((element) => (
+                /(?:^|[\s_-])acu(?:$|[\s_-])|auto.?card.?updater|sp.?database/iu.test(
+                    `${element.id || ''} ${element.className || ''}`,
+                )
+            )).length,
         };
     });
     await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -414,6 +514,11 @@ try {
         serverFailureDigest: serverFailure,
         bootState,
         ...runtime,
+        reload: {
+            ...reload,
+            databaseResponseDelta:
+                databaseResponses.length - responseCountBeforeReload,
+        },
         databaseBundleRequestCount: databaseRequests.length,
         databaseBundleResponses: databaseResponses,
         errorCounts,
@@ -439,8 +544,10 @@ try {
             ? 'database_api_not_ready_timeout'
         : /did not become ready/u.test(message)
             ? 'host_not_ready'
-            : /Expected one legacy loader/u.test(message)
-                ? 'legacy_loader_fixture_missing'
+            : /Author loader is unavailable/u.test(message)
+                ? 'author_loader_fixture_missing'
+                : /TavernHelper runtime is unavailable/u.test(message)
+                    ? 'tavern_helper_runtime_missing'
                 : 'real_compat_probe_failed';
     report.failure = {
         code,

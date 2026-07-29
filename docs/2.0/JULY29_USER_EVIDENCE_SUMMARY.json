@@ -76,15 +76,47 @@
     },
     "isolatedProbe": {
       "cleanAuthorLoader": true,
-      "authorBundleRequests": 1,
-      "authorBundleResponses": 0,
-      "databaseApiVisible": false,
+      "authorImportSha256": "01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65",
+      "officialBundleSha256": "e10425f786fbadc3ea9bf46f54bba8857e5c0fd25192033cb8e2d1f866e78d6a",
+      "authorBundleRequests": 6,
+      "authorBundleResponses": 6,
+      "authorBundleSuccessResponses": 2,
+      "databaseApiVisible": true,
+      "databaseApiMethods": 116,
+      "publicUpdateReturnedTruthyObject": true,
+      "databaseUiSurfaceCountBeforeReload": 7,
+      "reloadDatabaseApiMethods": 116,
+      "reloadDatabaseUiSurfaceCount": 3,
       "doctorVersionVisible": "2.0.0-rc.1",
       "doctorRuntimeErrors": 0,
-      "result": "blocked-network",
+      "databaseRuntimeErrors": 0,
+      "result": "pass",
+      "sterileDataRoot": true,
+      "privateSettingsCopied": false,
+      "privateChatsCopied": false,
+      "privateCharactersCopied": false,
+      "credentialsCopied": false,
       "originalUserDataModified": false,
       "temporaryDataRemoved": true,
       "portClosed": true
+    },
+    "realModelProbe": {
+      "result": "pass",
+      "syntheticRequests": 1,
+      "proxyStatuses": [
+        200
+      ],
+      "doctorModelCallDelta": 1,
+      "doctorRetries": 0,
+      "doctorModelCompleted": true,
+      "doctorFallbackUsed": false,
+      "secondModelStructureRepairAttempted": false,
+      "databaseRuntimeLoaded": false,
+      "privateChatModelEgress": false,
+      "credentialPersisted": false,
+      "credentialCleared": true,
+      "hostPortClosed": true,
+      "proxyPortClosed": true
     }
   },
   "responsibility": {
@@ -98,11 +130,13 @@
     ],
     "authorDatabase": [
       "spv8.7.4 source architecture differs materially from spv8.4",
-      "no runtime defect is assigned because the latest bundle did not execute in the isolated network"
+      "the clean spv8.7.4 bundle passed load, public update, UI and reload in the sterile real host",
+      "no current runtime defect is assigned to the author database"
     ],
     "hostOrOtherThirdParty": [
       "one malformed archived nonselected swipe is outside the current selected target",
-      "no evidence assigns database-envelope corruption or stale writes to the doctor"
+      "no evidence assigns database-envelope corruption or stale writes to the doctor",
+      "the current affected model path completed once with HTTP 200 and no retry or fallback"
     ]
   }
 }

@@ -152,13 +152,28 @@ function validateBlockedReport(report) {
         || database.latest?.version !== 'spv8.7.4'
         || database.latest?.production !== true
         || database.latest?.cleanAuthorLoader !== true
-        || database.latest?.legacySourceRewriteRemovedInIsolatedCopy !== true
+        || database.latest?.legacySourceRewriteExcludedFromSterileRoot !== true
         || database.latest?.legacySourceRewriteDetectedByDoctor !== true
-        || database.latest?.bundleRequestCount !== 1
-        || database.latest?.bundleResponseCount !== 0
-        || database.latest?.apiVisible !== false
-        || database.latest?.result !== 'blocked-network'
+        || !/^[a-f0-9]{64}$/u.test(database.latest?.authorImportSha256 || '')
+        || !/^[a-f0-9]{64}$/u.test(database.latest?.officialBundleSha256 || '')
+        || database.latest?.bundleRequestCount < 2
+        || database.latest?.bundleResponseCount !== database.latest?.bundleRequestCount
+        || database.latest?.bundleSuccessResponseCount < 2
+        || database.latest?.responseVersion !== 'spv8.7.4'
+        || database.latest?.apiVisible !== true
+        || database.latest?.apiMethods < 100
+        || database.latest?.publicUpdateReturnedTruthyObject !== true
+        || database.latest?.uiSurfaceCountBeforeReload < 1
+        || database.latest?.reloadApiMethods !== database.latest?.apiMethods
+        || database.latest?.reloadUiSurfaceCount < 1
+        || database.latest?.result !== 'pass'
         || database.latest?.doctorRuntimeErrorCount !== 0
+        || database.latest?.databaseRuntimeErrorCount !== 0
+        || database.latest?.sterileDataRoot !== true
+        || database.latest?.privateSettingsCopied !== false
+        || database.latest?.privateChatsCopied !== false
+        || database.latest?.privateCharactersCopied !== false
+        || database.latest?.credentialsCopied !== false
         || database.latest?.originalUserDataModified !== false
         || database.latest?.temporaryDataRemoved !== true
         || database.latest?.isolatedHostPortClosed !== true
@@ -268,6 +283,8 @@ function validateBlockedReport(report) {
 
     const latestDatabaseBundleBlocked = blocker.code
         === 'database_latest_bundle_unavailable';
+    const realModelCredentialRejected = blocker.code
+        === 'real_model_test_credential_rejected';
     const model = report.checks?.realModel;
     if (
         !model
@@ -287,6 +304,27 @@ function validateBlockedReport(report) {
                     || model.historicalBaselineNotCurrentEvidence !== true
                     || model.oldSuccessfulRunReusedAsCurrentEvidence !== false
                 )
+                : realModelCredentialRejected
+                    ? (
+                        model.result !== 'blocked'
+                        || model.attempts !== 1
+                        || model.succeeded !== 0
+                        || model.failed !== 1
+                        || model.proxyStatuses?.join(',') !== '401'
+                        || model.inputBytes?.length !== 1
+                        || model.inputBytes[0] < 1
+                        || model.externalCredentialRejected !== true
+                        || model.doctorModelCallDelta !== 1
+                        || model.doctorRetryCount !== 0
+                        || model.doctorFallbackUsed !== true
+                        || model.databaseRuntimeLoadedDuringModelProbe !== false
+                        || model.syntheticFixtureUsed !== true
+                        || model.privateChatModelEgress !== false
+                        || model.credentialClearedFromBrowserMemory !== true
+                        || model.credentialClearedFromProxy !== true
+                        || model.hostPortClosed !== true
+                        || model.proxyPortClosed !== true
+                    )
                 : corePathsPassed
                 ? (
                     model.result !== 'core-paths-passed-release-still-blocked'
@@ -439,6 +477,65 @@ function loadAndValidateReport() {
         || phase7.packageAllowlistVerified !== true
         || phase7.deterministicPackageVerified !== true
     ) fail('phase 7 release-candidate evidence is incomplete');
+
+    const latestDatabase = report.checks?.realDatabaseCompatibility?.latest;
+    if (
+        !latestDatabase
+        || latestDatabase.version !== 'spv8.7.4'
+        || latestDatabase.production !== true
+        || latestDatabase.cleanAuthorLoader !== true
+        || latestDatabase.legacySourceRewriteExcludedFromSterileRoot !== true
+        || latestDatabase.legacySourceRewriteDetectedByDoctor !== true
+        || !/^[a-f0-9]{64}$/u.test(latestDatabase.authorImportSha256 || '')
+        || !/^[a-f0-9]{64}$/u.test(latestDatabase.officialBundleSha256 || '')
+        || latestDatabase.bundleRequestCount < 2
+        || latestDatabase.bundleResponseCount !== latestDatabase.bundleRequestCount
+        || latestDatabase.bundleSuccessResponseCount < 2
+        || latestDatabase.responseVersion !== 'spv8.7.4'
+        || latestDatabase.apiVisible !== true
+        || latestDatabase.apiMethods < 100
+        || latestDatabase.publicUpdateReturnedTruthyObject !== true
+        || latestDatabase.uiSurfaceCountBeforeReload < 1
+        || latestDatabase.reloadApiMethods !== latestDatabase.apiMethods
+        || latestDatabase.reloadUiSurfaceCount < 1
+        || latestDatabase.result !== 'pass'
+        || latestDatabase.doctorRuntimeErrorCount !== 0
+        || latestDatabase.databaseRuntimeErrorCount !== 0
+        || latestDatabase.sterileDataRoot !== true
+        || latestDatabase.privateSettingsCopied !== false
+        || latestDatabase.privateChatsCopied !== false
+        || latestDatabase.privateCharactersCopied !== false
+        || latestDatabase.credentialsCopied !== false
+        || latestDatabase.originalUserDataModified !== false
+        || latestDatabase.temporaryDataRemoved !== true
+        || latestDatabase.isolatedHostPortClosed !== true
+    ) fail('latest real database update evidence is incomplete');
+
+    const affectedModel = report.checks?.realModel;
+    if (
+        !affectedModel
+        || affectedModel.result !== 'affected-paths-passed'
+        || affectedModel.attempts !== 1
+        || affectedModel.succeeded !== 1
+        || affectedModel.failed !== 0
+        || affectedModel.proxyStatuses?.join(',') !== '200'
+        || affectedModel.inputBytes?.length !== 1
+        || affectedModel.inputBytes[0] < 1
+        || affectedModel.doctorModelCallDelta !== 1
+        || affectedModel.doctorRetryCount !== 0
+        || affectedModel.doctorModelCompleted !== true
+        || affectedModel.doctorFallbackUsed !== false
+        || affectedModel.secondModelStructureRepairAttempted !== false
+        || affectedModel.databaseRuntimeLoadedDuringModelProbe !== false
+        || affectedModel.syntheticFixtureUsed !== true
+        || affectedModel.privateChatModelEgress !== false
+        || affectedModel.credentialPersisted !== false
+        || affectedModel.rawPayloadPersisted !== false
+        || affectedModel.credentialClearedFromBrowserMemory !== true
+        || affectedModel.credentialClearedFromProxy !== true
+        || affectedModel.hostPortClosed !== true
+        || affectedModel.proxyPortClosed !== true
+    ) fail('affected real-model path evidence is incomplete');
 
     const deepSeek = report.checks?.deepSeek;
     if (
