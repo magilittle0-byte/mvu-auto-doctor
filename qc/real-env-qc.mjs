@@ -34,6 +34,8 @@ const runtimeFiles = [
     'core.mjs',
     'forum-core.mjs',
     'index.js',
+    'integrations/database-final-reply-bridge.js',
+    'integrations/MVU医生-数据库最终正文桥.json',
     'manifest.json',
     'model-queue.mjs',
     'package-lock.json',
@@ -495,6 +497,16 @@ function loadAndValidateReport() {
         || latestDatabase.apiVisible !== true
         || latestDatabase.apiMethods < 100
         || latestDatabase.publicUpdateReturnedTruthyObject !== true
+        || latestDatabase.independentBridgeInstalled !== true
+        || latestDatabase.independentBridgeVersion !== '1.0.0'
+        || latestDatabase.independentBridgeSourceRewriteUsed !== false
+        || latestDatabase.independentBridgePrivateSchemaRead !== false
+        || latestDatabase.independentBridgeUnchangedSyncRequests !== 0
+        || latestDatabase.independentBridgeChangedSyncRequests !== 1
+        || latestDatabase.independentBridgeChangedSyncCompleted !== 1
+        || latestDatabase.independentBridgeChangedSyncAttempts !== 1
+        || latestDatabase.independentBridgeChangedSyncFailures !== 0
+        || latestDatabase.reloadIndependentBridgeReady !== true
         || latestDatabase.uiSurfaceCountBeforeReload < 1
         || latestDatabase.reloadApiMethods !== latestDatabase.apiMethods
         || latestDatabase.reloadUiSurfaceCount < 1

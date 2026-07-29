@@ -118,7 +118,14 @@ function cleanAuthorScript() {
     };
 }
 
-function createSterileSettings(authorScript) {
+function createSterileSettings(authorScript, bridgeSource) {
+    const bridgeScript = {
+        type: 'script',
+        enabled: true,
+        name: 'MVU医生·数据库最终正文桥（隔离QC）',
+        id: 'bbf7953e-f0ee-4b5f-a91c-a5db7f678e2c',
+        content: bridgeSource,
+    };
     return {
         extension_settings: {
             disabledExtensions: [],
@@ -133,7 +140,7 @@ function createSterileSettings(authorScript) {
                         characters: [],
                         presets: [],
                     },
-                    scripts: [authorScript],
+                    scripts: [bridgeScript, authorScript],
                 },
             },
         },
@@ -172,6 +179,17 @@ function copyDoctorRuntime(targetRoot) {
             || /\.(?:mjs|mts)$/u.test(source)
         ),
     });
+    fs.cpSync(
+        path.join(doctorRoot, 'integrations'),
+        path.join(targetRoot, 'integrations'),
+        {
+            recursive: true,
+            filter: (source) => (
+                fs.statSync(source).isDirectory()
+                || source.endsWith('database-final-reply-bridge.js')
+            ),
+        },
+    );
 }
 
 async function waitForHost(url, timeoutMs = 60_000) {
@@ -259,12 +277,20 @@ try {
     fs.mkdirSync(tempUserRoot, { recursive: true });
     const settingsPath = path.join(tempUserRoot, 'settings.json');
     const authorScript = cleanAuthorScript();
+    const bridgeSource = fs.readFileSync(
+        path.join(doctorRoot, 'integrations', 'database-final-reply-bridge.js'),
+        'utf8',
+    );
     if (!fs.existsSync(sourceTavernHelperRoot)) {
         throw new Error('TavernHelper runtime is unavailable');
     }
     fs.writeFileSync(
         settingsPath,
-        `${JSON.stringify(createSterileSettings(authorScript.record), null, 2)}\n`,
+        `${JSON.stringify(
+            createSterileSettings(authorScript.record, bridgeSource),
+            null,
+            2,
+        )}\n`,
     );
     fs.cpSync(
         sourceTavernHelperRoot,
@@ -283,6 +309,8 @@ try {
         originalUserDataModified: false,
         doctorSourceInstalledInSterileRoot: true,
         tavernHelperRuntimeInstalledInSterileRoot: true,
+        independentBridgeInstalledInSterileRoot: true,
+        independentBridgeSha256: sha256(bridgeSource),
     };
 
     server = spawn(process.execPath, [
@@ -394,13 +422,35 @@ try {
         databaseBundleRequestCount: databaseRequests.length,
         databaseBundleResponses: databaseResponses,
     };
-    await page.waitForFunction(() => (
-        !!window.AutoCardUpdaterAPI
-        || !!window.TavernDBAPI
-        || !!window.SP_DATABASE
-    ), null, {
-        timeout: 120_000,
-    });
+    try {
+        await page.waitForFunction(() => (
+            !!window.AutoCardUpdaterAPI
+            || !!window.TavernDBAPI
+            || !!window.SP_DATABASE
+        ), null, {
+            timeout: 120_000,
+        });
+        report.runtime.databaseApiReady = true;
+    } catch {
+        report.runtime.databaseApiReady = false;
+        report.runtime.bridgeGlobalReady = await page.evaluate(() => (
+            !!window.MvuAutoDoctorDatabaseBridge
+        ));
+        throw new Error('database public API did not become ready');
+    }
+    try {
+        await page.waitForFunction(() => (
+            window.MvuAutoDoctorDatabaseBridge?.getState?.().databaseApiReady === true
+        ), null, {
+            timeout: 30_000,
+        });
+        report.runtime.bridgeGlobalReady = true;
+    } catch {
+        report.runtime.bridgeGlobalReady = await page.evaluate(() => (
+            !!window.MvuAutoDoctorDatabaseBridge
+        ));
+        throw new Error('independent bridge did not attach to database API');
+    }
     const runtime = await page.evaluate(async () => {
         const api = window.MvuAutoDoctorAPI;
         const environment = await api.inspectEnvironment();
@@ -428,6 +478,27 @@ try {
                 truthy: false,
             };
         }
+        const bridge = window.MvuAutoDoctorDatabaseBridge;
+        const unchangedDetail = {
+            status: 'settled',
+            chatId: 'sterile-bridge-qc',
+            targetIndex: 2,
+            serial: 1,
+            generationId: 'sterile-generation-1',
+            branchId: 'sterile-branch-1',
+            contentChanged: false,
+            receipt: { writeAllowed: true },
+        };
+        const changedDetail = {
+            ...unchangedDetail,
+            serial: 2,
+            generationId: 'sterile-generation-2',
+            contentChanged: true,
+        };
+        await bridge.sync(unchangedDetail);
+        const bridgeUnchanged = bridge.getState();
+        const bridgeSyncResult = await bridge.sync(changedDetail);
+        const bridgeAfterChanged = bridge.getState();
         let social = { status: 'not-run' };
         try {
             social = await api.auditSocialRelations();
@@ -448,6 +519,20 @@ try {
                 (key) => typeof databaseApi[key] === 'function',
             ).length,
             databaseUpdate,
+            independentBridge: {
+                id: bridge.id,
+                version: bridge.version,
+                unchangedRequestedDelta:
+                    bridgeUnchanged.requested,
+                unchangedSkipped:
+                    bridgeUnchanged.skipped,
+                changedSyncStatus: bridgeSyncResult?.status || '',
+                changedSyncAttempts: Number(bridgeSyncResult?.attempts) || 0,
+                databaseApiReady: bridgeAfterChanged.databaseApiReady === true,
+                requested: bridgeAfterChanged.requested,
+                completed: bridgeAfterChanged.completed,
+                failed: bridgeAfterChanged.failed,
+            },
             databaseUiSurfaceCount: [...document.querySelectorAll(
                 '[id], [class]',
             )].filter((element) => (
@@ -477,6 +562,11 @@ try {
     ), null, {
         timeout: 120_000,
     });
+    await page.waitForFunction(() => (
+        window.MvuAutoDoctorDatabaseBridge?.getState?.().databaseApiReady === true
+    ), null, {
+        timeout: 120_000,
+    });
     const reload = await page.evaluate(async () => {
         const doctorApi = window.MvuAutoDoctorAPI;
         const databaseApi = window.AutoCardUpdaterAPI
@@ -499,6 +589,7 @@ try {
                     `${element.id || ''} ${element.className || ''}`,
                 )
             )).length,
+            independentBridge: window.MvuAutoDoctorDatabaseBridge?.getState?.() || null,
         };
     });
     await new Promise((resolve) => setTimeout(resolve, 2_000));
@@ -540,8 +631,10 @@ try {
     );
     const code = hasNetworkFailure
         ? 'database_bundle_network_unavailable'
-        : /Timeout 120000ms exceeded/u.test(message)
+        : /database public API did not become ready/u.test(message)
             ? 'database_api_not_ready_timeout'
+            : /independent bridge did not attach/u.test(message)
+                ? 'database_bridge_not_ready_timeout'
         : /did not become ready/u.test(message)
             ? 'host_not_ready'
             : /Author loader is unavailable/u.test(message)

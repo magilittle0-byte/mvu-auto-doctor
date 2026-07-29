@@ -1161,6 +1161,15 @@ try {
         };
         t.setLatestData(after);
         t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const terminalEvents = [];
+        window.addEventListener('mvu-auto-doctor-target-terminal', (event) => {
+            terminalEvents.push({
+                status: event.detail?.status,
+                targetIndex: event.detail?.targetIndex,
+                serial: event.detail?.serial,
+                contentChanged: event.detail?.contentChanged,
+            });
+        });
         const modelBefore = window.MvuAutoDoctorAPI.getModelCallStats();
         const replaceBefore = t.calls.replace.length;
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
@@ -1194,6 +1203,7 @@ try {
             replacementDelta: t.calls.replace.length - replaceBefore,
             barrierRecordCount: records.length,
             barrierStates: [...new Set(records.map((record) => record.state))],
+            terminalEvents,
         };
     });
     assert.equal(
@@ -1214,6 +1224,15 @@ try {
     );
     assert.equal(eventStorm.barrierRecordCount, 1, '事件风暴必须合并到同一持久屏障');
     assert.deepEqual(eventStorm.barrierStates, ['settled']);
+    assert.equal(eventStorm.terminalEvents.length, 1, '事件风暴只应发布一次脱敏终态事件');
+    assert.equal(eventStorm.terminalEvents[0].status, 'settled');
+    assert.equal(eventStorm.terminalEvents[0].targetIndex, 2);
+    assert.equal(eventStorm.terminalEvents[0].serial, eventStorm.settled.serial);
+    assert.equal(
+        eventStorm.terminalEvents[0].contentChanged,
+        true,
+        '生成新修正版 swipe 时必须向独立桥明确标记正文已改变',
+    );
     await eventStormPage.close();
 
     const socialPage = await browser.newPage({ viewport: { width: 390, height: 844 } });

@@ -24,6 +24,8 @@ const rootFiles = [
     'core.mjs',
     'forum-core.mjs',
     'index.js',
+    'integrations/database-final-reply-bridge.js',
+    'integrations/MVU医生-数据库最终正文桥.json',
     'LICENSE',
     'manifest.json',
     'model-queue.mjs',
