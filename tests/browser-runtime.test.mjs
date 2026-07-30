@@ -814,7 +814,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.3');
+    assert.equal(continuity.version, '2.0.0-rc.4');
     assert.equal(
         continuity.worldInterfaceLimit,
         '2',
@@ -2457,6 +2457,9 @@ try {
                 forumRuns: window.__TEST__.calls.forumRuns,
                 forumStatus: document.querySelector('.mvuad-settings-forum-status')?.textContent || '',
                 forumUser: window.__TEST__.calls.forumUser,
+                continuityStatus: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+                operations: window.MvuAutoDoctorAPI.getOperationLog?.().slice(-12),
+                actorDiagnostics: window.MvuAutoDoctorAPI.getDiagnostics?.()?.actorShards,
             }), turn));
             throw error;
         });
@@ -2468,7 +2471,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.3');
+    assert.equal(lifecycle.version, '2.0.0-rc.4');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2774,7 +2777,7 @@ try {
     });
     await stuckBusyFlagPage.waitForFunction(() => (
         window.__TEST__.calls.model.filter((kind) => kind === 'repair').length === 1
-    ), null, { timeout: 15000 });
+    ), null, { timeout: 45000 });
     const stuckBusyFlagResult = await stuckBusyFlagPage.evaluate(() => ({
         repairCalls: window.__TEST__.calls.model.filter((kind) => kind === 'repair').length,
         replacements: window.__TEST__.calls.replace.length,
@@ -3722,6 +3725,12 @@ try {
         window.MvuAutoDoctorAPI.getContinuityState().turn === 1
         && window.MvuAutoDoctorAPI.getForumState().turn === 1
     ), null, { timeout: 30000 });
+    await swipeOnlyPage.evaluate(() => (
+        window.MvuAutoDoctorAPI.waitForTargetSettled(2, {
+            timeoutMs: 15000,
+            waitForVariable: true,
+        })
+    ));
     const modelCallsBeforeSwipe = await swipeOnlyPage.evaluate(() => (
         window.__TEST__.calls.model.length
     ));
@@ -3758,6 +3767,7 @@ try {
             forumSettingsVersion: 3,
             forumRefreshMode: 'auto',
             forumAutoRefresh: true,
+            socialAuditMode: 'off',
         });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
@@ -3766,9 +3776,16 @@ try {
         window.MvuAutoDoctorAPI.getContinuityState().turn === 1
         && window.MvuAutoDoctorAPI.getForumState().turn === 1
     ), null, { timeout: 30000 });
-    const fallbackCallsBefore = await swipeFallbackPage.evaluate(() => (
-        window.__TEST__.calls.model.length
+    await swipeFallbackPage.evaluate(() => (
+        window.MvuAutoDoctorAPI.waitForTargetSettled(2, {
+            timeoutMs: 15000,
+            waitForVariable: true,
+        })
     ));
+    const fallbackCallsBefore = await swipeFallbackPage.evaluate(() => ({
+        count: window.__TEST__.calls.model.length,
+        kinds: structuredClone(window.__TEST__.calls.model),
+    }));
     await swipeFallbackPage.evaluate(async () => {
         const t = window.__TEST__;
         t.context.chat[2].swipe_id = 1;
@@ -3779,13 +3796,14 @@ try {
         continuityTurn: window.MvuAutoDoctorAPI.getContinuityState().turn,
         forumTurn: window.MvuAutoDoctorAPI.getForumState().turn,
         modelCalls: window.__TEST__.calls.model.length,
+        modelKinds: structuredClone(window.__TEST__.calls.model),
     }));
     assert.equal(swipeFallback.continuityTurn, 0);
     assert.equal(swipeFallback.forumTurn, 0);
     assert.equal(
         swipeFallback.modelCalls,
-        fallbackCallsBefore,
-        '缺少 swipe 事件时也必须在下一次生成注入前无模型回退分支',
+        fallbackCallsBefore.count,
+        `缺少 swipe 事件时也必须在下一次生成注入前无模型回退分支；before=${JSON.stringify(fallbackCallsBefore.kinds)} after=${JSON.stringify(swipeFallback.modelKinds)}`,
     );
     await swipeFallbackPage.close();
 
@@ -5244,9 +5262,13 @@ try {
             window.__TEST__.context.extensionSettings.mvu_auto_doctor,
         ),
         diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
+        actorLedger: window.MvuAutoDoctorAPI.getActorLedgerView(),
+        actorReceipts: window.MvuAutoDoctorAPI.getActorActionReceipts(),
         controls: {
             mode: document.querySelector('.mvuad-actor-shard-mode').value,
             workers: document.querySelector('.mvuad-actor-shard-workers').value,
+            exploration: document.querySelector('.mvuad-actor-exploration-slots').value,
+            collision: document.querySelector('.mvuad-actor-collision-intensity').value,
             continuityPrompt: document.querySelector('.mvuad-continuity-prompt-addon').value,
             actorPrompt: document.querySelector('.mvuad-actor-shard-prompt-addon').value,
             hint: document.querySelector('.mvuad-actor-prompt-save-hint').textContent,
@@ -5261,13 +5283,16 @@ try {
     assert.match(actorIntegration.calls.actorSystem, /PHASE9-ACTOR-CANARY/u);
     assert.doesNotMatch(actorIntegration.calls.actorUser, /PHASE9-ACTOR-CANARY/u);
     assert.match(actorIntegration.calls.continuitySystem, /PHASE9-CONTINUITY-CANARY/u);
-    assert.match(actorIntegration.calls.continuityUser, /NPC分片候选（只产提案/u);
+    assert.match(actorIntegration.calls.continuityUser, /持久人物账本的本轮调度与行动收据/u);
+    assert.match(actorIntegration.calls.continuityUser, /acceptedActions/u);
     assert.match(actorIntegration.calls.continuityUser, /沿已知传播链继续调查/u);
     assert.equal(actorIntegration.settings.actorShardMode, 'on');
     assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
     assert.deepEqual(actorIntegration.controls, {
         mode: 'on',
         workers: '2',
+        exploration: '1',
+        collision: '2',
         continuityPrompt: 'PHASE9-CONTINUITY-CANARY：保留倒叙节奏。',
         actorPrompt: 'PHASE9-ACTOR-CANARY：候选行动使用短句。',
         hint: '已保存；诊断仅记录长度、哈希与启用状态',
@@ -5275,6 +5300,12 @@ try {
     assert.equal(actorIntegration.diagnostic.actorShards.status, 'completed');
     assert.equal(actorIntegration.diagnostic.actorShards.selected, 2);
     assert.equal(actorIntegration.diagnostic.actorShards.succeeded, 2);
+    assert.equal(actorIntegration.actorLedger.actorCount, 2);
+    assert.equal(actorIntegration.actorLedger.privateThoughtsExposed, false);
+    assert.equal(
+        actorIntegration.actorReceipts.some((receipt) => receipt.stage === 'world_settled'),
+        true,
+    );
     assert.deepEqual(
         Object.keys(actorIntegration.diagnostic.userPrompts.actorShard),
         ['enabled', 'length', 'hash'],

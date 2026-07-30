@@ -14,6 +14,12 @@ const sourceSettingsPath = path.join(
     'default-user',
     'settings.json',
 );
+const sourceSecretsPath = path.join(
+    stRoot,
+    'data',
+    'default-user',
+    'secrets.json',
+);
 const legacyPublicDoctorRoot = path.join(
     stRoot,
     'public',
@@ -74,6 +80,8 @@ function sha256(value) {
 
 function copyDoctorRuntime(targetRoot) {
     const rootFiles = [
+        'actor-ledger-core.d.mts',
+        'actor-ledger-core.mjs',
         'actor-shard-core.d.mts',
         'actor-shard-core.mjs',
         'CHANGELOG.md',
@@ -150,11 +158,41 @@ async function isPortClosed(port) {
 
 const sourceSettings = JSON.parse(fs.readFileSync(sourceSettingsPath, 'utf8'));
 const sourceModel = sourceSettings.extension_settings?.mvu_auto_doctor || {};
-const modelConfig = {
+const directModelConfig = {
     endpoint: String(sourceModel.connectionEndpoint || '').trim(),
     apiKey: String(sourceModel.connectionApiKey || '').trim(),
     model: String(sourceModel.connectionModel || '').trim(),
+    proxy: 'deepseek',
 };
+const sourceSecrets = JSON.parse(fs.readFileSync(sourceSecretsPath, 'utf8'));
+const activeCustomSecret = Array.isArray(sourceSecrets.api_key_custom)
+    ? sourceSecrets.api_key_custom.find((item) => (
+        item?.active === true
+        && String(item?.value || '').trim().length >= 32
+    ))
+    : null;
+const customBase = String(sourceSettings.oai_settings?.custom_url || '').trim();
+const customModel = String(sourceSettings.oai_settings?.custom_model || '').trim();
+let customOrigin = null;
+try {
+    customOrigin = new URL(customBase).origin;
+} catch {
+    // Checked below without including the source value in an error.
+}
+const approvedCustom = (
+    sourceSettings.oai_settings?.chat_completion_source === 'custom'
+    && customOrigin === 'https://opencode.ai'
+    && activeCustomSecret
+    && customModel
+);
+const modelConfig = approvedCustom
+    ? {
+        endpoint: `http://127.0.0.1:${proxyPort}/v1`,
+        apiKey: String(activeCustomSecret.value || '').trim(),
+        model: customModel,
+        proxy: 'opencode',
+    }
+    : directModelConfig;
 let endpoint = null;
 try {
     endpoint = new URL(modelConfig.endpoint);
@@ -188,6 +226,7 @@ let server = null;
 let proxy = null;
 let proxyPreexisting = false;
 let runFailed = false;
+let legacyPublicTemporarilyReplaced = false;
 const runtimeErrors = [];
 const report = {
     schemaVersion: 1,
@@ -240,6 +279,7 @@ try {
         });
     }
     copyDoctorRuntime(legacyPublicDoctorRoot);
+    legacyPublicTemporarilyReplaced = true;
 
     try {
         const existingHealth = await (
@@ -256,8 +296,11 @@ try {
         proxyPreexisting = false;
     }
     if (!proxyPreexisting) {
+        const proxyScript = modelConfig.proxy === 'opencode'
+            ? 'opencode-memory-proxy.mjs'
+            : 'deepseek-memory-proxy.mjs';
         proxy = spawn(process.execPath, [
-            path.join(doctorRoot, 'qc', 'deepseek-memory-proxy.mjs'),
+            path.join(doctorRoot, 'qc', proxyScript),
         ], {
             cwd: doctorRoot,
             windowsHide: true,
@@ -266,6 +309,7 @@ try {
                 ...process.env,
                 DS_TEST_KEY: '',
                 DS_TEST_PORT: String(proxyPort),
+                OPENCODE_QC_PORT: String(proxyPort),
             },
         });
         for (const stream of [proxy.stdout, proxy.stderr]) {
@@ -609,19 +653,21 @@ try {
     const proxyPortClosed = proxyPreexisting
         ? false
         : await isPortClosed(proxyPort);
-    fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
-    if (legacyPublicExisted) {
-        fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
-            recursive: true,
-        });
+    if (legacyPublicTemporarilyReplaced) {
+        fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
+        if (legacyPublicExisted) {
+            fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
+                recursive: true,
+            });
+        }
     }
-    legacyPublicRestored = legacyPublicExisted
+    legacyPublicRestored = !legacyPublicTemporarilyReplaced || (legacyPublicExisted
         ? (
             fs.existsSync(path.join(legacyPublicDoctorRoot, 'index.js'))
             && sha256(fs.readFileSync(path.join(legacyPublicDoctorRoot, 'index.js')))
                 === sha256(fs.readFileSync(path.join(legacyPublicBackupRoot, 'index.js')))
         )
-        : !fs.existsSync(legacyPublicDoctorRoot);
+        : !fs.existsSync(legacyPublicDoctorRoot));
     fs.rmSync(resolvedTemp, { recursive: true, force: true });
     report.cleanup = {
         browserClosed: browser !== null,

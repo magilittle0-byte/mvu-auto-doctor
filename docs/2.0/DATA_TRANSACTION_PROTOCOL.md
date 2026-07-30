@@ -540,7 +540,7 @@ interface MigrationState {
 
 ### 21.1 医生托管写入与可选外部协作
 
-生产兼容 API v5 提供 `registerBarrierProtocolClient`、
+生产兼容 API v6 提供 `registerBarrierProtocolClient`、
 `getBarrierProtocolStatus` 和 `acknowledgeBarrierReceipt`，但这些接口只用于
 自愿协作，不是 TavernDB、TavernHelper 或角色卡脚本的产品前置条件。医生托管的
 变量、修正版 swipe、连续性、记忆和论坛写入始终受完整目标身份与持久终态约束：
@@ -593,3 +593,44 @@ Actor Shard 只能在当前完整目标已有持久 `settled` 屏障后启动。
 内容不做题材/NSFW过滤，也无默认示例或内置破限文本。它们不能生成授权、证据、事务
 或危险确认，不能改变分支、指纹、数据库 barrier 和硬字段白名单。诊断与导出只允许
 `enabled/length/hash`，禁止保存全文。
+
+## 23. Actor Ledger 与人物行动结算协议
+
+rc.4 在聊天 namespace v9 新增 `actorLedger` 和 `actorLedgerCheckpoint`。账本版本1
+必须包含稳定人物ID、重要度、休眠状态、身份/性格/欲望/底线、长期/当前目标、
+KnowledgeEntry、位置、资源、能力、关系、承诺、hidden私有状态、当前计划、上次行动、
+下一行动/时限、主动性、机会、沉默轮数、证据和人物版本。旧 continuity v5 的惰性
+迁移只允许复制可归属的非hidden摘要、目标、地点和来源；hidden线程可建立人物壳，
+但不得把幕后摘要写入人物知识。
+
+接受正文的观察回写必须满足：
+
+1. 来源是当前完整目标的已接受 `<content>`，并绑定 SourceRef；
+2. 观察者由本地在场判定提供，不能因为人物在账本中就广播给所有人；
+3. 玩家内心、私密叙述和明确不在场人物不进入观察知识；
+4. 相同来源/claim幂等，最多保留48条人物知识和120条观察收据；
+5. hidden人物状态只进入该人物隔离worker，公开视图、宏观提示和诊断均删除该字段。
+
+调度器每轮最多选择5人，低关注探索槽最多2个。优先分数只能由到期行动、主动性、
+机会、时限、未完成承诺、资源和沉默轮数构成；探索槽按低attention与长沉默选择，
+不得永久由重要度压死。休眠不等于删除，到期/机会可唤醒；连续有效行动可
+`background → secondary → key`，长期无承诺沉默可降格。
+
+人物worker输出仍是候选。候选进入结算前必须本地验证 actorId/name、intent、
+当前turn、from/to/travelTurns、knowledgeRefs、resourceCosts、capabilityUsed、
+evidence、具体waitCondition和玩家主权。任一越界整条拒绝；不得让模型在宏观阶段
+重新采用拒绝项。到期人物只允许 execute、replan 或带可核验未满足条件的 wait。
+
+合法行动生成稳定 ActionId，并按顺序登记：
+
+`planned → executed → world_settled → injected → response_settled`
+
+无可观察后果的行动仍以 `knowledge=hidden/relation=independent` 结算为世界事件，
+可以永不与主线相交；有可观察后果的主动接触才生成 `converging` 入口，并继续经过
+continuity policy、1—4接口、时效、优先级和字符预算。正文只在实际出现收据证据时
+标为 `consumed`，否则标为 `retained`，不得泄露hidden内心。
+
+人物模拟是附加非关键路径。worker失败、超时、解析失败、本地拒绝、收据保存失败或
+界面错误不得阻塞正文、数据库、变量医生、社交零写入门或 continuity 本地时钟。
+regenerate/swipe恢复人物与continuity的同楼前置checkpoint；旧generation/branch的
+迟到worker结果必须保持零写入。

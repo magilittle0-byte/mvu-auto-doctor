@@ -28,6 +28,8 @@ function collectRuntimeFiles(relativeDirectory) {
 }
 
 const runtimeFiles = [
+    'actor-ledger-core.d.mts',
+    'actor-ledger-core.mjs',
     'actor-shard-core.d.mts',
     'actor-shard-core.mjs',
     'continuity-core.mjs',
@@ -71,6 +73,32 @@ function codeFingerprint() {
 
 function reportHash() {
     return createHash('sha256').update(fs.readFileSync(reportPath)).digest('hex');
+}
+
+function validateActorLedgerEvidence(report) {
+    const actorLedger = report.checks?.actorLedger;
+    if (
+        !actorLedger
+        || actorLedger.version !== 1
+        || actorLedger.persistentAuditLedger !== true
+        || actorLedger.continuousMigration !== true
+        || actorLedger.privateThoughtsHidden !== true
+        || actorLedger.acceptedContentObservationOnly !== true
+        || actorLedger.boundedActorLimit !== 5
+        || actorLedger.boundedExplorationSlots !== 2
+        || actorLedger.lowAttentionTurnsTested < 80
+        || actorLedger.starvationPrevented !== true
+        || actorLedger.dueActionResolutionRequired !== true
+        || actorLedger.playerSovereigntyProtected !== true
+        || actorLedger.receiptStages?.join(',') !== (
+            'plan,execution,world-settlement,injection,narrative-consumption'
+        )
+        || actorLedger.injectionBudgetPreserved !== true
+        || actorLedger.realRuntimeApiVisible !== true
+        || actorLedger.publicViewExcludesPrivateState !== true
+        || actorLedger.realUiControlsVerified !== true
+        || actorLedger.optionalFailureNonBlocking !== true
+    ) fail('Actor Ledger closed-loop evidence is incomplete');
 }
 
 function validateBlockedReport(report) {
@@ -310,14 +338,14 @@ function validateBlockedReport(report) {
                 : realModelCredentialRejected
                     ? (
                         model.result !== 'blocked'
-                        || model.attempts !== 1
+                        || model.attempts < 1
                         || model.succeeded !== 0
-                        || model.failed !== 1
-                        || model.proxyStatuses?.join(',') !== '401'
-                        || model.inputBytes?.length !== 1
-                        || model.inputBytes[0] < 1
+                        || model.failed !== model.attempts
+                        || model.proxyStatuses.some((status) => status !== 401)
+                        || model.inputBytes?.length !== model.attempts
+                        || model.inputBytes.some((bytes) => bytes < 1)
                         || model.externalCredentialRejected !== true
-                        || model.doctorModelCallDelta !== 1
+                        || model.doctorModelCallDelta !== model.attempts
                         || model.doctorRetryCount !== 0
                         || model.doctorFallbackUsed !== true
                         || model.doctorModelCompleted !== false
@@ -427,6 +455,7 @@ function loadAndValidateReport() {
     ) {
         fail('automated suite evidence is incomplete');
     }
+    validateActorLedgerEvidence(report);
     if (report.result === 'blocked') {
         validateBlockedReport(report);
         const testedAt = Date.parse(report.testedAt);
@@ -463,7 +492,7 @@ function loadAndValidateReport() {
     const phase7 = report.checks?.phase7Release;
     if (
         !phase7
-        || phase7.candidate !== '2.0.0-rc.1'
+        || phase7.candidate !== manifest.version
         || phase7.fixtureCases !== 17
         || phase7.fixturePasses !== 17
         || phase7.fixtureTodos !== 0

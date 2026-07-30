@@ -11,12 +11,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const candidate = '2.0.0-rc.3';
+const candidate = '2.0.0-rc.4';
 const artifactName = `05_MVU自动医生_v${candidate}_离线候选.zip`;
 const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
 
 const rootFiles = [
+    'actor-ledger-core.d.mts',
+    'actor-ledger-core.mjs',
     'actor-shard-core.d.mts',
     'actor-shard-core.mjs',
     'CHANGELOG.md',

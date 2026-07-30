@@ -26,6 +26,13 @@ async function readJson(request, limit = 2 * 1024 * 1024) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
+function requestCredential(request) {
+    if (apiKey) return apiKey;
+    const authorization = String(request.headers.authorization || '').trim();
+    const matched = authorization.match(/^Bearer\s+(.+)$/iu);
+    return String(matched?.[1] || '').trim();
+}
+
 const server = http.createServer(async (request, response) => {
     if (request.method === 'OPTIONS') {
         response.writeHead(204, {
@@ -40,6 +47,7 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, {
             ok: true,
             credentialLoaded: Boolean(apiKey),
+            requestCredentialAccepted: true,
         });
         return;
     }
@@ -67,7 +75,8 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 404, { error: { message: 'not found' } });
         return;
     }
-    if (!apiKey) {
+    const activeCredential = requestCredential(request);
+    if (!activeCredential) {
         sendJson(response, 401, { error: { message: 'QC credential is not loaded' } });
         return;
     }
@@ -86,7 +95,7 @@ const server = http.createServer(async (request, response) => {
         const upstream = await fetch(`${upstreamBase}/chat/completions`, {
             method: 'POST',
             headers: {
-                authorization: `Bearer ${apiKey}`,
+                authorization: `Bearer ${activeCredential}`,
                 'content-type': 'application/json',
             },
             body: JSON.stringify({

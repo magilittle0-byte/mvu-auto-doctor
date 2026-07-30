@@ -59,6 +59,19 @@ import {
     userPromptSlotMetadata,
 } from './actor-shard-core.mjs';
 import {
+    actorActionCandidatesFromShard,
+    actorLedgerView,
+    applyAcceptedContentObservations,
+    emptyActorLedger,
+    inferObserverActorIds,
+    mergeActorWorldEventsIntoContinuity,
+    migrateActorLedgerFromContinuity,
+    normalizeActorLedger,
+    scheduleActorTurns,
+    settleActorActionCandidates,
+    settleActorInjectionReceipts,
+} from './actor-ledger-core.mjs';
+import {
     applyForumUpdate,
     emptyForumState,
     extractForumUpdate,
@@ -100,15 +113,28 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.3';
+const VERSION = '2.0.0-rc.4';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 8;
+const CHAT_NAMESPACE_VERSION = 9;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
 const SOCIAL_INJECTION_SENTINEL = '【MVU医生·人物动机与自主性合同】';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
+const ACTOR_ACTION_ERROR_LABELS = Object.freeze({
+    'actor-identity-mismatch': '人物身份与当前账本不一致',
+    'intent-invalid': '没有给出执行、改计划或具体等待',
+    'action-missing': '行动内容为空',
+    'player-sovereignty': '行动替玩家接受、服从、支付或决定',
+    'time-invalid': '行动时间不在当前人物窗口',
+    'location-or-travel-invalid': '地点或旅行时间不成立',
+    'knowledge-out-of-bounds': '使用了人物尚不知道的信息',
+    'evidence-out-of-bounds': '来源证据不属于该人物',
+    'resource-insufficient': '资源不足',
+    'capability-out-of-bounds': '能力不在人物账本中',
+    'wait-condition-not-concrete': '等待理由没有指出具体未满足条件',
+});
 const MIN_MODEL_TIMEOUT_MS = 10_000;
 const MAX_MODEL_TIMEOUT_MS = 180_000;
 const DEFAULTS = Object.freeze({
@@ -165,12 +191,16 @@ const DEFAULTS = Object.freeze({
     continuityContextMessages: 12,
     continuityMaxTokens: 12288,
     continuityPromptAddon: '',
-    actorShardMode: 'off',
+    actorShardMode: 'auto',
     actorShardMaxWorkers: 2,
     actorShardMaxTokens: 1200,
     actorShardTimeoutMs: 30000,
     actorShardPromptAddon: '',
-    actorShardSettingsVersion: 1,
+    actorShardSettingsVersion: 2,
+    actorLedgerMaxActorsPerTurn: 2,
+    actorLedgerExplorationSlots: 1,
+    actorLedgerCollisionIntensity: 2,
+    actorLedgerSettingsVersion: 1,
     builtInForumEnabled: true,
     forumAutoRefresh: false,
     forumRefreshMode: 'manual',
@@ -301,6 +331,11 @@ let lastGeneration = {
 let pendingChatSaveTimer = null;
 let pendingOpeningSyncTimer = null;
 let presetContinuityCache = { checkedAt: 0, active: false };
+let continuityWorldContextCache = {
+    key: '',
+    expiresAt: 0,
+    promise: null,
+};
 let downstreamBarrierProtocol = null;
 let downstreamBarrierProtocolChatId = '';
 
@@ -320,6 +355,7 @@ function getSettings() {
     const previousModelRoutingSettingsVersion = Number(settings.modelRoutingSettingsVersion) || 0;
     const previousSocialAuditSettingsVersion = Number(settings.socialAuditSettingsVersion) || 0;
     const previousActorShardSettingsVersion = Number(settings.actorShardSettingsVersion) || 0;
+    const previousActorLedgerSettingsVersion = Number(settings.actorLedgerSettingsVersion) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -373,6 +409,27 @@ function getSettings() {
         60000,
         Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 30000)),
     );
+    settings.actorLedgerMaxActorsPerTurn = Math.min(
+        5,
+        Math.max(1, Math.floor(Number(settings.actorLedgerMaxActorsPerTurn) || 2)),
+    );
+    const requestedActorExplorationSlots = Number(settings.actorLedgerExplorationSlots);
+    settings.actorLedgerExplorationSlots = Math.min(
+        2,
+        Math.max(
+            0,
+            Math.min(
+                settings.actorLedgerMaxActorsPerTurn,
+                Number.isFinite(requestedActorExplorationSlots)
+                    ? Math.floor(requestedActorExplorationSlots)
+                    : 1,
+            ),
+        ),
+    );
+    settings.actorLedgerCollisionIntensity = Math.min(
+        3,
+        Math.max(0, Math.floor(Number(settings.actorLedgerCollisionIntensity) || 2)),
+    );
     for (const key of ['continuityPromptAddon', 'actorShardPromptAddon']) {
         const normalized = normalizeUserPromptSlot(settings[key]);
         if (settings[key] !== normalized) {
@@ -386,6 +443,18 @@ function getSettings() {
         settings.actorShardMaxTokens = 1200;
         settings.actorShardTimeoutMs = 30000;
         settings.actorShardSettingsVersion = 1;
+        changed = true;
+    }
+    if (previousActorShardSettingsVersion < 2) {
+        settings.actorShardMode = 'auto';
+        settings.actorShardSettingsVersion = 2;
+        changed = true;
+    }
+    if (previousActorLedgerSettingsVersion < 1) {
+        settings.actorLedgerMaxActorsPerTurn = 2;
+        settings.actorLedgerExplorationSlots = 1;
+        settings.actorLedgerCollisionIntensity = 2;
+        settings.actorLedgerSettingsVersion = 1;
         changed = true;
     }
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
@@ -1570,6 +1639,7 @@ function diagnosticPayload() {
         chatId: context?.chatId || '',
         maxThreads: getSettings().continuityMaxThreads,
     });
+    const actors = actorLedgerView(namespace.actorLedger);
     const forum = forumView(namespace.forum, {
         chatId: context?.chatId || '',
         maxPosts: getSettings().forumMaxPosts,
@@ -1609,6 +1679,13 @@ function diagnosticPayload() {
                 continuity: {
                     activeCount: continuity.activeCount,
                     resolvedCount: continuity.resolvedCount,
+                },
+                actors: {
+                    actorCount: actors.actorCount,
+                    activeCount: actors.activeCount,
+                    dormantCount: actors.dormantCount,
+                    receiptCount: actors.receipts.length,
+                    privateThoughtsExposed: false,
                 },
                 forum: {
                     postCount: forum.posts.length,
@@ -1818,6 +1895,8 @@ function readChatNamespace(context = getContext()) {
             socialAudits: [],
             continuity: emptyContinuityState(context?.chatId || ''),
             continuityCheckpoint: null,
+            actorLedger: emptyActorLedger(context?.chatId || ''),
+            actorLedgerCheckpoint: null,
             forum: emptyForumState(context?.chatId || ''),
             forumCheckpoint: null,
             phase6Runtime: {
@@ -2529,7 +2608,7 @@ function usableForumWorldEntry(entry) {
     ].filter(Boolean).join('\n');
 }
 
-async function collectContinuityWorldContext(context, character) {
+async function collectContinuityWorldContextUncached(context, character) {
     const characterBlocks = continuityCharacterSetting(character, context);
     const activeEntries = [];
     const loadedEntries = [];
@@ -2609,6 +2688,37 @@ async function collectContinuityWorldContext(context, character) {
         ) || '未读取到明确标记为公开的世界设定；只生成不涉及隐藏真相的普通日常内容。',
         forumSourceCount: forumWorldBlocks.length,
     };
+}
+
+async function collectContinuityWorldContext(context, character) {
+    const key = fingerprint(JSON.stringify([
+        context?.chatId || '',
+        context?.chat?.length || 0,
+        context?.chatMetadata?.world_info || '',
+        character?.avatar || character?.name || character?.data?.name || '',
+    ]));
+    const now = Date.now();
+    if (
+        continuityWorldContextCache.key === key
+        && continuityWorldContextCache.promise
+        && continuityWorldContextCache.expiresAt >= now
+    ) {
+        return continuityWorldContextCache.promise;
+    }
+    const promise = collectContinuityWorldContextUncached(context, character);
+    continuityWorldContextCache = {
+        key,
+        expiresAt: now + 15_000,
+        promise,
+    };
+    try {
+        return await promise;
+    } catch (error) {
+        if (continuityWorldContextCache.promise === promise) {
+            continuityWorldContextCache = { key: '', expiresAt: 0, promise: null };
+        }
+        throw error;
+    }
 }
 
 async function getMvu() {
@@ -6881,6 +6991,39 @@ async function settleContinuityInjectionReceipts(captured) {
     );
 }
 
+async function settleActorLedgerInjectionReceipts(captured) {
+    if (!captured?.generationId) return;
+    const context = getContext();
+    if (!context || context.chatId !== captured.chatId) return;
+    const namespace = readChatNamespace(context);
+    const before = normalizeActorLedger(namespace.actorLedger, {
+        chatId: captured.chatId,
+    });
+    const after = settleActorInjectionReceipts(before, {
+        content: acceptedContentText(context.chat?.[captured.index]?.mes || ''),
+        sourceRef: sourceRefOf(captured),
+    });
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    namespace.actorLedger = after;
+    await writeChatNamespace(namespace, captured.chatId, {
+        fields: ['actorLedger'],
+    });
+    const settled = after.actionReceipts.filter((receipt) => (
+        receipt.stage === 'response_settled'
+        && receipt.responseSourceRef?.messageId === captured.messageId
+        && receipt.responseSourceRef?.swipeId === captured.swipeId
+    ));
+    const consumed = settled.filter((receipt) => receipt.status === 'consumed').length;
+    const retained = settled.filter((receipt) => receipt.status === 'retained').length;
+    if (settled.length) {
+        recordOperation(
+            '人物行动收据',
+            `正文消费 ${consumed} 条主动后果，后台保留 ${retained} 条`,
+            consumed ? 'ok' : '',
+        );
+    }
+}
+
 function applyContinuityInjection({ isReroll = false } = {}) {
     const settings = getSettings();
     if (settings.continuityMode === 'off') {
@@ -7223,8 +7366,9 @@ function buildContinuityMessages({
         ...(actorShardCandidates
             ? [
                 '',
-                '=== NPC分片候选（只产提案；未发生、非事实、无写权限）===',
-                '这些候选只供宏观连续性模型参考。必须重新核对时间、地点、有限认知、因果、玩家授权和当前分支；可以全部不采用。',
+                '=== 持久人物账本的本轮调度与行动收据 ===',
+                'proposals仍是无写权限候选；acceptedActions与worldEvents已经通过本地身份、知识、时间、地点、资源、能力、因果和玩家主权校验，可结算为人物实际行动与世界后果。',
+                'rejectedActions必须保持拒绝，禁止模型绕过本地原因重新采用。后台行动可以永不进入主线；只有worldEvents中的可观察后果或主动接触才可进入事件/世界表面，且仍受汇流门槛和注入预算限制。',
                 safeJson(actorShardCandidates),
             ]
             : []),
@@ -7307,6 +7451,8 @@ function actorShardLeaseFingerprint(captured) {
 
 async function collectActorShardProposals(captured, {
     base,
+    actorLedger,
+    actorSchedule,
     messageText,
     token,
 } = {}) {
@@ -7323,8 +7469,13 @@ async function collectActorShardProposals(captured, {
     }
     const candidates = selectActorShardCandidates({
         continuity: base,
+        actorLedger,
+        schedule: actorSchedule,
         presentText: messageText,
-        maxWorkers: settings.actorShardMaxWorkers,
+        maxWorkers: Math.min(
+            settings.actorShardMaxWorkers,
+            settings.actorLedgerMaxActorsPerTurn,
+        ),
     });
     if (!candidates.length) {
         latestActorShardDiagnostics = {
@@ -7525,10 +7676,39 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const tickTurn = base.turn + ticksDue;
     const worldClockChanged = continuityWorldDigest(base)
         !== continuityWorldDigest(scheduledBase);
+    const storedActorLedger = normalizeActorLedger(
+        namespace.actorLedger,
+        { chatId: captured.chatId },
+    );
+    let actorLedger = migrateActorLedgerFromContinuity(
+        storedActorLedger,
+        scheduledBase,
+    );
+    actorLedger.turn = tickTurn;
+    const observerActorIds = inferObserverActorIds(actorLedger, acceptedNarrative);
+    actorLedger = applyAcceptedContentObservations(actorLedger, {
+        content: acceptedNarrative,
+        sourceRef: sourceRefOf(captured),
+        observerActorIds,
+    });
+    const actorSchedule = scheduleActorTurns(actorLedger, {
+        turn: tickTurn,
+        maxActors: settings.actorLedgerMaxActorsPerTurn,
+        explorationSlots: settings.actorLedgerExplorationSlots,
+    });
     let actorShardCandidates = null;
+    let actorSettlement = {
+        ledger: actorLedger,
+        accepted: [],
+        rejected: [],
+        worldEvents: [],
+        receipts: [],
+    };
     try {
         const actorShardResult = await collectActorShardProposals(captured, {
             base: scheduledBase,
+            actorLedger,
+            actorSchedule,
             messageText: acceptedNarrative,
             token,
         });
@@ -7536,6 +7716,62 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
         }
         actorShardCandidates = actorShardResult.candidates;
+        if (actorShardResult.candidates?.proposals?.length) {
+            const actionCandidates = actorActionCandidatesFromShard(
+                actorLedger,
+                actorShardResult.candidates.proposals,
+                {
+                    turn: tickTurn,
+                    collisionIntensity: settings.actorLedgerCollisionIntensity,
+                },
+            );
+            actorSettlement = settleActorActionCandidates(
+                actorLedger,
+                actionCandidates,
+                { turn: tickTurn },
+            );
+            actorLedger = actorSettlement.ledger;
+            scheduledBase = normalizeContinuityState(
+                mergeActorWorldEventsIntoContinuity(
+                    scheduledBase,
+                    actorSettlement.worldEvents,
+                ),
+                {
+                    chatId: captured.chatId,
+                    maxThreads: settings.continuityMaxThreads,
+                },
+            );
+            clockPlan.state = scheduledBase;
+            actorShardCandidates = {
+                ...actorShardResult.candidates,
+                acceptedActions: actorSettlement.accepted,
+                rejectedActions: actorSettlement.rejected,
+                worldEvents: actorSettlement.worldEvents,
+                receiptIds: actorSettlement.receipts.map((item) => item.receiptId),
+            };
+            latestActorShardDiagnostics = {
+                ...latestActorShardDiagnostics,
+                acceptedActions: actorSettlement.accepted.length,
+                rejectedActions: actorSettlement.rejected.length,
+                rejectionReasons: [...new Set(
+                    actorSettlement.rejected.flatMap((item) => item.reasons || []),
+                )].slice(0, 12),
+                worldEvents: actorSettlement.worldEvents.length,
+            };
+            if (actorSettlement.receipts.length || actorSettlement.rejected.length) {
+                recordOperation(
+                    '人物行动',
+                    `计划 ${actionCandidates.length} 人；合法结算 ${actorSettlement.accepted.length}；`
+                    + `拒绝 ${actorSettlement.rejected.length}；可观察后果 ${actorSettlement.worldEvents.length}`
+                    + (actorSettlement.rejected.length
+                        ? `；原因：${latestActorShardDiagnostics.rejectionReasons
+                            .map((code) => ACTOR_ACTION_ERROR_LABELS[code] || code)
+                            .join('、')}`
+                        : ''),
+                    actorSettlement.accepted.length ? 'ok' : '',
+                );
+            }
+        }
     } catch (error) {
         latestActorShardDiagnostics = {
             status: 'failed',
@@ -7547,7 +7783,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
     }
 
-    const localProgressed = clockPlan.changedThreadIds.length > 0 || worldClockChanged;
+    const actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
+    const localProgressed = (
+        clockPlan.changedThreadIds.length > 0
+        || worldClockChanged
+        || actorSettlement.accepted.length > 0
+    );
     let next = localProgressed ? scheduledBase : base;
     let retryReason = '';
     let progressed = false;
@@ -7709,6 +7950,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             : '没有新建事件，也没有产生有依据的分类世界变化';
     }
     if (!progressed) {
+        if (actorLedgerChanged) {
+            namespace.actorLedger = actorLedger;
+            await writeChatNamespace(namespace, captured.chatId, {
+                fields: ['actorLedger'],
+            });
+        }
         setContinuityStatus('世界连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
         return { status: 'stalled', reason: retryReason || '账本无实质变化' };
     }
@@ -7770,6 +8017,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const oldDigest = continuityContentDigest(namespace.continuity);
     const newDigest = continuityContentDigest(next);
     namespace.continuity = next;
+    namespace.actorLedger = actorLedger;
     namespace.continuityDirector = director;
     namespace.continuityDetected = true;
     if (!isReroll && !checkpointMatchesTarget(namespace.continuityCheckpoint, captured)) {
@@ -7780,11 +8028,21 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             state: checkpointBase,
         };
     }
-    if (oldDigest !== newDigest || isReroll) {
+    if (!isReroll && !checkpointMatchesTarget(namespace.actorLedgerCheckpoint, captured)) {
+        namespace.actorLedgerCheckpoint = {
+            targetIndex: captured.index,
+            messageId: captured.messageId,
+            swipeId: captured.swipeId,
+            state: storedActorLedger,
+        };
+    }
+    if (oldDigest !== newDigest || actorLedgerChanged || isReroll) {
         await writeChatNamespace(namespace, captured.chatId, {
             fields: [
                 'continuity',
                 'continuityCheckpoint',
+                'actorLedger',
+                'actorLedgerCheckpoint',
                 'continuityDirector',
                 'continuityDetected',
                 'continuitySourceReceipts',
@@ -7815,6 +8073,8 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         director,
         held,
         degraded: !modelValidated && localProgressed,
+        actorActions: actorSettlement.accepted.length,
+        actorActionRejected: actorSettlement.rejected.length,
         reason: modelFailure || undefined,
     };
 }
@@ -7926,21 +8186,27 @@ async function clearContinuityState() {
         chatId: context.chatId,
         maxThreads: settings.continuityMaxThreads,
     });
+    const actors = actorLedgerView(readChatNamespace(context).actorLedger);
     if (!await confirmDangerousAction(
         `当前账本有 ${view.activeCount} 条未结事件、${view.resolvedCount} 条已收束事件。`
-        + '清空后无法撤销；不会删除正文、MVU、数据库或角色卡。确定只清空当前聊天的活世界账本吗？',
+        + `人物账本有 ${actors.actorCount} 人。`
+        + '清空后无法撤销；不会删除正文、MVU、数据库或角色卡。确定清空当前聊天的活世界与人物账本吗？',
     )) {
         return false;
     }
     const namespace = readChatNamespace(context);
     namespace.continuity = emptyContinuityState(context.chatId);
     namespace.continuityCheckpoint = null;
+    namespace.actorLedger = emptyActorLedger(context.chatId);
+    namespace.actorLedgerCheckpoint = null;
     namespace.continuityDirector = 'standalone';
     await writeChatNamespace(namespace, context.chatId, {
         force: true,
         fields: [
             'continuity',
             'continuityCheckpoint',
+            'actorLedger',
+            'actorLedgerCheckpoint',
             'continuityDirector',
             'continuityDetected',
         ],
@@ -8310,8 +8576,12 @@ function enqueueForum(targetId, {
     if (dedupeKey) forumPendingKeys.add(dedupeKey);
     forumChain = forumChain
         .catch(() => undefined)
-        .then(() => after.catch?.(() => undefined) ?? after)
         .then(() => {
+            setForumStatus('论坛：刷新队列已取得执行权，等待世界结算确认…', 'busy');
+            return after.catch?.(() => undefined) ?? after;
+        })
+        .then(() => {
+            setForumStatus('论坛：世界结算已确认，正在校验刷新目标…', 'busy');
             if (expected.epoch !== operationEpoch) {
                 return { status: 'stale', reason: '任务已被新的生成作废' };
             }
@@ -10814,18 +11084,33 @@ function buildSettingsPanel() {
                             <label class="mvuad-select">
                                 <span>NPC 分片</span>
                                 <select class="text_pole mvuad-actor-shard-mode">
-                                    <option value="off">关闭（默认，0 次额外调用）</option>
-                                    <option value="auto">保守自动</option>
+                                    <option value="off">关闭（0 次额外调用）</option>
+                                    <option value="auto">人物驱动·自动（推荐）</option>
                                     <option value="on">开启</option>
                                 </select>
                             </label>
                             <label class="mvuad-number">
-                                <span>每回合最多 NPC worker</span>
+                                <span>每回合最多独立行动人物</span>
                                 <input class="text_pole mvuad-actor-shard-workers" type="number" min="1" max="5" step="1">
                             </label>
+                            <label class="mvuad-number">
+                                <span>其中低关注人物探索槽</span>
+                                <input class="text_pole mvuad-actor-exploration-slots" type="number" min="0" max="2" step="1">
+                            </label>
+                            <label class="mvuad-select">
+                                <span>人物主动碰撞节奏</span>
+                                <select class="text_pole mvuad-actor-collision-intensity">
+                                    <option value="0">安静·只在后台行动</option>
+                                    <option value="1">克制·仅直接来信/来访</option>
+                                    <option value="2">平衡·允许自然主动接触（推荐）</option>
+                                    <option value="3">活跃·更多社会与环境后果</option>
+                                </select>
+                            </label>
                             <div class="mvuad-description">
-                                仅在最终正文 settled 且硬审计通过后，确定性选择不在场 NPC；每个 worker 会增加一次轻量模型调用，
-                                默认上限 2、可设 1—5。worker 只产提案，失败或超时会单独降级，不阻断原宏观连续性路径。
+                                人物会保留身份、有限认知、目标、位置、资源、承诺、计划与隐藏内心状态。
+                                到期行动、时限和承诺优先；探索槽让次要人物不会永久饿死。每名入选人物最多增加一次轻量调用，
+                                默认行动 2 人、探索 1 人。行动必须通过知识、时间、地点、资源、能力、因果与玩家主权校验；
+                                失败只保留人物账本并显示原因，不阻断正文、数据库、变量医生或世界时钟。
                             </div>
                             <details class="mvuad-settings-fold mvuad-continuity-prompt-settings">
                                 <summary>用户自定义叙事提示词插槽</summary>
@@ -11077,14 +11362,43 @@ function buildSettingsPanel() {
         saveSettings();
     });
     const actorShardWorkers = wrapper.querySelector('.mvuad-actor-shard-workers');
-    actorShardWorkers.value = String(getSettings().actorShardMaxWorkers);
+    actorShardWorkers.value = String(getSettings().actorLedgerMaxActorsPerTurn);
     actorShardWorkers.addEventListener('change', () => {
         const normalized = Math.min(
             5,
             Math.max(1, Math.floor(Number(actorShardWorkers.value) || 2)),
         );
         getSettings().actorShardMaxWorkers = normalized;
+        getSettings().actorLedgerMaxActorsPerTurn = normalized;
+        getSettings().actorLedgerExplorationSlots = Math.min(
+            normalized,
+            getSettings().actorLedgerExplorationSlots,
+        );
         actorShardWorkers.value = String(normalized);
+        saveSettings();
+    });
+    const actorExplorationSlots = wrapper.querySelector('.mvuad-actor-exploration-slots');
+    actorExplorationSlots.value = String(getSettings().actorLedgerExplorationSlots);
+    actorExplorationSlots.addEventListener('change', () => {
+        const requested = Number(actorExplorationSlots.value);
+        const normalized = Math.min(
+            2,
+            getSettings().actorLedgerMaxActorsPerTurn,
+            Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : 1),
+        );
+        getSettings().actorLedgerExplorationSlots = normalized;
+        actorExplorationSlots.value = String(normalized);
+        saveSettings();
+    });
+    const actorCollisionIntensity = wrapper.querySelector('.mvuad-actor-collision-intensity');
+    actorCollisionIntensity.value = String(getSettings().actorLedgerCollisionIntensity);
+    actorCollisionIntensity.addEventListener('change', () => {
+        const normalized = Math.min(
+            3,
+            Math.max(0, Math.floor(Number(actorCollisionIntensity.value) || 0)),
+        );
+        getSettings().actorLedgerCollisionIntensity = normalized;
+        actorCollisionIntensity.value = String(normalized);
         saveSettings();
     });
     const continuityPromptAddon = wrapper.querySelector('.mvuad-continuity-prompt-addon');
@@ -11211,6 +11525,7 @@ async function restoreBranchCheckpointsForSwipe(value, { force = false } = {}) {
     const messageId = ensureMessageStableId(context, latest.message, latest.index);
     const namespace = readChatNamespace(context);
     const continuityCheckpoint = namespace.continuityCheckpoint;
+    const actorLedgerCheckpoint = namespace.actorLedgerCheckpoint;
     const forumCheckpoint = namespace.forumCheckpoint;
     const continuitySource = namespace.continuity?.lastSource;
     const forumSource = namespace.forum?.lastSource;
@@ -11229,6 +11544,11 @@ async function restoreBranchCheckpointsForSwipe(value, { force = false } = {}) {
             )
         )
     );
+    const actorLedgerMatches = !!(
+        actorLedgerCheckpoint?.state
+        && actorLedgerCheckpoint.targetIndex === resolved
+        && (force || continuityMatches)
+    );
     const forumMatches = !!(
         forumCheckpoint?.state
         && forumCheckpoint.targetIndex === resolved
@@ -11243,13 +11563,17 @@ async function restoreBranchCheckpointsForSwipe(value, { force = false } = {}) {
             )
         )
     );
-    if (!continuityMatches && !forumMatches) return false;
+    if (!continuityMatches && !actorLedgerMatches && !forumMatches) return false;
 
     invalidateOperations('用户切换了最新回复的 swipe');
     const fields = [];
     if (continuityMatches) {
         namespace.continuity = deepClone(continuityCheckpoint.state);
         fields.push('continuity');
+    }
+    if (actorLedgerMatches) {
+        namespace.actorLedger = deepClone(actorLedgerCheckpoint.state);
+        fields.push('actorLedger');
     }
     if (forumMatches) {
         namespace.forum = deepClone(forumCheckpoint.state);
@@ -11331,6 +11655,7 @@ function bindEvents() {
             const captured = captureTarget(current, resolved);
             if (!captured) return;
             await settleContinuityInjectionReceipts(captured);
+            await settleActorLedgerInjectionReceipts(captured);
             const existingSettlement = existingTargetSettlementRecord(captured);
             if (existingSettlement) {
                 return waitExistingTargetSettlement(existingSettlement);
@@ -11440,6 +11765,7 @@ function bindEvents() {
                     setForumStatus('论坛：世界结算本轮不可用，自动刷新已跳过', '');
                     return continuityResult;
                 }
+                setForumStatus(`论坛：世界结算 ${continuityResult?.status || '完成'}，正在安排刷新…`, 'busy');
                 return enqueueForum(resolved, {
                     after: continuity,
                     expectedTarget: captureTarget(getContext(), resolved)
@@ -11702,8 +12028,8 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 5,
-        isCompatible: (required = 1) => Number(required) <= 5,
+        apiVersion: 6,
+        isCompatible: (required = 1) => Number(required) <= 6,
         waitForTargetSettled,
         runAfterTargetSettled,
         registerBarrierProtocolClient,
@@ -11726,6 +12052,14 @@ function initialize() {
         syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),
+        getActorLedger: () => deepClone(normalizeActorLedger(
+            readChatNamespace().actorLedger,
+            { chatId: getContext()?.chatId || '' },
+        )),
+        getActorLedgerView: () => deepClone(actorLedgerView(readChatNamespace().actorLedger)),
+        getActorActionReceipts: () => deepClone(
+            normalizeActorLedger(readChatNamespace().actorLedger).actionReceipts,
+        ),
         getContinuityInjectionReceipts: () => ({
             queue: deepClone(readChatNamespace().continuityInjectionQueue || []),
             batches: deepClone(readChatNamespace().continuityInjectionBatches || []),

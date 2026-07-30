@@ -124,11 +124,92 @@ export function formatUserNarrativeInstruction(label, value) {
 
 export function selectActorShardCandidates({
     continuity,
+    actorLedger = null,
+    schedule = null,
     presentText = '',
     maxWorkers = 2,
 } = {}) {
     const limit = boundedWorkers(maxWorkers);
     const byActor = new Map();
+    const scheduledIds = new Set(
+        (Array.isArray(schedule?.selected) ? schedule.selected : [])
+            .map((item) => cleanText(item?.actorId, 180)),
+    );
+    const scheduleById = new Map(
+        (Array.isArray(schedule?.selected) ? schedule.selected : [])
+            .map((item) => [cleanText(item?.actorId, 180), item]),
+    );
+    for (const actor of Array.isArray(actorLedger?.actors) ? actorLedger.actors : []) {
+        const id = cleanText(actor?.id, 180);
+        const name = cleanText(actor?.name, 120);
+        if (
+            !id
+            || !name
+            || (scheduledIds.size && !scheduledIds.has(id))
+            || actor?.status === 'resolved'
+        ) continue;
+        const knowledge = (Array.isArray(actor?.knowledge) ? actor.knowledge : [])
+            .map((item) => ({
+                id: cleanText(item?.id, 180),
+                claim: cleanText(item?.claim, 400),
+            }))
+            .filter((item) => item.id && item.claim);
+        const privatePlanBasis = cleanList([
+            actor?.plan?.summary,
+            ...(actor?.currentGoals || []),
+        ], 4, 400);
+        const evidence = cleanList([
+            ...(actor?.evidence || []),
+            ...knowledge.map((item) => item.id),
+            `ACTOR-STATE:${id}`,
+        ], 16, 300);
+        if (!evidence.length) continue;
+        const scheduling = scheduleById.get(id);
+        byActor.set(id, {
+            id,
+            name,
+            score: Number(scheduling?.score) || 0,
+            slot: cleanText(scheduling?.slot, 40) || 'priority',
+            scheduleReasons: cleanList(scheduling?.reasons, 8, 120),
+            locations: cleanList([actor?.location?.name], 2, 120),
+            knowledgeBasis: (
+                knowledge.length
+                    ? knowledge.map((item) => item.claim)
+                    : privatePlanBasis.map((item) => `人物自身既有计划：${item}`)
+            ).slice(0, 8),
+            knowledgeRefs: knowledge.map((item) => item.id).slice(0, 8),
+            goals: cleanList([
+                ...(actor?.currentGoals || []),
+                actor?.plan?.summary,
+                ...(actor?.longTermGoals || []),
+            ], 6, 400),
+            sourceThreads: cleanList([
+                ...(actor?.evidence || []).filter(
+                    (item) => /^(?:PT|EV|ACTOR|WORLD|T)[-:]/iu.test(item),
+                ),
+                `ACTOR-LEDGER:${id}`,
+            ], 8, 90),
+            evidence,
+            causalChain: cleanList([
+                ...(actor?.evidence || []),
+                ...(actor?.commitments || []).map((item) => item?.id),
+                `ACTOR-LEDGER:${id}`,
+            ], 12, 120),
+            actorState: {
+                tier: cleanText(actor?.tier, 40),
+                identity: clone(actor?.identity || {}),
+                location: clone(actor?.location || {}),
+                resources: clone(actor?.resources || []),
+                capabilities: clone(actor?.capabilities || []),
+                commitments: clone(actor?.commitments || []),
+                plan: clone(actor?.plan || {}),
+                hidden: clone(actor?.hidden || {}),
+                lastAction: clone(actor?.lastAction || null),
+                nextActionTurn: Number(actor?.nextActionTurn) || 0,
+                deadlineTurn: Number(actor?.deadlineTurn) || 0,
+            },
+        });
+    }
     for (const thread of Array.isArray(continuity?.threads) ? continuity.threads : []) {
         if (
             !thread
@@ -188,8 +269,8 @@ export function selectActorShardCandidates({
             causalChain: cleanList(candidate.causalChain, 8, 120),
         }))
         .filter((candidate) => (
-            candidate.sourceThreads.length
-            && candidate.knowledgeBasis.length
+            candidate.evidence.length
+            && (candidate.knowledgeBasis.length || candidate.goals.length)
         ))
         .sort((left, right) => (
             right.score - left.score
@@ -207,6 +288,9 @@ export function buildActorShardMessages(candidate, {
         '你是隔离运行的NPC幕后模拟worker，只为一个不在场角色生成一份结构化候选提案。',
         '你没有任何写权限：禁止修改MVU、世界书、论坛、聊天正文、数据库、任务、关系或事实账本。',
         '只能使用提供的有限认知依据。未知就保持未知；不得读取玩家私密信息，不得替玩家行动、说话、移动、消费或授权。',
+        '角色拥有持久状态与到期行动窗口。必须提出可执行行动、具体改计划，或说明一个可核验且尚未满足的时间/地点/资源/能力条件；禁止空泛等待。',
+        '角色可以主动寻找、来访、寄信、悬赏、跟踪、求助、袭击、取走其有权取得的物品，或制造交通、价格、舆论、势力与环境后果；仍不得替玩家接受、服从、支付或决定。',
+        'hidden人物内心只用于维持行为连续性。不得把内心旁白当成公开事实，不得让其他人物凭空得知。',
         '提案尚未发生，也不是事实。它之后仍须经过确定性汇合、宏观连续性策略、完整目标身份复核和原有写入流程。',
         instruction,
         '只输出一个合法JSON对象；不得输出标签、代码围栏、解释或额外字段。',
@@ -226,8 +310,12 @@ export function buildActorShardMessages(candidate, {
         JSON.stringify({
             actorId: candidate?.id,
             actorName: candidate?.name,
+            schedulingSlot: candidate?.slot || 'priority',
+            schedulingReasons: candidate?.scheduleReasons || [],
+            persistentActorState: candidate?.actorState || null,
             possibleLocations: candidate?.locations || [],
             limitedKnowledgeBasis: candidate?.knowledgeBasis || [],
+            limitedKnowledgeRefs: candidate?.knowledgeRefs || [],
             currentGoalHints: candidate?.goals || [],
             sourceThreads: candidate?.sourceThreads || [],
             evidence: candidate?.evidence || [],

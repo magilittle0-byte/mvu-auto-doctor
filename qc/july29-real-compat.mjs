@@ -153,6 +153,8 @@ function createSterileSettings(authorScript) {
 
 function copyDoctorRuntime(targetRoot) {
     const rootFiles = [
+        'actor-ledger-core.d.mts',
+        'actor-ledger-core.mjs',
         'actor-shard-core.d.mts',
         'actor-shard-core.mjs',
         'CHANGELOG.md',
@@ -251,6 +253,7 @@ if (
 let browser = null;
 let server = null;
 let runFailed = false;
+let legacyPublicTemporarilyReplaced = false;
 const runtimeErrors = [];
 const databaseRequests = [];
 const databaseResponses = [];
@@ -304,6 +307,7 @@ try {
         });
     }
     copyDoctorRuntime(legacyPublicDoctorRoot);
+    legacyPublicTemporarilyReplaced = true;
     report.setup = {
         authorImportSha256: sha256(fs.readFileSync(authorLoaderPath)),
         cleanAuthorLoaderSha256: sha256(authorScript.source),
@@ -419,9 +423,18 @@ try {
         const api = window.MvuAutoDoctorAPI;
         const environment = await api.inspectEnvironment();
         const diagnostic = api.getDiagnosticProjection();
+        const actorLedger = api.getActorLedger();
+        const actorLedgerView = api.getActorLedgerView();
+        const actorActionReceipts = api.getActorActionReceipts();
         return {
             doctorVersion: diagnostic.plugin.version,
             environmentStatus: environment.status,
+            actorLedgerApi: {
+                version: actorLedger.version,
+                publicActorCount: actorLedgerView.actors.length,
+                receiptCount: actorActionReceipts.length,
+                privateStateExcluded: !JSON.stringify(actorLedgerView).includes('"hidden"'),
+            },
             legacyPatchCheck: environment.checks.find(
                 (check) => check.label === '数据库遗留兼容层',
             ) || null,
@@ -457,6 +470,20 @@ try {
         const worldInterfaceLimit = document.querySelector(
             '#mvu-auto-doctor-settings .mvuad-continuity-max-visible',
         );
+        const actorLimit = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-actor-shard-workers',
+        );
+        const actorExplorationSlots = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-actor-exploration-slots',
+        );
+        const actorCollisionIntensity = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-actor-collision-intensity',
+        );
+        const controlSnapshot = (element) => ({
+            value: element?.value || '',
+            min: element?.min || '',
+            max: element?.max || '',
+        });
         return {
             width: window.innerWidth,
             height: window.innerHeight,
@@ -480,6 +507,11 @@ try {
                 min: worldInterfaceLimit?.min || '',
                 max: worldInterfaceLimit?.max || '',
             },
+            actorControls: {
+                actorsPerTurn: controlSnapshot(actorLimit),
+                explorationSlots: controlSnapshot(actorExplorationSlots),
+                collisionIntensity: controlSnapshot(actorCollisionIntensity),
+            },
         };
     };
     const mobileUi = await page.evaluate(inspectPanel);
@@ -498,6 +530,14 @@ try {
             && mobileUi.worldInterfaceLimit.min === '1'
             && mobileUi.worldInterfaceLimit.max === '4'
             && desktopUi.worldInterfaceLimit.value === '2'
+            && mobileUi.actorControls.actorsPerTurn.value === '2'
+            && mobileUi.actorControls.actorsPerTurn.min === '1'
+            && mobileUi.actorControls.actorsPerTurn.max === '5'
+            && mobileUi.actorControls.explorationSlots.value === '1'
+            && mobileUi.actorControls.explorationSlots.min === '0'
+            && mobileUi.actorControls.explorationSlots.max === '2'
+            && mobileUi.actorControls.collisionIntensity.value === '2'
+            && desktopUi.actorControls.actorsPerTurn.value === '2'
         ) ? 'pass' : 'fail',
         mobile: mobileUi,
         desktop: desktopUi,
@@ -724,19 +764,21 @@ try {
     } catch {
         portClosed = true;
     }
-    fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
-    if (legacyPublicExisted) {
-        fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
-            recursive: true,
-        });
+    if (legacyPublicTemporarilyReplaced) {
+        fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
+        if (legacyPublicExisted) {
+            fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
+                recursive: true,
+            });
+        }
     }
-    legacyPublicRestored = legacyPublicExisted
+    legacyPublicRestored = !legacyPublicTemporarilyReplaced || (legacyPublicExisted
         ? (
             fs.existsSync(path.join(legacyPublicDoctorRoot, 'index.js'))
             && sha256(fs.readFileSync(path.join(legacyPublicDoctorRoot, 'index.js')))
                 === sha256(fs.readFileSync(path.join(legacyPublicBackupRoot, 'index.js')))
         )
-        : !fs.existsSync(legacyPublicDoctorRoot);
+        : !fs.existsSync(legacyPublicDoctorRoot));
     fs.rmSync(resolvedTemp, { recursive: true, force: true });
     report.cleanup = {
         browserClosed: browser !== null,

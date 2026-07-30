@@ -50,7 +50,9 @@ loaded.
 2. Run `npm run qc:fingerprint` and place the result in the matching
    `docs/qc-reports/vX.Y.Z.json`.
 3. Copy the release files into the real user extension directory:
-   `CHANGELOG.md`, `continuity-core.mjs`, `core.mjs`, `forum-core.mjs`, `index.js`,
+   `CHANGELOG.md`, `actor-ledger-core.d.mts`, `actor-ledger-core.mjs`,
+   `actor-shard-core.d.mts`, `actor-shard-core.mjs`, `continuity-core.mjs`,
+   `core.mjs`, `forum-core.mjs`, `index.js`,
    `LICENSE`, `manifest.json`, `model-queue.mjs`, `protocol-core.mjs`, `social-core.mjs`, `README.md`,
    and `style.css`.
 4. Confirm the served manifest and the in-app version badge match the release.
