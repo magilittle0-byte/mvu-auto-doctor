@@ -165,6 +165,13 @@ function validateBlockedReport(report) {
         || database.latest?.apiVisible !== true
         || database.latest?.apiMethods < 100
         || database.latest?.publicUpdateReturnedTruthyObject !== true
+        || database.latest?.independentBridgeStatus
+            !== 'disabled-independent-database'
+        || database.latest?.independentBridgeChangedSyncRequests !== 0
+        || database.latest?.independentBridgeChangedSyncCompleted !== 0
+        || database.latest?.independentBridgeChangedSyncAttempts !== 0
+        || database.latest?.independentBridgeChangedSyncFailures !== 0
+        || database.latest?.reloadIndependentBridgeDisabled !== true
         || database.latest?.uiSurfaceCountBeforeReload < 1
         || database.latest?.reloadApiMethods !== database.latest?.apiMethods
         || database.latest?.reloadUiSurfaceCount < 1
@@ -319,6 +326,9 @@ function validateBlockedReport(report) {
                         || model.doctorModelCallDelta !== 1
                         || model.doctorRetryCount !== 0
                         || model.doctorFallbackUsed !== true
+                        || model.doctorModelCompleted !== false
+                        || model.socialFailureZeroWrite !== true
+                        || model.stateWriterCalls !== 0
                         || model.databaseRuntimeLoadedDuringModelProbe !== false
                         || model.syntheticFixtureUsed !== true
                         || model.privateChatModelEgress !== false
@@ -499,14 +509,16 @@ function loadAndValidateReport() {
         || latestDatabase.publicUpdateReturnedTruthyObject !== true
         || latestDatabase.independentBridgeInstalled !== true
         || latestDatabase.independentBridgeVersion !== '1.0.0'
+        || latestDatabase.independentBridgeStatus
+            !== 'disabled-independent-database'
         || latestDatabase.independentBridgeSourceRewriteUsed !== false
         || latestDatabase.independentBridgePrivateSchemaRead !== false
         || latestDatabase.independentBridgeUnchangedSyncRequests !== 0
-        || latestDatabase.independentBridgeChangedSyncRequests !== 1
-        || latestDatabase.independentBridgeChangedSyncCompleted !== 1
-        || latestDatabase.independentBridgeChangedSyncAttempts !== 1
+        || latestDatabase.independentBridgeChangedSyncRequests !== 0
+        || latestDatabase.independentBridgeChangedSyncCompleted !== 0
+        || latestDatabase.independentBridgeChangedSyncAttempts !== 0
         || latestDatabase.independentBridgeChangedSyncFailures !== 0
-        || latestDatabase.reloadIndependentBridgeReady !== true
+        || latestDatabase.reloadIndependentBridgeDisabled !== true
         || latestDatabase.uiSurfaceCountBeforeReload < 1
         || latestDatabase.reloadApiMethods !== latestDatabase.apiMethods
         || latestDatabase.reloadUiSurfaceCount < 1

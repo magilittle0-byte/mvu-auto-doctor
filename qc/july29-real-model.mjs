@@ -373,6 +373,7 @@ try {
             display_data: {},
         };
         let latestData = structuredClone(afterData);
+        let replaceCalls = 0;
         const messages = [
             {
                 is_user: false,
@@ -450,6 +451,7 @@ try {
                 return structuredClone(latestData);
             },
             async replaceMvuData(data) {
+                replaceCalls += 1;
                 latestData = structuredClone(data);
             },
         };
@@ -478,6 +480,16 @@ try {
                 latestAudit?.modelCall?.localStructureRepairAttempted === true,
             structureRepairAttempted:
                 latestAudit?.modelCall?.structureRepairAttempted === true,
+            replaceCalls,
+            relationshipAfterFailure: {
+                trust: latestData.stat_data.characters.Subject.trust,
+                relationship: latestData.stat_data.characters.Subject.relationship,
+            },
+            failureZeroWrite: (
+                replaceCalls === 0
+                && latestData.stat_data.characters.Subject.trust === 40
+                && latestData.stat_data.characters.Subject.relationship === 'fanatic'
+            ),
             promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
         };
     }, modelConfig);

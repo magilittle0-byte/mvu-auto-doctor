@@ -707,7 +707,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
         window.__DATABASE_FINAL_REPLY_BARRIER__ = window.MvuAutoDoctorAPI.waitForTargetSettled(
             2,
-            { timeoutMs: 20000 },
+            { timeoutMs: 20000, waitForVariable: true },
         );
     });
     await page.waitForFunction(() => (
@@ -819,9 +819,10 @@ try {
     );
     assert.match(
         continuity.calls.repairSystem,
-        /第一部分必须最先完整输出[\s\S]*<UpdateVariable>[\s\S]*完成并闭合上面的变量区块后[\s\S]*<HardContractCorrection>/u,
-        '机器提示必须要求变量补丁先于可选正文修正版输出',
+        /<content> 标签内部是本回合唯一事实来源[\s\S]*只允许完整输出以下变量补丁区块[\s\S]*<UpdateVariable>/u,
+        '变量医生必须把 content 作为事实来源并只允许输出变量补丁',
     );
+    assert.doesNotMatch(continuity.calls.repairSystem, /<CorrectedContent>/u);
     assert.match(continuity.calls.repairUser, /这是开局\/人物创建审计/u);
     assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
     assert.match(continuity.hardStatus, /硬合同/u);
@@ -955,6 +956,7 @@ try {
             hostPrompt: structuredClone(injection || null),
             registrationBeforeInspection,
             injection: window.MvuAutoDoctorAPI.getInjectionInspection(),
+            injectionReceipts: window.MvuAutoDoctorAPI.getContinuityInjectionReceipts(),
             operationLog: structuredClone(
                 t.context.chatMetadata.mvu_auto_doctor?.operationLog || [],
             ),
@@ -1014,6 +1016,16 @@ try {
     });
     assert.equal(diagnosticsUi.injection.status, 'success', '注入哨兵必须能验证最终提示词落地');
     assert.equal(diagnosticsUi.injection.socialLanded, true, '人物动机合同也必须进入真实最终提示词');
+    assert.ok(
+        diagnosticsUi.injectionReceipts.queue.some((receipt) => (
+            receipt.status === 'landed'
+            && receipt.priority > 0
+            && receipt.expiresTurn >= receipt.targetTurn
+            && Array.isArray(receipt.impactTargets)
+            && typeof receipt.triggerCondition === 'string'
+        )),
+        '世界注入必须记录优先级、对象、触发条件、时效与落地状态',
+    );
     assert.ok(diagnosticsUi.operationLog.length > 0, '操作时间线必须按聊天持久化');
     assert.equal(
         diagnosticsUi.helperOnly.checks.find(
@@ -1090,6 +1102,97 @@ try {
     assert.equal(diagnosticsUi.diagnosticBefore.environment.barrierProtocol.errorCode, '');
     assert.equal(typeof diagnosticsUi.diagnostic.environment.userAgent, 'object');
 
+    const worldReceiptPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await worldReceiptPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await worldReceiptPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const worldReceipt = await worldReceiptPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const namespace = t.context.chatMetadata.mvu_auto_doctor ||= {};
+        namespace.continuity = {
+            version: 5,
+            chatId: t.context.chatId,
+            turn: 3,
+            threads: [{
+                id: 'WE-TRACE-01',
+                title: '钟楼换班告示',
+                origin: 'main_derivative',
+                relation: 'linked',
+                stage: 'advancing',
+                summary: '城防调整夜班交接。',
+                trigger: '广场公告可被当前场景人物看见',
+                actors: ['城防书记'],
+                locations: ['中央广场'],
+                urgency: 3,
+            }, {
+                id: 'WE-TRACE-02',
+                title: '东市夜间封路',
+                origin: 'setting_linked',
+                relation: 'linked',
+                stage: 'advancing',
+                summary: '东市准备临时封闭一条货运巷道。',
+                trigger: '当前人物进入东市或询问夜间运输',
+                actors: ['东市巡检员'],
+                locations: ['东市'],
+                urgency: 1,
+            }],
+            world: {},
+            updatedAt: Date.now(),
+        };
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            continuityMode: 'on',
+            continuityMaxVisible: 2,
+            continuityInjectionBudgetChars: 1800,
+        });
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        const registered = t.calls.extensionPrompts['mvu-auto-doctor-continuity']?.content || '';
+        await t.context.eventSource.emit('chat_completion_prompt_ready', {
+            dryRun: false,
+            chat: [{ role: 'system', content: registered }],
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            enabled: false,
+            hardContractAuditEnabled: false,
+            socialAuditMode: 'off',
+            continuityMode: 'off',
+            builtInContinuityEnabled: false,
+            builtInForumEnabled: false,
+        });
+        t.context.chat.push(
+            { is_user: true, is_system: false, mes: '我看向广场。', swipe_id: 0, extra: {} },
+            {
+                is_user: false,
+                is_system: false,
+                mes: '<content>钟楼换班告示已经贴到中央广场，城防书记正在解释新的夜班交接规则。</content>'
+                    + '<UpdateVariable><Analysis>无变化</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+                swipe_id: 0,
+                extra: {},
+            },
+        );
+        await t.context.eventSource.emit('message_received', 4);
+        return {
+            registered,
+            receipts: window.MvuAutoDoctorAPI.getContinuityInjectionReceipts(),
+        };
+    });
+    assert.ok(worldReceipt.registered.length <= 1800, '世界注入必须遵守字符预算');
+    assert.match(worldReceipt.registered, /注入批次=.*收据=.*预算=1800字符/u);
+    const consumedWorldReceipt = worldReceipt.receipts.queue.find(
+        (receipt) => receipt.threadId === 'WE-TRACE-01',
+    );
+    assert.equal(consumedWorldReceipt.status, 'consumed');
+    assert.match(consumedWorldReceipt.consumptionEvidence, /钟楼换班告示/u);
+    assert.ok(consumedWorldReceipt.consumedBy.contentFingerprint);
+    const retainedWorldReceipt = worldReceipt.receipts.queue.find(
+        (receipt) => receipt.threadId === 'WE-TRACE-02',
+    );
+    assert.equal(retainedWorldReceipt.status, 'retained');
+    assert.equal(retainedWorldReceipt.consumedBy, null);
+    assert.equal(worldReceipt.receipts.batches.at(-1).status, 'settled');
+    assert.equal(worldReceipt.receipts.batches.at(-1).consumedCount, 1);
+    assert.equal(worldReceipt.receipts.batches.at(-1).retainedCount, 1);
+    await worldReceiptPage.close();
+
     const reloadBarrierPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await reloadBarrierPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await reloadBarrierPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -1099,13 +1202,13 @@ try {
         await t.context.eventSource.emit('message_received', 2);
         const initial = await window.MvuAutoDoctorAPI.waitForTargetSettled(
             2,
-            { timeoutMs: 20000 },
+            { timeoutMs: 20000, waitForVariable: true },
         );
         const beforeCalls = t.calls.model.length;
         await t.context.eventSource.emit('chat_loaded');
         const recovered = await window.MvuAutoDoctorAPI.waitForTargetSettled(
             2,
-            { timeoutMs: 2000, registrationGraceMs: 0 },
+            { timeoutMs: 2000, registrationGraceMs: 0, waitForVariable: true },
         );
         await t.context.eventSource.emit('message_received', 2);
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -1179,8 +1282,12 @@ try {
         ));
         const settled = await window.MvuAutoDoctorAPI.waitForTargetSettled(
             2,
-            { timeoutMs: 20000 },
+            { timeoutMs: 20000, waitForVariable: true },
         );
+        for (let index = 0; index < 100; index += 1) {
+            if (window.MvuAutoDoctorAPI.getSocialAudits().length >= 1) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+        }
         const modelAfter = window.MvuAutoDoctorAPI.getModelCallStats();
         const modelTypes = t.calls.model.slice(modelBefore.total);
         const typeCounts = Object.fromEntries(
@@ -1201,6 +1308,12 @@ try {
             socialRuns: t.calls.socialRuns,
             socialAuditCount: window.MvuAutoDoctorAPI.getSocialAudits().length,
             replacementDelta: t.calls.replace.length - replaceBefore,
+            repairSources: (
+                t.context.chatMetadata?.mvu_auto_doctor?.repairJournal || []
+            ).map((record) => ({
+                kind: record.repairKind,
+                source: record.source,
+            })),
             barrierRecordCount: records.length,
             barrierStates: [...new Set(records.map((record) => record.state))],
             terminalEvents,
@@ -1223,6 +1336,13 @@ try {
         '关系回滚与变量修复各提交一次；事件风暴不得产生第三次写入',
     );
     assert.equal(eventStorm.barrierRecordCount, 1, '事件风暴必须合并到同一持久屏障');
+    assert.equal(
+        eventStorm.repairSources.filter((record) => (
+            record.kind === 'variable-audit' && record.source === 'automatic'
+        )).length,
+        1,
+        '同一回合只能落一条标记为 automatic 的变量医生主任务记录',
+    );
     assert.deepEqual(eventStorm.barrierStates, ['settled']);
     assert.equal(eventStorm.terminalEvents.length, 1, '事件风暴只应发布一次脱敏终态事件');
     assert.equal(eventStorm.terminalEvents[0].status, 'settled');
@@ -1230,8 +1350,8 @@ try {
     assert.equal(eventStorm.terminalEvents[0].serial, eventStorm.settled.serial);
     assert.equal(
         eventStorm.terminalEvents[0].contentChanged,
-        true,
-        '生成新修正版 swipe 时必须向独立桥明确标记正文已改变',
+        false,
+        '仅 UpdateVariable 或状态占位符变化不得误报正文 content 改变',
     );
     await eventStormPage.close();
 
@@ -1423,17 +1543,24 @@ try {
         };
         t.setLatestData(after);
         t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const replacementsBefore = t.calls.replace.length;
         const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
         return {
             result,
             state: t.getLatestData(),
             audits: window.MvuAutoDoctorAPI.getSocialAudits(),
+            replacementDelta: t.calls.replace.length - replacementsBefore,
         };
     });
     assert.equal(socialFailure.result.status, 'failed');
-    assert.equal(socialFailure.result.correction.status, 'applied');
-    assert.equal(socialFailure.state.stat_data.characters.Mia.trust, 5);
-    assert.equal(socialFailure.state.stat_data.characters.Mia.relationship, 'ally');
+    assert.equal(socialFailure.result.correction.status, 'nochange');
+    assert.equal(
+        socialFailure.replacementDelta,
+        0,
+        '二审传输、超时或解析失败必须零 MVU 写入',
+    );
+    assert.equal(socialFailure.state.stat_data.characters.Mia.trust, 40);
+    assert.equal(socialFailure.state.stat_data.characters.Mia.relationship, 'fanatic');
     assert.equal(socialFailure.audits[0].usage.cny, 0);
     assert.equal(socialFailure.audits[0].usage.estimated, false);
     assert.deepEqual(socialFailure.audits[0].modelCall, {
@@ -1446,9 +1573,11 @@ try {
         failureReason: '二审调用失败：connection refused',
         failureCode: 'social.transport_failure',
     });
-    assert.deepEqual(
-        socialFailure.audits[0].correction.revertedPaths.sort(),
-        ['/characters/Mia/relationship', '/characters/Mia/trust'].sort(),
+    assert.deepEqual(socialFailure.audits[0].decisions, []);
+    assert.deepEqual(socialFailure.audits[0].correction.revertedPaths, []);
+    assert.match(
+        socialFailure.audits[0].correction.reason,
+        /失败零写入/u,
     );
     await socialFailurePage.close();
 
@@ -1542,12 +1671,14 @@ try {
         };
         t.setLatestData(after);
         t.setMessageMvuData({ 0: before, 2: after, latest: after });
+        const replacementsBefore = t.calls.replace.length;
         const result = await window.MvuAutoDoctorAPI.auditSocialRelations();
         return {
             result,
             state: t.getLatestData(),
             audits: window.MvuAutoDoctorAPI.getSocialAudits(),
             calls: structuredClone(t.calls),
+            replacementDelta: t.calls.replace.length - replacementsBefore,
         };
     });
     assert.equal(socialMalformed.result.status, 'failed');
@@ -1556,7 +1687,9 @@ try {
     assert.equal(socialMalformed.audits[0].modelCall.structureRepairAttempted, false);
     assert.equal(socialMalformed.audits[0].modelCall.localStructureRepairAttempted, true);
     assert.equal(socialMalformed.audits[0].modelCall.failureCode, 'social.invalid_structure');
-    assert.equal(socialMalformed.state.stat_data.characters.Mia.trust, 5);
+    assert.equal(socialMalformed.replacementDelta, 0);
+    assert.equal(socialMalformed.state.stat_data.characters.Mia.trust, 40);
+    assert.deepEqual(socialMalformed.audits[0].decisions, []);
     await socialMalformedPage.close();
     await page.bringToFront();
 
@@ -2374,6 +2507,9 @@ try {
                 ?.phase6Runtime?.records || {},
         ).some((entry) => entry?.value?.state === 'failed')
     ), null, { timeout: 30000 });
+    await doubleWriterPage.waitForFunction(() => (
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+    ), null, { timeout: 30000 });
     const doubleWriter = await doubleWriterPage.evaluate(() => ({
         replacements: window.__TEST__.calls.replace.length,
         status: window.MvuAutoDoctorAPI.getStatus(),
@@ -2384,8 +2520,8 @@ try {
     assert.match(doubleWriter.status, /避免双写/u);
     assert.equal(
         doubleWriter.continuityTurn,
-        0,
-        '阶段6 failed屏障必须让连续性放弃目标，不能回退读取旧正文',
+        1,
+        '变量写守卫失败时世界仍应从同一轮只读 content 独立结算',
     );
     assert.equal(doubleWriter.forumTurn, 0, '手动论坛不得被其他医生任务暗中触发');
     await doubleWriterPage.close();
@@ -2406,6 +2542,9 @@ try {
                 ?.phase6Runtime?.records || {},
         ).some((entry) => entry?.value?.state === 'failed')
     ), null, { timeout: 30000 });
+    await copiedSettingsPage.waitForFunction(() => (
+        window.MvuAutoDoctorAPI.getContinuityState().turn === 1
+    ), null, { timeout: 30000 });
     assert.equal(
         await copiedSettingsPage.evaluate(() => window.__TEST__.calls.replace.length),
         0,
@@ -2415,7 +2554,8 @@ try {
         await copiedSettingsPage.evaluate(
             () => window.MvuAutoDoctorAPI.getContinuityState().turn,
         ),
-        0,
+        1,
+        '变量双写守卫失败不得阻塞只读取 content 的世界状态结算',
     );
     await copiedSettingsPage.close();
 
@@ -2546,12 +2686,20 @@ try {
         replacements: window.__TEST__.calls.replace.length,
         continuityRuns: window.__TEST__.calls.continuityRuns,
         continuityCalls: window.__TEST__.calls.model.filter((kind) => kind === 'continuity').length,
+        continuityTurn: Number(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor?.continuity?.turn,
+        ) || 0,
     }));
     assert.equal(continueInterrupted.replacements, 0, 'continue 开始后，挂起的旧 repair 结果不得写入同一楼层');
     assert.equal(
         continueInterrupted.continuityCalls,
-        0,
-        '阶段6要求活世界等待修复提交；continue使旧屏障stale后不得启动下游模型',
+        1,
+        '活世界可与变量医生并行启动，不能被旧 repair 屏障压住',
+    );
+    assert.equal(
+        continueInterrupted.continuityTurn,
+        1,
+        'continue 开始前已完成的世界结算应保留，不能因变量任务仍挂起而回滚',
     );
     await continueInterruptPage.close();
 
@@ -2706,7 +2854,7 @@ try {
     assert.doesNotMatch(hardContractGate.status, /已跳过本回合/u);
     assert.match(
         hardContractGate.calls.repairSystem,
-        /content-under-budget 只作质量报告[\s\S]*不得仅为了补字/u,
+        /<content> 标签内部是本回合唯一事实来源[\s\S]*不得重写、截断、续写、补写[\s\S]*本地硬合同问题只作旁路报告/u,
         '正文低于写作目标时只报告，不得拖慢变量关键路径去重写全文',
     );
     await hardContractGatePage.close();
@@ -2975,24 +3123,6 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await directParallelPage.waitForFunction(() => (
-        window.__DIRECT_PARALLEL__?.network?.requests?.length === 1
-    ), null, { timeout: 30000 });
-    const strictStarted = await directParallelPage.evaluate(() => (
-        structuredClone(window.__DIRECT_PARALLEL__.network)
-    ));
-    assert.equal(
-        strictStarted.maxActive,
-        1,
-        '阶段6 settled屏障前只能启动变量修复，不得让活世界抢读正文',
-    );
-    assert.deepEqual(
-        strictStarted.requests.map((request) => request.model),
-        ['strict-3.5f'],
-    );
-    await directParallelPage.evaluate(() => {
-        window.__DIRECT_PARALLEL__.resolve('strict-3.5f');
-    });
-    await directParallelPage.waitForFunction(() => (
         window.__DIRECT_PARALLEL__?.network?.requests?.length === 2
     ), null, { timeout: 30000 });
     const directParallelStarted = await directParallelPage.evaluate(() => (
@@ -3000,12 +3130,12 @@ try {
     ));
     assert.equal(
         directParallelStarted.maxActive,
-        1,
-        '活世界必须在修复提交、回读和settled发布后串行启动',
+        2,
+        '变量医生与活世界必须从同一正文快照独立启动，不能互设长时间屏障',
     );
     assert.deepEqual(
-        directParallelStarted.requests.map((request) => request.model),
-        ['strict-3.5f', 'deepseek-fast'],
+        directParallelStarted.requests.map((request) => request.model).sort(),
+        ['deepseek-fast', 'strict-3.5f'],
     );
     assert.ok(directParallelStarted.requests.every((request) => request.authorized));
     assert.match(
@@ -3022,7 +3152,25 @@ try {
         'json_object',
         'DS 轻量通道必须启用服务端 JSON 输出约束',
     );
+    const independentDatabaseReader = await directParallelPage.evaluate(async () => {
+        const startedAt = Date.now();
+        const result = await window.MvuAutoDoctorAPI.waitForTargetSettled(
+            2,
+            { timeoutMs: 240000 },
+        );
+        return { result, elapsedMs: Date.now() - startedAt };
+    });
+    assert.equal(independentDatabaseReader.result.status, 'unmanaged');
+    assert.equal(
+        independentDatabaseReader.result.workflowStatus,
+        'independent-reader',
+    );
+    assert.ok(
+        independentDatabaseReader.elapsedMs < 1000,
+        '默认数据库读取者即使传入240000ms也不得等待变量医生',
+    );
     await directParallelPage.evaluate(() => {
+        window.__DIRECT_PARALLEL__.resolve('strict-3.5f');
         window.__DIRECT_PARALLEL__.resolve('deepseek-fast');
     });
     await directParallelPage.waitForFunction(() => (
@@ -3084,19 +3232,19 @@ try {
     }));
     assert.equal(
         partialCorrectionGate.swipeId,
-        1,
-        '测试前提：只修好选项的部分修正版应先落成一个可回退 swipe',
+        0,
+        '只读硬合同检查不得创建正文修正版 swipe',
     );
     assert.ok(
         partialCorrectionGate.hardAudit.issues.some(
             (issue) => issue.code === 'content-under-budget',
         ),
-        '修正版写入后必须重新检查当前 swipe，而不是沿用“已生成修正版”结论',
+        '正文长度问题应保留为只读报告',
     );
     assert.equal(
         partialCorrectionGate.continuityCalls,
         1,
-        '部分修正版只剩长度问题时仍应推进活世界账本',
+        '正文只读报告不得阻塞活世界账本',
     );
     assert.equal(partialCorrectionGate.continuityTurn, 1);
     assert.doesNotMatch(partialCorrectionGate.continuityStatus, /已跳过本回合/u);
@@ -3771,7 +3919,7 @@ try {
         };
     });
     assert.equal(correctionResult.result.status, 'nochange');
-    assert.equal(correctionResult.result.correction.status, 'ignored');
+    assert.equal(correctionResult.result.correction.status, 'disabled');
     assert.equal(correctionResult.modelCalls, 1, '变量诊断仍只允许一次模型调用');
     assert.equal(correctionResult.message.swipe_id, 0);
     assert.doesNotMatch(correctionResult.message.mes, new RegExp('甲{120}', 'u'));
@@ -3817,11 +3965,11 @@ try {
         };
     });
     assert.equal(deterministicStructure.result.status, 'audited');
-    assert.equal(deterministicStructure.result.deterministicCorrection.status, 'applied');
+    assert.equal(deterministicStructure.result.deterministicCorrection.status, 'disabled');
     assert.equal(deterministicStructure.modelCallDelta, 0);
-    assert.equal(deterministicStructure.replaceCallDelta, 1, '修正版 swipe 必须复制原 MVU 快照');
-    assert.equal(deterministicStructure.message.swipe_id, 1);
-    assert.match(
+    assert.equal(deterministicStructure.replaceCallDelta, 0, '只读检查不得写 MVU 或复制 swipe');
+    assert.equal(deterministicStructure.message.swipe_id, 0);
+    assert.doesNotMatch(
         deterministicStructure.message.mes,
         /你观察门边的守卫。\n<\/content>\n<options>/u,
     );
@@ -3829,7 +3977,7 @@ try {
         (deterministicStructure.message.mes.match(/<UpdateVariable\b/giu) || []).length,
         1,
     );
-    assert.ok(!deterministicStructure.result.issues.some(
+    assert.ok(deterministicStructure.result.issues.some(
         (issue) => issue.code === 'content-tag-count',
     ));
     await deterministicStructurePage.close();
@@ -3862,50 +4010,46 @@ try {
         ].join('\n');
         delete t.context.chat[2].swipes;
         delete t.context.chat[2].swipe_info;
+        let swipeEvents = 0;
+        t.context.eventSource.on('message_swiped', () => {
+            swipeEvents += 1;
+        });
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         const namespace = (
             t.context.chatMetadata.mvu_auto_doctor ||= {}
         );
-        namespace.continuity = {
-            ...(namespace.continuity || {}),
-            internalSwipeMarker: 'current-state',
-        };
         namespace.continuityCheckpoint = {
             targetIndex: 2,
-            state: {
-                ...(namespace.continuity || {}),
-                internalSwipeMarker: 'checkpoint-state',
-            },
+            state: structuredClone(namespace.continuity || {}),
         };
         await t.context.eventSource.emit('message_received', 2);
         const barrier = await window.MvuAutoDoctorAPI.waitForTargetSettled(
             2,
-            { timeoutMs: 20000 },
+            { timeoutMs: 20000, waitForVariable: true },
         );
         return {
             barrier,
             current: structuredClone(t.context.chat[2]),
-            marker: t.context.chatMetadata.mvu_auto_doctor
-                ?.continuity?.internalSwipeMarker,
+            swipeEvents,
         };
     });
     assert.equal(
         internalSwipeLifecycle.barrier.status,
         'settled',
-        '医生自己的修正版 swipe 必须作为同一工作流的继任目标结算',
+        '正文只读时变量医生仍必须正常结算',
     );
-    assert.equal(internalSwipeLifecycle.current.swipe_id, 1);
+    assert.equal(internalSwipeLifecycle.current.swipe_id, 0);
     assert.equal(
         internalSwipeLifecycle.barrier.swipeId,
-        1,
-        '终态 barrier 必须绑定修正版 swipe，而不是原始坏结构',
+        0,
+        '终态 barrier 必须保持原始正文 swipe',
     );
     assert.equal(
-        internalSwipeLifecycle.marker,
-        'current-state',
-        '内部修正版事件不得被当作用户切换并回滚连续性存档点',
+        internalSwipeLifecycle.swipeEvents,
+        0,
+        '只读检查不得触发内部 swipe 事件或回滚连续性存档点',
     );
-    assert.match(
+    assert.doesNotMatch(
         internalSwipeLifecycle.current.mes,
         /你观察门边的守卫。\n<\/content>\n<options>/u,
     );
@@ -3929,6 +4073,9 @@ try {
         return {
             result,
             message: structuredClone(t.context.chat[2]),
+            repairJournal: structuredClone(
+                t.context.chatMetadata?.mvu_auto_doctor?.repairJournal || [],
+            ),
         };
     });
     assert.equal(duplicateUpdate.result.status, 'applied');
@@ -3938,6 +4085,11 @@ try {
         '修复提交后同一 swipe 只能保留一个可重放 MVU 区块',
     );
     assert.doesNotMatch(duplicateUpdate.message.mes, /旧块一|旧块二/u);
+    assert.equal(
+        duplicateUpdate.repairJournal.at(-1)?.source,
+        'manual',
+        '手动变量检查必须与 automatic 来源分开记录',
+    );
     await duplicateUpdatePage.close();
 
     const ruleBackedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -3962,15 +4114,12 @@ try {
         };
     });
     assert.equal(ruleBackedResult.result.status, 'applied');
-    assert.equal(ruleBackedResult.result.correction.status, 'applied');
+    assert.equal(ruleBackedResult.result.correction.status, 'disabled');
     assert.equal(ruleBackedResult.modelCalls, 1);
     assert.equal(ruleBackedResult.data.stat_data.账户.代币, 5);
-    assert.match(ruleBackedResult.message.mes, /三枚代币/u);
-    assert.equal(
-        ruleBackedResult.message.swipe_info[1].extra.verification,
-        'rule-evidence-and-state',
-    );
-    assert.equal(ruleBackedResult.audit.correction.evidence.ok, true);
+    assert.match(ruleBackedResult.message.mes, /获得了一枚代币/u);
+    assert.doesNotMatch(ruleBackedResult.message.mes, /三枚代币/u);
+    assert.equal(ruleBackedResult.message.swipe_id, 0);
     await ruleBackedPage.close();
 
     const derivedCardPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -4354,7 +4503,10 @@ try {
     assert.equal(optionalCorrectionResult.result.attempts, 1);
     assert.equal(optionalCorrectionResult.calls, 1);
     assert.equal(optionalCorrectionResult.data.stat_data.账户.代币, 3);
-    assert.match(optionalCorrectionResult.result.correctionWarning, /HardContractCorrection/u);
+    assert.match(
+        optionalCorrectionResult.result.correctionWarning,
+        /越权输出正文修正结构[\s\S]*完全忽略/u,
+    );
     await optionalCorrectionPage.close();
 
     const promptAddonPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -4974,7 +5126,10 @@ try {
     }));
     assert.equal(actorIntegration.calls.actorRuns, 2);
     assert.equal(actorIntegration.calls.actorPeak, 2, '隔离并行lane应允许两个worker并发');
-    assert.deepEqual(actorIntegration.calls.actorBarrierStates, ['settled', 'settled']);
+    assert.ok(
+        actorIntegration.calls.actorBarrierStates.every((state) => state !== 'settled'),
+        'NPC分片不得等待变量终态屏障；它只绑定同一 generation 的正文事实',
+    );
     assert.match(actorIntegration.calls.actorSystem, /PHASE9-ACTOR-CANARY/u);
     assert.doesNotMatch(actorIntegration.calls.actorUser, /PHASE9-ACTOR-CANARY/u);
     assert.match(actorIntegration.calls.continuitySystem, /PHASE9-CONTINUITY-CANARY/u);

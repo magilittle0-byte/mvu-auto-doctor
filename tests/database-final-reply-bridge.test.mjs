@@ -53,11 +53,11 @@ function settledDetail(overrides = {}) {
     };
 }
 
-test('independent database bridge exposes stable metadata and sync key', () => {
+test('independent database bridge is inert and never requests a post-doctor refill', () => {
     const detail = settledDetail();
     assert.equal(BRIDGE_ID, 'mvu_auto_doctor_database_final_reply_bridge');
     assert.equal(BRIDGE_VERSION, '1.0.0');
-    assert.equal(shouldRequestFinalDatabaseSync(detail), true);
+    assert.equal(shouldRequestFinalDatabaseSync(detail), false);
     assert.equal(
         finalDatabaseSyncKey(detail),
         'synthetic-chat:4:7:generation-1:branch-1',
@@ -96,7 +96,7 @@ test('bridge ignores unchanged, stale and denied terminal events', async () => {
     bridge.dispose();
 });
 
-test('bridge uses only the public trigger once and deduplicates event storms', async () => {
+test('bridge never calls the database trigger for terminal event storms', async () => {
     let calls = 0;
     const { root } = createRoot(async () => {
         calls += 1;
@@ -115,14 +115,13 @@ test('bridge uses only the public trigger once and deduplicates event storms', a
         bridge.sync(detail),
     ]);
     const state = bridge.getState();
-    assert.equal(calls, 1);
-    assert.equal(state.completed, 1);
-    assert.equal(state.skipped, 2);
-    assert.equal(state.lastResult, 'synchronized');
+    assert.equal(calls, 0);
+    assert.equal(state.completed, 0);
+    assert.equal(state.skipped, 3);
     bridge.dispose();
 });
 
-test('bridge retries one public busy result, then stops after one success', async () => {
+test('bridge sync is skipped even when the database API is ready', async () => {
     let calls = 0;
     const { root } = createRoot(async () => {
         calls += 1;
@@ -138,14 +137,13 @@ test('bridge retries one public busy result, then stops after one success', asyn
     });
     await bridge.ready;
     const result = await bridge.sync(settledDetail());
-    assert.equal(result.status, 'synchronized');
-    assert.equal(result.attempts, 2);
-    assert.equal(calls, 2);
-    assert.equal(bridge.getState().completed, 1);
+    assert.equal(result.status, 'skipped');
+    assert.equal(calls, 0);
+    assert.equal(bridge.getState().completed, 0);
     bridge.dispose();
 });
 
-test('bridge fails closed after the bounded busy retry', async () => {
+test('bridge does not retry a database failure because it never invokes it', async () => {
     let calls = 0;
     const { root } = createRoot(async () => {
         calls += 1;
@@ -161,8 +159,8 @@ test('bridge fails closed after the bounded busy retry', async () => {
     });
     await bridge.ready;
     const result = await bridge.sync(settledDetail());
-    assert.equal(result.status, 'database-busy-or-failed');
-    assert.equal(calls, 2);
-    assert.equal(bridge.getState().failed, 1);
+    assert.equal(result.status, 'skipped');
+    assert.equal(calls, 0);
+    assert.equal(bridge.getState().failed, 0);
     bridge.dispose();
 });

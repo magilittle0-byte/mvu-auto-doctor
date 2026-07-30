@@ -440,7 +440,8 @@ try {
     }
     try {
         await page.waitForFunction(() => (
-            window.MvuAutoDoctorDatabaseBridge?.getState?.().databaseApiReady === true
+            window.MvuAutoDoctorDatabaseBridge?.getState?.().status
+                === 'disabled-independent-database'
         ), null, {
             timeout: 30_000,
         });
@@ -449,7 +450,7 @@ try {
         report.runtime.bridgeGlobalReady = await page.evaluate(() => (
             !!window.MvuAutoDoctorDatabaseBridge
         ));
-        throw new Error('independent bridge did not attach to database API');
+        throw new Error('inert database bridge did not expose its disabled state');
     }
     const runtime = await page.evaluate(async () => {
         const api = window.MvuAutoDoctorAPI;
@@ -522,6 +523,7 @@ try {
             independentBridge: {
                 id: bridge.id,
                 version: bridge.version,
+                status: bridgeAfterChanged.status,
                 unchangedRequestedDelta:
                     bridgeUnchanged.requested,
                 unchangedSkipped:
@@ -563,7 +565,8 @@ try {
         timeout: 120_000,
     });
     await page.waitForFunction(() => (
-        window.MvuAutoDoctorDatabaseBridge?.getState?.().databaseApiReady === true
+        window.MvuAutoDoctorDatabaseBridge?.getState?.().status
+            === 'disabled-independent-database'
     ), null, {
         timeout: 120_000,
     });
@@ -633,7 +636,7 @@ try {
         ? 'database_bundle_network_unavailable'
         : /database public API did not become ready/u.test(message)
             ? 'database_api_not_ready_timeout'
-            : /independent bridge did not attach/u.test(message)
+            : /inert database bridge did not expose/u.test(message)
                 ? 'database_bridge_not_ready_timeout'
         : /did not become ready/u.test(message)
             ? 'host_not_ready'

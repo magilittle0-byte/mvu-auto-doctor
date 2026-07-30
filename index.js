@@ -68,12 +68,7 @@ import {
 } from './forum-core.mjs';
 import { ConnectionTaskScheduler } from './model-queue.mjs';
 import {
-    applyHardContractCorrection,
-    auditCorrectionAgencyGuard,
     auditHardContracts,
-    extractHardContractCorrection,
-    repairUnclosedContentTag,
-    verifyHardContractEvidence,
 } from './protocol-core.mjs';
 import {
     buildSocialNarrativeContract,
@@ -151,7 +146,7 @@ const DEFAULTS = Object.freeze({
     mvuIdleTimeoutMs: 120000,
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
-    hardContractCorrectionEnabled: true,
+    hardContractCorrectionEnabled: false,
     socialNarrativeGuardEnabled: true,
     socialAuditMode: 'balanced',
     socialAuditMaxTokens: 1024,
@@ -166,6 +161,7 @@ const DEFAULTS = Object.freeze({
     continuitySettingsVersion: 5,
     continuityMaxThreads: 12,
     continuityMaxVisible: 1,
+    continuityInjectionBudgetChars: 6000,
     continuityContextMessages: 12,
     continuityMaxTokens: 12288,
     continuityPromptAddon: '',
@@ -295,7 +291,6 @@ let lastFocusedBeforeForumPanel = null;
 let oracleAutoDisabledNoticeShown = false;
 let ui = { ledgerSurfaces: [] };
 let operationEpoch = 0;
-let internalSwipeMutationDepth = 0;
 let generationSerial = 0;
 let lastGeneration = {
     serial: 0,
@@ -340,6 +335,14 @@ function getSettings() {
         settings.continuityAutonomy = 'living';
         changed = true;
     }
+    settings.continuityInjectionBudgetChars = Math.min(
+        12000,
+        Math.max(
+            1200,
+            Number(settings.continuityInjectionBudgetChars)
+                || DEFAULTS.continuityInjectionBudgetChars,
+        ),
+    );
     if (!['off', 'auto', 'on'].includes(settings.actorShardMode)) {
         settings.actorShardMode = 'off';
         changed = true;
@@ -520,6 +523,10 @@ function getSettings() {
         2,
         Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
     );
+    if (settings.hardContractCorrectionEnabled !== false) {
+        settings.hardContractCorrectionEnabled = false;
+        changed = true;
+    }
     if (previousForumSettingsVersion < 3) {
         settings.forumRefreshMode = 'manual';
         settings.forumAutoRefresh = false;
@@ -1212,6 +1219,7 @@ function inspectContinuityInjectionEvent(eventData) {
             socialLanded: payload.socialLanded,
             apiType: payload.apiType,
         };
+        markContinuityInjectionLanded(payload.landed);
         renderEnvironmentReport();
     } catch {
         // 注入自检只读且绝不能影响生成。
@@ -2686,6 +2694,7 @@ function captureTarget(context, index) {
         messageId,
         swipeId: Number(message.swipe_id) || 0,
         fingerprint: fingerprint(message.mes),
+        contentFingerprint: acceptedContentFingerprint(message.mes),
         branchId: runtimeIdentity.branchId,
         generationId: runtimeIdentity.generationId,
         epoch: operationEpoch,
@@ -2836,6 +2845,23 @@ function stripMechanism(text) {
         .trim();
 }
 
+function acceptedContentText(text) {
+    const source = String(text || '');
+    const complete = [...source.matchAll(
+        /<content\b[^>]*>([\s\S]*?)<\/content>/giu,
+    )];
+    if (complete.length) return String(complete.at(-1)?.[1] || '').trim();
+    const unclosed = source.match(
+        /<content\b[^>]*>([\s\S]*?)(?=<options\b|<UpdateVariable\b|<StatusPlaceHolderImpl\b|$)/iu,
+    );
+    if (unclosed) return String(unclosed[1] || '').trim();
+    return stripMechanism(source);
+}
+
+function acceptedContentFingerprint(text) {
+    return fingerprint(acceptedContentText(text));
+}
+
 function recentTranscript(context, targetIndex, limit) {
     const chat = context?.chat || [];
     return chat
@@ -2947,27 +2973,11 @@ async function runHardContractAudit(targetId, {
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
 
-    let correctedTarget = null;
-    let deterministicCorrection = null;
-    if (settings.hardContractCorrectionEnabled && Mvu) {
-        const deterministic = repairUnclosedContentTag(
-            context.chat[resolved]?.mes || '',
-        );
-        if (deterministic.repaired) {
-            deterministicCorrection = await applyCorrectionAsSwipe({
-                index: resolved,
-                correctedText: deterministic.text,
-                Mvu,
-                expectedFingerprint: captured.fingerprint,
-                reason: deterministic.reason,
-                fixedCodes: [deterministic.code],
-                verification: 'deterministic-structure',
-            });
-            if (deterministicCorrection.status === 'applied') {
-                correctedTarget = deterministicCorrection.target;
-            }
-        }
-    }
+    const correctedTarget = null;
+    const deterministicCorrection = {
+        status: 'disabled',
+        reason: '正文只读：硬合同检查仅报告，不创建或切换 swipe',
+    };
 
     const result = auditHardContracts({
         replyText: context.chat[resolved]?.mes || '',
@@ -2986,20 +2996,8 @@ async function runHardContractAudit(targetId, {
         ...result,
         checkedAt: new Date().toISOString(),
         targetIndex: resolved,
-        messageId: correctedTarget?.messageId || captured.messageId,
-        swipeId: correctedTarget?.swipeId ?? captured.swipeId,
-        ...(deterministicCorrection?.status === 'applied'
-            ? {
-                correction: {
-                    applied: true,
-                    reason: deterministicCorrection.reason
-                        || '已补齐唯一缺失的正文闭标签',
-                    fixedCodes: ['content-tag-count'],
-                    agencyGuard: deterministicCorrection.agency,
-                    verification: 'deterministic-structure',
-                },
-            }
-            : {}),
+        messageId: captured.messageId,
+        swipeId: captured.swipeId,
     };
     const errorCount = result.issues.filter((issue) => issue.severity === 'error').length;
     const warningCount = result.issues.filter((issue) => issue.severity === 'warning').length;
@@ -3007,17 +3005,13 @@ async function runHardContractAudit(targetId, {
         setHardContractStatus('硬合同：正文与装备结构未发现确定性问题', 'ok');
     } else {
         setHardContractStatus(
-            settings.hardContractCorrectionEnabled
-                ? `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒；硬错误将并入同一次变量诊断`
-                : `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒（自动修正版已关闭）`,
+            `硬合同：发现 ${errorCount} 个错误、${warningCount} 个提醒（只读报告，不修改正文）`,
             errorCount ? 'error' : '',
         );
         if (manual || errorCount) {
             toast(
                 errorCount ? 'warning' : 'info',
-                settings.hardContractCorrectionEnabled
-                    ? `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。可验证硬错误会复用变量诊断生成修正版；GM合理发挥不改。`
-                    : `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。自动修正版已关闭。`,
+                `硬合同检查：${errorCount} 个错误、${warningCount} 个提醒。正文保持原样；变量医生只处理 MVU 补丁。`,
             );
         }
     }
@@ -3545,36 +3539,24 @@ async function buildAuditMessages({
         '- 若这是人物创建或开局楼层，要完整核对玩家已经确认的属性分配、未分配点数、派生上限、当前资源、已获得物品、装备槽位与任务奖励；不能因为原更新很长、字段很多或没有上一楼状态就跳过。',
         '- 初始化声明是开局基线，最新正文是本轮已确认选择；当前 stat_data 是原更新应用后的结果。三者闭合核对，只补遗漏或纠正错更，不重复已经落地的变化。',
         '',
-        '【正文硬合同校正】',
-        '- 本地确定性检查列出的error，以及Schema/规则能够唯一证明的技能资源消耗、物品结构、掉落数量、奖励结算和骰子矛盾，属于可校正硬错误。',
-        '- 复用本次审计完成正文校正，不得要求第二次模型调用。若没有可唯一证明的硬错误，禁止输出HardContractCorrection。',
-        '- 每份校正都必须在Evidence逐字引用当前Schema、世界书规则或预设合同中的短依据。尤其是掉落公式、奖励数量和物品格式，不得只凭常识或自行概括；无可逐字核验证据就只修变量中其他确定错误，不改正文。',
-        '- 校正必须是最小必要改动：保留原叙事事实、文风、人物语气、玩家已声明行动、骰值与成功等级；禁止为了配合剧情规划改骰、补骰、替玩家追加行动或把未发生分支写成事实。',
-        '- 玩家本轮只授权原回复中的行动A。任何补字都不得新增、完成或暗示玩家接着执行B/C/D；不得新增玩家对白、移动、目标、路线、工具、选择、技能、资源消费或检定。',
-        '- content-under-budget 只作质量报告，不进入变量修复关键路径。不得仅为了补字生成 HardContractCorrection，也不得在本次变量审计里重写整段正文。',
-        '- NPC可以主动制造局势并向玩家施压；一旦下一步需要玩家选择新目标、路线、工具、对白或检定，正文必须停下，把决定留给options和下一回合。',
-        '- 原A、已消费骰面、成功等级、S1/骰后锁与JSONPatch语义必须保持；严禁借扩写重判。',
-        '- CorrectedContent只写原<content>标签内部的新正文，不得包含content标签本身、UpdateVariable、状态栏、思维链或其他机制区块。',
-        '- CorrectedOptions仅在选项硬合同有错时输出其内部完整内容，不得包含options标签本身；每个选项只提出下一步，不得视为已执行。',
+        '【正文只读边界】',
+        '- <content> 标签内部是本回合唯一事实来源；只依据其中已经发生的事实核对变量。',
+        '- 不得重写、截断、续写、补写、纠正或重新生成正文与选项，不得创建 swipe。',
+        '- 本地硬合同问题只作旁路报告，不进入变量补丁输出协议，也不得阻塞本次变量审计。',
+        '- 即使正文与规则冲突，也只能修正能够由 <content>、当前状态、Schema 与规则共同证明的 MVU 变量；正文原样保留。',
+        '- 禁止输出 HardContractCorrection、CorrectedContent、CorrectedOptions 或任何其他正文修正结构。',
         '',
         promptAddon
             ? `【用户自定义模型适配/破限提示】\n${promptAddon}\n这段只调整模型服从与表达方式，不改变上方审计职责、证据标准、玩家控制权或下方机器输出协议。`
             : '',
         '【唯一允许的输出结构】',
-        '第一部分必须最先完整输出；即使还要改正文，也不得在它之前写任何内容：',
+        '只允许完整输出以下变量补丁区块：',
         '<UpdateVariable>',
         '<Analysis>不超过80字，禁止在这里写任何机制标签字面量</Analysis>',
         '<JSONPatch>',
         '[合法操作对象；没有需要修复时必须是 []]',
         '</JSONPatch>',
         '</UpdateVariable>',
-        '完成并闭合上面的变量区块后，只有确需正文硬校正时才追加：',
-        '<HardContractCorrection>',
-        '<Reason>不超过120字，列出被修正的硬规则</Reason>',
-        '<Evidence>逐字复制当前Schema、世界书规则或预设合同中的一小段依据；不得概括或自造</Evidence>',
-        '<CorrectedContent>仅在正文需要改动时输出完整的新content内部正文</CorrectedContent>',
-        '<CorrectedOptions>仅在选项需要改动时输出完整的新options内部文本</CorrectedOptions>',
-        '</HardContractCorrection>',
         '不要输出代码围栏、解释、前言或尾注。',
         '【成稿纪律】内部推理一遍完成：先在内部确定全部结论，然后立即开始输出并一次写完所有区块。禁止反复重想整个审计、重复起草或多次改写JSON补丁；这会耗尽输出预算并导致截断。',
     ].filter((line, index, list) => line !== '' || list[index - 1] !== '').join('\n');
@@ -3594,11 +3576,9 @@ async function buildAuditMessages({
         '',
         '=== 本地确定性硬合同检查 ===',
         cropText(hardIssueText, 16000, '硬合同问题'),
-        correctableHardErrors.length
-            ? '存在error：必须在同一次输出中修正能够唯一确定的正文/选项错误，并同步修正相应MVU。'
-            : hardErrors.length
-                ? '只有 content-under-budget：保留质量报告，不生成正文修正版；专注完成变量审计。'
-                : '没有本地error：只有Schema或规则能唯一证明的数值/格式矛盾才允许生成正文校正。',
+        hardErrors.length
+            ? '这些问题只作只读报告。不得修改正文；继续独立核对 MVU 变量。'
+            : '没有本地error；继续独立核对 MVU 变量。',
         '',
         '=== 当前 stat_data（原更新应用之后）===',
         stateForPrompt(currentStat),
@@ -3634,8 +3614,8 @@ async function buildAuditMessages({
         '=== 最近剧情上下文（只读）===',
         cropText(transcript || '无', 16000, '剧情上下文'),
         '',
-        '=== 本轮要审计的最新 AI 回复正文 ===',
-        cropText(stripMechanism(message.mes), 30000, '最新回复'),
+        '=== 本轮事实来源：最新 AI 回复的 <content> 内部正文 ===',
+        cropText(acceptedContentText(message.mes), 30000, '最新正文'),
         '',
         '=== 该回复原有的变量更新区块 ===',
         cropText(originalBlock || '（没有；需要依据正文补出遗漏更新）', 18000, '原更新区块'),
@@ -3652,7 +3632,7 @@ async function buildAuditMessages({
                     : '',
                 '请针对失败原因重新分析。变量区块必须最先完整闭合；若上次 JSON 或路径错误，重新生成合法的最小补丁，不要复制坏格式。',
                 '若失败原因是 insert 目标已存在：先查看上方当前 stat_data；当前路径已有值且确需改变时使用 replace，已有值已经正确时删除该操作，绝不能再次对同一路径使用 insert。',
-                'content-under-budget 始终只报告；重试也不得为补字重写正文。',
+                '所有正文问题始终只报告；重试也不得改写正文。',
             ].filter(Boolean).join('\n')
             : auditMode === 'opening'
                 ? '这是开局/人物创建审计。请审计全部已确认创建选择、资源、装备、物品、奖励、派生值的错更、漏更和无效更新；若当前状态已经准确反映正文，输出空数组。'
@@ -3675,8 +3655,7 @@ async function buildAuditMessages({
         initializationStates,
         automaticallyComputedPaths,
         // This value is the provider/model ceiling configured by the user.
-        // Never silently lower it for ordinary turns, and never exceed it just
-        // because a long-body correction was requested.
+        // Never silently lower it for ordinary turns.
         maxTokens: Math.max(
             4096,
             Number(settings.maxTokens) || DEFAULTS.maxTokens,
@@ -4469,7 +4448,8 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
 
     const reviewFailed = !overHardCap && (!parsed || parsed.error);
-    if (!parsed || parsed.error) {
+    const reviewUnavailable = overHardCap || reviewFailed;
+    if (reviewUnavailable) {
         parsed = {
             verdict: relationship.changes.length ? 'warning' : 'violation',
             summary: `${failureReason || parsed?.error || '二审结果不确定'}；持久关系保持本轮前状态并待确认`,
@@ -4479,12 +4459,7 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
                 reason: failureReason || parsed?.error || '二审结果不确定',
                 evidence: '',
             }],
-            decisions: relationship.changes.map((change) => ({
-                path: change.path,
-                action: 'revert',
-                reason: '二审不可用时不固化持久关系变化',
-                evidence: '',
-            })),
+            decisions: [],
         };
     } else {
         const byPath = new Map(parsed.decisions.map((decision) => [decision.path, decision]));
@@ -4539,8 +4514,15 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
     };
     const ledgerAfter = persistSocialCostReceipt(record);
 
-    const rollbackOps = buildSocialRollbackOps(relationship.changes, parsed.decisions);
-    let correction = { status: 'nochange' };
+    const rollbackOps = reviewUnavailable
+        ? []
+        : buildSocialRollbackOps(relationship.changes, parsed.decisions);
+    let correction = {
+        status: 'nochange',
+        reason: reviewUnavailable
+            ? '人物关系二审失败零写入；保留当前关系状态并等待后续有效证据'
+            : '',
+    };
     if (rollbackOps.length) {
         const block = renderSocialPatchBlock(rollbackOps, parsed.summary);
         const prepared = preparePatch(block, currentData);
@@ -4611,140 +4593,13 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         );
     }
     return {
-        status: correction.status === 'failed' || reviewFailed ? 'failed' : 'audited',
+        status: correction.status === 'failed' || reviewUnavailable ? 'failed' : 'audited',
         audit: record,
         correction,
         correctedTarget: correction.status === 'applied'
             ? captureTarget(getContext(), target.index)
             : target,
     };
-}
-
-function skillNamesFromState(statData) {
-    const names = new Set();
-    const visit = (value, depth = 0) => {
-        if (!value || typeof value !== 'object' || depth > 12) return;
-        for (const [key, item] of Object.entries(value)) {
-            if (
-                isPlainObject(item)
-                && typeof item.消耗 === 'string'
-                && item.消耗.trim()
-            ) names.add(String(key));
-            if (item && typeof item === 'object') visit(item, depth + 1);
-        }
-    };
-    visit(statData);
-    return [...names];
-}
-
-function prepareReplyCorrection({
-    replyText,
-    correction,
-    built,
-    previousData,
-    currentData,
-    correctedData,
-} = {}) {
-    if (!correction) return { status: 'none' };
-    const spliced = applyHardContractCorrection(replyText, correction);
-    if (spliced.error) return { status: 'rejected', reason: spliced.error };
-    // 模型偶尔会原样返回正文却声称已修正；零改动的“修正版”没有价值，不应生成新 swipe。
-    if (spliced.text === replyText) {
-        return { status: 'rejected', reason: '模型返回的修正版与原文完全一致，没有实际改动' };
-    }
-    const agency = auditCorrectionAgencyGuard(replyText, spliced.text, {
-        skillNames: skillNamesFromState(statDataOf(correctedData)),
-    });
-    if (!agency.ok) {
-        return {
-            status: 'rejected',
-            reason: agency.violations.map((item) => item.message).join('；'),
-            agency,
-        };
-    }
-    const correctedAudit = auditHardContracts({
-        replyText: spliced.text,
-        previousUserText: built.previousUserText || '',
-        contractTexts: built.contractTexts || [],
-        statData: statDataOf(correctedData) || {},
-        previousStatData: statDataOf(previousData),
-        schemaTexts: built.schemaTexts || [],
-        ruleTexts: built.ruleTexts || [],
-    });
-    const beforeErrors = (built.hardAudit?.issues || [])
-        .filter((issue) => issue.severity === 'error');
-    const afterErrors = correctedAudit.issues
-        .filter((issue) => issue.severity === 'error');
-    const introducedErrors = afterErrors.filter((issue) => !beforeErrors.some(
-        (before) => before.code === issue.code && before.path === issue.path,
-    ));
-    const locallyImproved = (
-        afterErrors.length < beforeErrors.length
-        && introducedErrors.length === 0
-    );
-    const evidence = verifyHardContractEvidence(
-        correction.evidence,
-        [
-            ...(built.contractTexts || []),
-            ...(built.schemaTexts || []),
-            ...(built.ruleTexts || []),
-        ],
-    );
-    const variableChanged = fingerprint(safeJson(statDataOf(currentData) || {}))
-        !== fingerprint(safeJson(statDataOf(correctedData) || {}));
-    const ruleBackedCategory = /技能|消耗|MP|HP|耐力|体力|物品|背包|掉落|战利品|奖励|数量|品质|格式|字段|装备|骰|检定|时间/iu.test(
-        `${correction.reason || ''}\n${correction.evidence || ''}`,
-    );
-    const ruleBackedImprovement = (
-        !locallyImproved
-        && variableChanged
-        && evidence.ok
-        && ruleBackedCategory
-        && introducedErrors.length === 0
-        && afterErrors.length <= beforeErrors.length
-    );
-    if (!locallyImproved && !ruleBackedImprovement) {
-        return {
-            status: 'rejected',
-            reason: beforeErrors.length
-                ? introducedErrors.length
-                    ? `修正版引入了新的硬错误：${introducedErrors.map((issue) => issue.code).join('、')}`
-                    : `修正版未减少硬错误（修正前 ${beforeErrors.length}，修正后 ${afterErrors.length}）`
-                : !variableChanged
-                    ? '本地检查没有硬错误，且变量补丁未提供与正文改写对应的确定变化'
-                    : evidence.reason,
-            audit: correctedAudit,
-            agency,
-            evidence,
-        };
-    }
-    const locallyFixedCodes = beforeErrors
-        .map((issue) => issue.code)
-        .filter((code) => !afterErrors.some((issue) => issue.code === code));
-    return {
-        status: 'ready',
-        correction,
-        previewText: spliced.text,
-        audit: correctedAudit,
-        agency,
-        evidence,
-        verification: locallyImproved ? 'local-deterministic' : 'rule-evidence-and-state',
-        fixedCodes: locallyFixedCodes.length
-            ? locallyFixedCodes
-            : ['rule-backed-hard-error'],
-    };
-}
-
-function correctionOnlyExpandsReportedLength(correction, built) {
-    if (!correction?.content || correction?.options) return false;
-    const localErrors = (built?.hardAudit?.issues || [])
-        .filter((issue) => issue?.severity === 'error');
-    if (
-        !localErrors.length
-        || localErrors.some((issue) => issue?.code !== 'content-under-budget')
-    ) return false;
-    const explanation = `${correction.reason || ''}\n${correction.evidence || ''}`;
-    return /content-under-budget|字数|汉字|篇幅|长度|下限|补字|扩写/iu.test(explanation);
 }
 
 async function recognizeDeterministicMvuSideEffects(Mvu, oldData, parsed, prepared, checked) {
@@ -4774,14 +4629,11 @@ async function recognizeDeterministicMvuSideEffects(Mvu, oldData, parsed, prepar
 async function parseCandidate(Mvu, oldData, output, {
     automaticallyComputedPaths = [],
 } = {}) {
-    let correction = extractHardContractCorrection(output);
-    const correctionWarning = correction?.error
-        || (
-            !correction && /<HardContractCorrection\b/iu.test(String(output || ''))
-                ? '可选的 HardContractCorrection 不完整，已忽略；变量补丁仍独立校验'
-                : ''
-        );
-    if (correctionWarning) correction = null;
+    const correction = null;
+    const correctionWarning = /<(?:HardContractCorrection|CorrectedContent|CorrectedOptions)\b/iu
+        .test(String(output || ''))
+        ? '模型越权输出正文修正结构，已完全忽略；变量补丁仍独立校验'
+        : '';
     const extracted = extractUpdateBlockCandidate(output);
     if (!extracted.block) {
         return {
@@ -5038,156 +4890,6 @@ async function refreshMessage(
         console.warn('[MVU Auto Doctor] 触发前端刷新失败：', error);
     }
     return true;
-}
-
-function addSwipeToMessage(message, text, info) {
-    if (!message || typeof message !== 'object') return -1;
-    if (!Array.isArray(message.swipes) || !message.swipes.length) {
-        message.swipes = [typeof message.mes === 'string' ? message.mes : ''];
-        message.swipe_info = [
-            Array.isArray(message.swipe_info) && message.swipe_info[0]
-                ? message.swipe_info[0]
-                : {},
-        ];
-        message.swipe_id = 0;
-    }
-    if (!Array.isArray(message.swipe_info)) {
-        message.swipe_info = message.swipes.map(() => ({}));
-    } else if (message.swipe_info.length !== message.swipes.length) {
-        message.swipe_info = message.swipes.map((_, index) => (
-            message.swipe_info[index]
-            && typeof message.swipe_info[index] === 'object'
-                ? message.swipe_info[index]
-                : {}
-        ));
-    }
-    message.swipes.push(String(text || ''));
-    message.swipe_info.push(info || {});
-    message.swipe_id = message.swipes.length - 1;
-    message.mes = message.swipes[message.swipe_id];
-    if (message.extra && typeof message.extra === 'object') {
-        delete message.extra.display_text;
-    }
-    return message.swipe_id;
-}
-
-async function applyCorrectionAsSwipe({
-    index,
-    correction,
-    correctedText = null,
-    Mvu,
-    expectedFingerprint,
-    reason = '',
-    fixedCodes = [],
-    evidence = null,
-    verification = '',
-} = {}) {
-    const context = getContext();
-    const message = context?.chat?.[index];
-    if (
-        !message
-        || typeof message.mes !== 'string'
-        || (expectedFingerprint && fingerprint(message.mes) !== expectedFingerprint)
-    ) {
-        return { status: 'stale', reason: '正文校正应用前目标回复已经变化' };
-    }
-    const spliced = typeof correctedText === 'string'
-        ? { text: correctedText }
-        : applyHardContractCorrection(message.mes, correction);
-    if (spliced.error) return { status: 'failed', reason: spliced.error };
-
-    let mvuSnapshot = null;
-    try {
-        mvuSnapshot = await mvuDataAtLatestTarget(Mvu, index);
-    } catch (error) {
-        return { status: 'failed', reason: `无法读取修正版 swipe 的 MVU 快照：${error.message || error}` };
-    }
-    if (expectedFingerprint && fingerprint(message.mes) !== expectedFingerprint) {
-        return { status: 'stale', reason: '读取 MVU 快照期间目标回复已经变化' };
-    }
-    const agency = auditCorrectionAgencyGuard(message.mes, spliced.text, {
-        skillNames: skillNamesFromState(statDataOf(mvuSnapshot)),
-    });
-    if (!agency.ok) {
-        return {
-            status: 'failed',
-            reason: agency.violations.map((item) => item.message).join('；'),
-            agency,
-        };
-    }
-
-    const backup = {
-        mes: message.mes,
-        swipes: deepClone(message.swipes),
-        swipeInfo: deepClone(message.swipe_info),
-        swipeId: message.swipe_id,
-        extra: deepClone(message.extra),
-    };
-    const now = new Date().toISOString();
-    const swipeId = addSwipeToMessage(message, spliced.text, {
-        send_date: now,
-        gen_started: null,
-        gen_finished: now,
-        extra: {
-            mvu_auto_doctor_correction: true,
-            version: VERSION,
-            reason: String(reason || '').slice(0, 500),
-            fixedCodes: deepClone(fixedCodes),
-            evidence: evidence?.ok ? String(evidence.evidence || '').slice(0, 500) : '',
-            verification: String(verification || '').slice(0, 80),
-        },
-    });
-    if (swipeId < 0) return { status: 'failed', reason: '无法创建修正版 swipe' };
-
-    try {
-        await context.saveChat?.();
-    } catch (error) {
-        message.mes = backup.mes;
-        message.swipes = backup.swipes;
-        message.swipe_info = backup.swipeInfo;
-        message.swipe_id = backup.swipeId;
-        message.extra = backup.extra;
-        return { status: 'failed', reason: `保存修正版 swipe 失败：${error.message || error}` };
-    }
-    try {
-        if (mvuSnapshot && typeof Mvu?.replaceMvuData === 'function') {
-            await Mvu.replaceMvuData(
-                deepClone(mvuSnapshot),
-                { type: 'message', message_id: index },
-            );
-        }
-    } catch (error) {
-        console.warn('[MVU Auto Doctor] 修正版 swipe 的 MVU 快照复制失败：', error);
-    }
-    try {
-        context.updateMessageBlock?.(index, message);
-        const refreshSwipe = context.swipe?.refresh || context.refreshSwipeButtons;
-        if (typeof refreshSwipe === 'function') refreshSwipe(true);
-    } catch (error) {
-        console.warn('[MVU Auto Doctor] 修正版 swipe 重绘失败：', error);
-    }
-    internalSwipeMutationDepth += 1;
-    try {
-        const types = context.eventTypes || context.event_types || {};
-        await Promise.resolve(
-            context.eventSource?.emit?.(types.MESSAGE_SWIPED || 'message_swiped', index),
-        );
-        await Promise.resolve(
-            context.eventSource?.emit?.(types.MESSAGE_UPDATED || 'message_updated', index),
-        );
-    } catch (error) {
-        console.warn('[MVU Auto Doctor] 修正版 swipe 刷新事件发送失败：', error);
-    } finally {
-        internalSwipeMutationDepth = Math.max(0, internalSwipeMutationDepth - 1);
-    }
-    return {
-        status: 'applied',
-        swipeId,
-        target: captureTarget(getContext(), index),
-        agency,
-        evidence,
-        verification,
-    };
 }
 
 async function persistRepairRecord(record, expectedChatId, { durable = false } = {}) {
@@ -5653,77 +5355,20 @@ async function runTarget(targetId, {
         );
     }
 
-    const ignoredLengthCorrection = correctionOnlyExpandsReportedLength(
-        candidate?.correction,
-        finalBuilt,
-    );
-    const correctionPlan = settings.hardContractCorrectionEnabled
-        && candidate?.correction
-        && !ignoredLengthCorrection
-        ? prepareReplyCorrection({
-            replyText: context.chat[resolved]?.mes || '',
-            correction: candidate.correction,
-            built: finalBuilt || {},
-            previousData,
-            currentData,
-            correctedData: candidate.status === 'ready' ? candidate.newData : currentData,
-        })
-        : ignoredLengthCorrection
-            ? { status: 'ignored', reason: '正文长度不足仅报告，不在变量关键路径自动扩写' }
-            : { status: 'none' };
-    if (correctionPlan.status === 'rejected') {
-        console.warn('[MVU Auto Doctor] 正文硬合同修正版被本地守卫拒绝：', correctionPlan.reason);
-        setHardContractStatus(`硬合同：修正版已拦截：${correctionPlan.reason}`, 'error');
-    }
+    const correctionPlan = {
+        status: 'disabled',
+        reason: '正文只读；变量医生不创建正文修正版或 swipe',
+    };
 
     if (candidate?.status === 'nochange') {
         await ensureExistingFrontend(resolved, originalBlock, captured, token);
-        let correctionResult = null;
-        if (correctionPlan.status === 'ready') {
-            correctionResult = await applyCorrectionAsSwipe({
-                index: resolved,
-                correction: correctionPlan.correction,
-                Mvu,
-                expectedFingerprint: fingerprint(context.chat[resolved]?.mes || ''),
-                reason: correctionPlan.correction.reason,
-                fixedCodes: correctionPlan.fixedCodes,
-                evidence: correctionPlan.evidence,
-                verification: correctionPlan.verification,
-            });
-        }
-        if (correctionResult?.status === 'applied') {
-            latestHardContractAudit = {
-                ...correctionPlan.audit,
-                checkedAt: new Date().toISOString(),
-                targetIndex: resolved,
-                messageId: correctionResult.target?.messageId,
-                swipeId: correctionResult.swipeId,
-                correction: {
-                    applied: true,
-                    reason: correctionPlan.correction.reason,
-                    fixedCodes: correctionPlan.fixedCodes,
-                    agencyGuard: correctionResult.agency,
-                    evidence: correctionResult.evidence,
-                    verification: correctionResult.verification,
-                },
-            };
-            renderHardContractAudit();
-            setHardContractStatus(
-                `硬合同：已生成可左滑撤回的修正版（${correctionPlan.fixedCodes.join('、') || '硬错误'}）`,
-                'ok',
-            );
-            setStatus('变量无需修正；正文硬合同已生成修正版 swipe', 'ok');
-            toast('success', '已在同一次诊断中生成正文修正版；原回复仍可左滑恢复。');
-        } else {
-            setStatus('已检查：本回合变量无需修正', 'ok');
-            if (manual || settings.notifyNoChange) toast('info', '已检查，本回合变量无需修正。');
-        }
+        setStatus('已检查：本回合变量无需修正', 'ok');
+        if (manual || settings.notifyNoChange) toast('info', '已检查，本回合变量无需修正。');
         return {
             ...candidate,
-            correction: correctionResult || correctionPlan,
-            correctedTarget: correctionResult?.target || null,
-            finalTarget: correctionResult?.target
-                || captureTarget(getContext(), resolved),
+            correction: correctionPlan,
+            correctedTarget: null,
+            finalTarget: captureTarget(getContext(), resolved),
         };
     }
     if (candidate?.status !== 'ready') {
@@ -5736,7 +5381,10 @@ async function runTarget(targetId, {
     let result;
     try {
         updateTaskProgress(progressId, '写前恢复记录、提交与回读', candidate.attempts);
-        result = await commitCandidate(Mvu, candidate, captured, token);
+        result = await commitCandidate(Mvu, candidate, captured, token, {
+            repairKind: 'variable-audit',
+            source: manual ? 'manual' : 'automatic',
+        });
         result = {
             ...result,
             attempts: candidate.attempts,
@@ -5754,64 +5402,17 @@ async function runTarget(targetId, {
     }
 
     if (result.status === 'applied') {
-        let correctionResult = null;
-        if (correctionPlan.status === 'ready') {
-            correctionResult = await applyCorrectionAsSwipe({
-                index: resolved,
-                correction: correctionPlan.correction,
-                Mvu,
-                expectedFingerprint: fingerprint(getContext()?.chat?.[resolved]?.mes || ''),
-                reason: correctionPlan.correction.reason,
-                fixedCodes: correctionPlan.fixedCodes,
-                evidence: correctionPlan.evidence,
-                verification: correctionPlan.verification,
-            });
-            result = {
-                ...result,
-                correction: correctionResult,
-                correctedTarget: correctionResult?.target || null,
-            };
-            if (correctionResult?.status === 'applied') {
-                latestHardContractAudit = {
-                    ...correctionPlan.audit,
-                    checkedAt: new Date().toISOString(),
-                    targetIndex: resolved,
-                    messageId: correctionResult.target?.messageId,
-                    swipeId: correctionResult.swipeId,
-                    correction: {
-                        applied: true,
-                        reason: correctionPlan.correction.reason,
-                        fixedCodes: correctionPlan.fixedCodes,
-                        agencyGuard: correctionResult.agency,
-                        evidence: correctionResult.evidence,
-                        verification: correctionResult.verification,
-                    },
-                };
-                renderHardContractAudit();
-                setHardContractStatus(
-                    `硬合同：变量与正文已同步修正，可左滑回原文（${correctionPlan.fixedCodes.join('、') || '硬错误'}）`,
-                    'ok',
-                );
-            } else if (correctionResult && correctionResult.status !== 'stale') {
-                setHardContractStatus(`硬合同：变量已修，正文修正版未应用：${correctionResult.reason}`, 'error');
-            }
-        }
+        result = {
+            ...result,
+            correction: correctionPlan,
+            correctedTarget: null,
+        };
         if (result.frontendSynced === false) {
             setStatus(result.reason || '变量已修正，但正文刷新未完成', 'error');
             toast('warning', result.reason || '变量已修正，但正文刷新未完成；修复记录仍可撤销。');
         } else {
-            setStatus(
-                correctionResult?.status === 'applied'
-                    ? '已同步修正变量与正文，并刷新状态栏'
-                    : '已修正变量并刷新正文状态栏',
-                'ok',
-            );
-            toast(
-                'success',
-                correctionResult?.status === 'applied'
-                    ? '已同步修正 MVU 与正文硬错误；原回复可左滑恢复。'
-                    : '已根据最新回复补齐/修正 MVU 变量，并刷新正文状态栏。',
-            );
+            setStatus('已修正变量并刷新正文状态栏', 'ok');
+            toast('success', '已根据最新回复补齐/修正 MVU 变量，并刷新正文状态栏。');
         }
     } else if (result.status === 'nochange') {
         setStatus('提交前复核：变量已无需修正', 'ok');
@@ -5824,8 +5425,7 @@ async function runTarget(targetId, {
     if (['applied', 'nochange'].includes(result.status)) {
         result = {
             ...result,
-            finalTarget: result.correctedTarget
-                || captureTarget(getContext(), resolved),
+            finalTarget: captureTarget(getContext(), resolved),
         };
     }
     return result;
@@ -5844,7 +5444,7 @@ function automaticTargetKey(targetId) {
         context.chatId,
         resolved,
         Number(message.swipe_id) || 0,
-        fingerprint(message.mes),
+        acceptedContentFingerprint(message.mes),
     ].join(':');
 }
 
@@ -5857,7 +5457,7 @@ function capturedTargetKey(captured) {
         captured.swipeId,
         captured.generationId,
         captured.branchId,
-        captured.fingerprint,
+        captured.contentFingerprint,
     ].join(':');
 }
 
@@ -5884,7 +5484,7 @@ function targetSettlementIdentityKey(captured) {
         captured?.swipeId ?? captured?.initialSwipeId ?? -1,
         captured?.generationId || '',
         captured?.branchId || '',
-        captured?.fingerprint || captured?.initialFingerprint || '',
+        captured?.contentFingerprint || captured?.initialContentFingerprint || '',
     ].join(':');
 }
 
@@ -5897,10 +5497,10 @@ function persistedTerminalBarrierForCaptured(captured) {
             && String(entry.messageId || '') === String(captured?.messageId || '')
             && Number(entry.finalSwipeId ?? entry.initialSwipeId)
                 === Number(captured?.swipeId)
-            && String(entry.finalFingerprint || entry.initialFingerprint || '')
-                === String(captured?.fingerprint || '')
             && String(entry.generationId || '') === String(captured?.generationId || '')
             && String(entry.branchId || '') === String(captured?.branchId || '')
+            && String(entry.finalContentFingerprint || entry.initialContentFingerprint || '')
+                === String(captured?.contentFingerprint || '')
         ))
         .sort((left, right) => (
             Number(right.terminalAt ?? right.updatedAt ?? 0)
@@ -5916,6 +5516,7 @@ function safeSettlementResult(record, status, extra = {}) {
         serial: Number(record?.serial) || 0,
         generationId: record?.generationId || '',
         branchId: record?.branchId || '',
+        contentFingerprint: record?.initialContentFingerprint || '',
         contentChanged: false,
         ...extra,
     };
@@ -5935,6 +5536,7 @@ async function persistTargetSettlementBarrier(record, state, extra = {}) {
             messageId: record.messageId,
             initialSwipeId: record.initialSwipeId,
             initialFingerprint: record.initialFingerprint,
+            initialContentFingerprint: record.initialContentFingerprint,
             generationId: record.generationId,
             branchId: record.branchId,
             targetDigest: fingerprint(record.identityKey),
@@ -5976,6 +5578,7 @@ async function createTargetSettlementRecord(captured) {
         messageId: captured.messageId,
         initialSwipeId: captured.swipeId,
         initialFingerprint: captured.fingerprint,
+        initialContentFingerprint: captured.contentFingerprint,
         generationId: captured.generationId,
         branchId: captured.branchId,
         registeredAt: Date.now(),
@@ -5997,14 +5600,13 @@ async function createTargetSettlementRecord(captured) {
             messageId: persisted.messageId || record.messageId,
             swipeId: persisted.finalSwipeId ?? record.initialSwipeId,
             fingerprint: persisted.finalFingerprint || record.initialFingerprint,
+            contentFingerprint: persisted.finalContentFingerprint
+                || record.initialContentFingerprint,
             generationId: persisted.generationId || record.generationId,
             branchId: persisted.branchId || record.branchId,
             contentChanged: Boolean(
-                (persisted.finalSwipeId ?? record.initialSwipeId) !== record.initialSwipeId
-                || (
-                    persisted.finalFingerprint
-                    && persisted.finalFingerprint !== record.initialFingerprint
-                )
+                persisted.finalContentFingerprint
+                && persisted.finalContentFingerprint !== record.initialContentFingerprint
             ),
             workflowStatus: 'recovered-terminal',
             reason: persisted.terminalReason || '',
@@ -6056,6 +5658,7 @@ function attachTargetSettlement(record, settlementPromise) {
                 messageId: record.messageId,
                 swipeId: record.initialSwipeId,
                 fingerprint: record.initialFingerprint,
+                contentFingerprint: record.initialContentFingerprint,
                 generationId: record.generationId,
                 branchId: record.branchId,
             };
@@ -6066,7 +5669,9 @@ function attachTargetSettlement(record, settlementPromise) {
                 || current.index !== expected.index
                 || current.messageId !== expected.messageId
                 || current.swipeId !== expected.swipeId
-                || current.fingerprint !== expected.fingerprint
+                || current.contentFingerprint !== (
+                    expected.contentFingerprint || record.initialContentFingerprint
+                )
                 || current.generationId !== expected.generationId
                 || current.branchId !== expected.branchId
             ) {
@@ -6108,9 +5713,9 @@ function attachTargetSettlement(record, settlementPromise) {
                 generationId: current.generationId,
                 branchId: current.branchId,
                 contentChanged: (
-                    current.swipeId !== record.initialSwipeId
-                    || current.fingerprint !== record.initialFingerprint
+                    current.contentFingerprint !== record.initialContentFingerprint
                 ),
+                contentFingerprint: current.contentFingerprint,
                 workflowStatus: workflowResult?.status || 'completed',
                 reason: workflowResult?.reason || '',
             });
@@ -6131,6 +5736,8 @@ function attachTargetSettlement(record, settlementPromise) {
                 messageId: result.messageId || record.messageId,
                 finalSwipeId: result.swipeId,
                 finalFingerprint: result.fingerprint || '',
+                finalContentFingerprint: result.contentFingerprint
+                    || record.initialContentFingerprint,
                 generationId: result.generationId || record.generationId,
                 branchId: result.branchId || record.branchId,
                 workflowStatus: result.workflowStatus || '',
@@ -6177,6 +5784,7 @@ function attachTargetSettlement(record, settlementPromise) {
                         messageId: result.messageId,
                         swipeId: result.swipeId,
                         fingerprint: result.fingerprint,
+                        contentFingerprint: result.contentFingerprint,
                         generationId: result.generationId,
                         branchId: result.branchId,
                         contentChanged: result.contentChanged === true,
@@ -6194,6 +5802,7 @@ function attachTargetSettlement(record, settlementPromise) {
                             messageId: result.messageId,
                             swipeId: result.swipeId,
                             fingerprint: result.fingerprint,
+                            contentFingerprint: result.contentFingerprint,
                             generationId: result.generationId,
                             branchId: result.branchId,
                             contentChanged: result.contentChanged === true,
@@ -6217,7 +5826,11 @@ async function registerTargetSettlement(captured, settlementPromise) {
 
 async function waitForTargetSettled(
     targetIndex,
-    { timeoutMs = 240000, registrationGraceMs = 1200 } = {},
+    {
+        timeoutMs = 15000,
+        registrationGraceMs = 300,
+        waitForVariable = false,
+    } = {},
 ) {
     const startedAt = Date.now();
     const context = getContext();
@@ -6231,7 +5844,9 @@ async function waitForTargetSettled(
     }
     const key = targetSettlementKey(context.chatId, resolved);
     let record = targetSettlementRecords.get(key);
-    const grace = Math.max(0, Number(registrationGraceMs) || 0);
+    const grace = waitForVariable
+        ? Math.max(0, Number(registrationGraceMs) || 0)
+        : 0;
     while (!record && Date.now() - startedAt < grace) {
         await sleep(40);
         record = targetSettlementRecords.get(key);
@@ -6264,17 +5879,27 @@ async function waitForTargetSettled(
         };
     }
 
-    const cap = Math.max(1000, Number(timeoutMs) || 240000);
+    if (!waitForVariable && record.pending) {
+        return safeSettlementResult(record, 'unmanaged', {
+            workflowStatus: 'independent-reader',
+            reason: '正文为只读事实源；数据库等独立读取器不等待变量医生结算',
+        });
+    }
+
+    const cap = Math.min(
+        15000,
+        Math.max(1000, Number(timeoutMs) || 15000),
+    );
     while (record) {
         const remaining = cap - (Date.now() - startedAt);
         if (remaining <= 0) {
             return safeSettlementResult(record, 'timeout', {
-                reason: `等待医生最终正文超过 ${cap}ms`,
+                reason: `等待变量医生结算超过 ${cap}ms`,
             });
         }
         const timeout = new Promise((resolve) => {
             setTimeout(() => resolve(safeSettlementResult(record, 'timeout', {
-                reason: `等待医生最终正文超过 ${cap}ms`,
+                reason: `等待变量医生结算超过 ${cap}ms`,
             })), remaining);
         });
         const result = await Promise.race([record.promise, timeout]);
@@ -6300,7 +5925,10 @@ async function runAfterTargetSettled(targetIndex, reader, options = {}) {
             reason: '下游读取器必须是显式函数。',
         };
     }
-    const barrier = await waitForTargetSettled(targetIndex, options);
+    const barrier = await waitForTargetSettled(targetIndex, {
+        ...options,
+        waitForVariable: true,
+    });
     if (barrier.status !== 'settled') {
         return {
             ...barrier,
@@ -6317,7 +5945,11 @@ async function runAfterTargetSettled(targetIndex, reader, options = {}) {
         || current.swipeId !== barrier.swipeId
         || current.generationId !== barrier.generationId
         || current.branchId !== barrier.branchId
-        || current.fingerprint !== barrier.fingerprint
+        || (
+            barrier.contentFingerprint
+                ? current.contentFingerprint !== barrier.contentFingerprint
+                : current.fingerprint !== barrier.fingerprint
+        )
     ) {
         return {
             ...barrier,
@@ -6336,7 +5968,10 @@ async function runAfterTargetSettled(targetIndex, reader, options = {}) {
             generationId: barrier.generationId,
             branchId: barrier.branchId,
             fingerprint: barrier.fingerprint,
-            narrative: String(context.chat[barrier.targetIndex]?.mes || ''),
+            contentFingerprint: barrier.contentFingerprint,
+            narrative: acceptedContentText(
+                context.chat[barrier.targetIndex]?.mes || '',
+            ),
         }),
     };
 }
@@ -6744,6 +6379,303 @@ function continuityStateForInjection(namespace, { isReroll = false } = {}) {
     return namespace?.continuity;
 }
 
+function continuityInjectionCandidates(state) {
+    const canReachMain = (thread) => (
+        thread?.origin === 'main_derivative'
+        || ['linked', 'converging'].includes(thread?.relation)
+    );
+    const threadCandidates = (state?.threads || [])
+        .filter((thread) => (
+            canReachMain(thread)
+            && (
+                thread.stage !== 'resolved'
+                || state.turn - Number(thread.resolvedTurn || 0) <= 6
+            )
+        ))
+        .map((thread) => {
+            const priority = (
+                (thread.relation === 'converging' ? 100 : 0)
+                + (thread.relation === 'linked' ? 70 : 0)
+                + (thread.origin === 'main_derivative' ? 40 : 0)
+                + Number(thread.convergence?.score || 0) * 10
+                + Number(thread.urgency || 0) * 5
+                + (thread.stage === 'manifested' ? 15 : 0)
+            );
+            const impactTargets = [
+                ...(thread.actors || []).map((value) => `actor:${value}`),
+                ...(thread.locations || []).map((value) => `location:${value}`),
+                ...(thread.propagation || []).map((value) => `world:${value}`),
+            ].slice(0, 12);
+            const evidenceTerms = [
+                thread.title,
+                thread.convergence?.entryBeat,
+                ...(thread.actors || []),
+                ...(thread.locations || []),
+                ...(thread.effects || []),
+                ...(thread.rumors || []),
+            ]
+                .map((value) => String(value || '').trim())
+                .filter((value) => value.length >= 2)
+                .slice(0, 16);
+            return {
+                threadId: thread.id,
+                priority,
+                impactTargets,
+                triggerCondition: thread.convergence?.entryBeat
+                    || thread.trigger
+                    || thread.intersection
+                    || '仅在当前人物、地点、资源或行动自然接触时采用',
+                expiresTurn: Math.max(
+                    Number(state.turn || 0) + 1,
+                    Number(state.turn || 0) + (thread.stage === 'resolved' ? 2 : 4),
+                ),
+                evidenceTerms,
+            };
+        });
+    const visibleWorld = [
+        ...(state?.world?.trends || [])
+            .filter((item) => item.status === 'active' && item.knowledge !== 'hidden')
+            .map((item) => ({
+                threadId: `world:trend:${item.id}`,
+                priority: 55,
+                impactTargets: [`scope:${item.scope || 'world'}`],
+                triggerCondition: `当前行动接触趋势范围：${item.scope || item.name}`,
+                expiresTurn: Number(item.expiresTurn || state.turn + 4),
+                evidenceTerms: [item.name, item.summary, item.scope].filter(Boolean),
+            })),
+        ...(state?.world?.factions || [])
+            .filter((item) => item.knowledge !== 'hidden')
+            .map((item) => ({
+                threadId: `world:faction:${item.id}`,
+                priority: 60 + Number(item.pressure || 0) * 5,
+                impactTargets: [`faction:${item.name}`, `scope:${item.scope || 'world'}`],
+                triggerCondition: item.goal || item.lastChange || '当前人物或地点接触该势力',
+                expiresTurn: Number(state.turn || 0) + 4,
+                evidenceTerms: [item.name, item.summary, item.lastChange].filter(Boolean),
+            })),
+        ...(state?.world?.winds || [])
+            .filter((item) => item.knowledge !== 'hidden')
+            .map((item) => ({
+                threadId: `world:wind:${item.id}`,
+                priority: 50 + Number(item.strength || 0) * 8,
+                impactTargets: [`topic:${item.topic}`, `scope:${item.scope || 'world'}`],
+                triggerCondition: `当前人物位于传播范围或主动询问：${item.scope || item.topic}`,
+                expiresTurn: Number(item.expiresTurn || state.turn + 3),
+                evidenceTerms: [item.topic, item.content, item.scope].filter(Boolean),
+            })),
+        ...(state?.world?.environment?.incidents || [])
+            .filter((item) => item.knowledge !== 'hidden' && item.status !== 'resolved')
+            .map((item) => ({
+                threadId: `world:incident:${item.id}`,
+                priority: 65 + Number(item.severity || 0) * 8,
+                impactTargets: [`location:${item.location || item.scope || 'world'}`],
+                triggerCondition: item.trigger || '当前场景进入事件影响范围',
+                expiresTurn: Number(item.expiresTurn || state.turn + 3),
+                evidenceTerms: [item.title, item.summary, item.lastChange].filter(Boolean),
+            })),
+    ];
+    return [...threadCandidates, ...visibleWorld]
+        .sort((left, right) => (
+            right.priority - left.priority
+            || left.threadId.localeCompare(right.threadId)
+        ));
+}
+
+function prepareContinuityInjectionBatch(namespace, state, {
+    maxVisible = 1,
+    budgetChars = 6000,
+    isReroll = false,
+} = {}) {
+    const now = Date.now();
+    const generationId = String(lastGeneration.id || '');
+    const targetTurn = Number(state.turn || 0) + 1;
+    const queue = (Array.isArray(namespace.continuityInjectionQueue)
+        ? namespace.continuityInjectionQueue
+        : []).map((receipt) => {
+        if (
+            ['injected', 'landed', 'missing', 'retained'].includes(receipt?.status)
+            && Number(receipt.expiresTurn || 0) < targetTurn
+        ) {
+            return { ...receipt, status: 'expired', expiredAt: now };
+        }
+        if (
+            generationId
+            && ['injected', 'landed', 'missing'].includes(receipt?.status)
+            && receipt.generationId !== generationId
+        ) {
+            return { ...receipt, status: 'retained', retainedAt: now };
+        }
+        return receipt;
+    });
+    if (!generationId) {
+        namespace.continuityInjectionQueue = queue.slice(-80);
+        return { generationId: '', receipts: [], budgetChars, targetTurn };
+    }
+    const limit = Math.min(4, Math.max(0, Number(maxVisible) || 0));
+    const selected = continuityInjectionCandidates(state).slice(0, limit);
+    const receipts = selected.map((candidate, index) => ({
+        receiptId: `world-injection:${generationId}:${candidate.threadId}`,
+        generationId,
+        targetTurn,
+        threadId: candidate.threadId,
+        priority: candidate.priority,
+        rank: index + 1,
+        impactTargets: candidate.impactTargets,
+        triggerCondition: candidate.triggerCondition,
+        expiresTurn: candidate.expiresTurn,
+        evidenceTerms: candidate.evidenceTerms,
+        status: 'injected',
+        isReroll: isReroll === true,
+        budgetChars,
+        injectedAt: now,
+    }));
+    const ids = new Set(receipts.map((receipt) => receipt.receiptId));
+    namespace.continuityInjectionQueue = [
+        ...queue.filter((receipt) => !ids.has(receipt?.receiptId)),
+        ...receipts,
+    ].slice(-80);
+    namespace.continuityInjectionBatches = [
+        ...(Array.isArray(namespace.continuityInjectionBatches)
+            ? namespace.continuityInjectionBatches
+            : []),
+        {
+            generationId,
+            targetTurn,
+            receiptIds: receipts.map((receipt) => receipt.receiptId),
+            budgetChars,
+            selectedCount: receipts.length,
+            status: 'registered',
+            registeredAt: now,
+        },
+    ].slice(-30);
+    return { generationId, receipts, budgetChars, targetTurn };
+}
+
+function capContinuityInjectionContent(content, budgetChars) {
+    const source = String(content || '');
+    const cap = Math.max(1200, Number(budgetChars) || 6000);
+    if (source.length <= cap) return source;
+    const suffix = '\n[注入预算已满；其余世界记录保留到后续回合]\n</Parallel_Continuity_Bridge>';
+    return `${source.slice(0, Math.max(0, cap - suffix.length))}${suffix}`;
+}
+
+function persistContinuityInjectionMetadata(namespace) {
+    return writeChatNamespace(namespace, getContext()?.chatId || '', {
+        fields: ['continuityInjectionQueue', 'continuityInjectionBatches'],
+    }).catch((error) => {
+        console.warn('[MVU Auto Doctor] 世界注入收据保存失败：', error);
+        return false;
+    });
+}
+
+function markContinuityInjectionLanded(landed) {
+    const generationId = String(lastGeneration.id || '');
+    if (!generationId) return;
+    const namespace = readChatNamespace();
+    const now = Date.now();
+    let changed = false;
+    namespace.continuityInjectionQueue = (
+        Array.isArray(namespace.continuityInjectionQueue)
+            ? namespace.continuityInjectionQueue
+            : []
+    ).map((receipt) => {
+        if (
+            receipt?.generationId !== generationId
+            || receipt.status !== 'injected'
+        ) return receipt;
+        changed = true;
+        return {
+            ...receipt,
+            status: landed ? 'landed' : 'missing',
+            promptInspectedAt: now,
+        };
+    });
+    namespace.continuityInjectionBatches = (
+        Array.isArray(namespace.continuityInjectionBatches)
+            ? namespace.continuityInjectionBatches
+            : []
+    ).map((batch) => (
+        batch?.generationId === generationId
+            ? {
+                ...batch,
+                status: landed ? 'landed' : 'missing',
+                promptInspectedAt: now,
+            }
+            : batch
+    ));
+    if (changed) void persistContinuityInjectionMetadata(namespace);
+}
+
+async function settleContinuityInjectionReceipts(captured) {
+    if (!captured?.generationId) return;
+    const namespace = readChatNamespace();
+    const content = acceptedContentText(
+        getContext()?.chat?.[captured.index]?.mes || '',
+    );
+    const now = Date.now();
+    let changed = false;
+    let consumed = 0;
+    let retained = 0;
+    namespace.continuityInjectionQueue = (
+        Array.isArray(namespace.continuityInjectionQueue)
+            ? namespace.continuityInjectionQueue
+            : []
+    ).map((receipt) => {
+        if (
+            receipt?.generationId !== captured.generationId
+            || !['injected', 'landed', 'missing'].includes(receipt.status)
+        ) return receipt;
+        const evidence = (receipt.evidenceTerms || []).find((term) => (
+            String(term || '').length >= 2
+            && content.includes(String(term))
+        )) || '';
+        const expired = Number(receipt.expiresTurn || 0)
+            < Number(receipt.targetTurn || 0);
+        const status = expired ? 'expired' : evidence ? 'consumed' : 'retained';
+        if (status === 'consumed') consumed += 1;
+        if (status === 'retained') retained += 1;
+        changed = true;
+        return {
+            ...receipt,
+            status,
+            consumptionEvidence: evidence,
+            settledAt: now,
+            consumedBy: status === 'consumed'
+                ? {
+                    chatId: captured.chatId,
+                    messageId: captured.messageId,
+                    index: captured.index,
+                    swipeId: captured.swipeId,
+                    contentFingerprint: captured.contentFingerprint,
+                }
+                : null,
+        };
+    });
+    namespace.continuityInjectionBatches = (
+        Array.isArray(namespace.continuityInjectionBatches)
+            ? namespace.continuityInjectionBatches
+            : []
+    ).map((batch) => (
+        batch?.generationId === captured.generationId
+            ? {
+                ...batch,
+                status: 'settled',
+                consumedCount: consumed,
+                retainedCount: retained,
+                responseContentFingerprint: captured.contentFingerprint,
+                settledAt: now,
+            }
+            : batch
+    ));
+    if (!changed) return;
+    await persistContinuityInjectionMetadata(namespace);
+    recordOperation(
+        '世界注入',
+        `生成 ${captured.generationId}：正文消费 ${consumed} 条，保留 ${retained} 条`,
+        consumed ? 'ok' : '',
+    );
+}
+
 function applyContinuityInjection({ isReroll = false } = {}) {
     const settings = getSettings();
     if (settings.continuityMode === 'off') {
@@ -6758,9 +6690,17 @@ function applyContinuityInjection({ isReroll = false } = {}) {
             maxThreads: settings.continuityMaxThreads,
         },
     );
+    const batch = prepareContinuityInjectionBatch(namespace, state, {
+        maxVisible: settings.continuityMaxVisible,
+        budgetChars: settings.continuityInjectionBudgetChars,
+        isReroll,
+    });
     let content = buildContinuityInjection(state, {
         director: namespace.continuityDirector || 'standalone',
-        maxVisible: settings.continuityMaxVisible,
+        maxVisible: Math.min(
+            Number(settings.continuityMaxVisible) || 0,
+            batch.receipts.length,
+        ),
     });
     if (
         !content
@@ -6778,7 +6718,21 @@ function applyContinuityInjection({ isReroll = false } = {}) {
             '</Parallel_Continuity_Bridge>',
         ].join('\n');
     }
+    if (content && batch.generationId) {
+        const trace = `注入批次=${batch.generationId}；目标轮=${batch.targetTurn}；`
+            + `收据=${batch.receipts.map((item) => item.receiptId).join('、') || '无事件'}；`
+            + `预算=${batch.budgetChars}字符`;
+        content = content.replace(
+            '<Parallel_Continuity_Bridge>',
+            `<Parallel_Continuity_Bridge>\n${trace}`,
+        );
+    }
+    content = capContinuityInjectionContent(
+        content,
+        settings.continuityInjectionBudgetChars,
+    );
     registerContinuityInjection(content);
+    if (batch.generationId) void persistContinuityInjectionMetadata(namespace);
     const active = state.threads.filter((thread) => thread.stage !== 'resolved').length;
     setContinuityStatus(
         active
@@ -7142,7 +7096,7 @@ function actorShardLeaseFingerprint(captured) {
         generation: Math.max(0, Number(captured?.generationSerial) || 0),
         branchId: String(captured?.branchId || ''),
         parentHash: fingerprint(String(captured?.generationId || captured?.branchId || 'root')),
-        contentHash: String(captured?.fingerprint || ''),
+        contentHash: String(captured?.contentFingerprint || ''),
     };
 }
 
@@ -7161,17 +7115,6 @@ async function collectActorShardProposals(captured, {
             failed: 0,
         };
         return { status: 'disabled', candidates: null };
-    }
-    const terminalBarrier = persistedTerminalBarrierForCaptured(captured);
-    if (terminalBarrier?.state !== 'settled') {
-        latestActorShardDiagnostics = {
-            status: 'barrier-not-settled',
-            selected: 0,
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-        };
-        return { status: 'skipped', candidates: null };
     }
     const candidates = selectActorShardCandidates({
         continuity: base,
@@ -7196,7 +7139,7 @@ async function collectActorShardProposals(captured, {
         captured.swipeId,
         captured.generationId,
         captured.branchId,
-        captured.fingerprint,
+        captured.contentFingerprint,
     ].join(':'))}:${Date.now().toString(36)}`;
     await actorShardLeaseManager.create({
         id: leaseId,
@@ -7215,7 +7158,7 @@ async function collectActorShardProposals(captured, {
         candidates,
         maxConcurrency: settings.actorShardMaxWorkers,
         timeoutMs: settings.actorShardTimeoutMs,
-        isCurrent: () => targetIsCurrent(captured, token).ok,
+        isCurrent: () => continuityTargetIsCurrent(captured, token).ok,
         onProgress(progress) {
             latestActorShardDiagnostics = {
                 status: 'running',
@@ -7267,7 +7210,7 @@ async function collectActorShardProposals(captured, {
         fingerprint: actorShardLeaseFingerprint(fresh),
         branch: { id: fresh.branchId, status: 'active' },
     });
-    if (!accepted || !targetIsCurrent(captured, token).ok) {
+    if (!accepted || !continuityTargetIsCurrent(captured, token).ok) {
         await actorShardLeaseManager.markStale(leaseId, 'final target identity changed');
         latestActorShardDiagnostics.status = 'stale';
         return { status: 'stale', candidates: null };
@@ -7295,6 +7238,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const context = getContext();
     const message = context.chat[captured.index];
     const messageText = String(message?.mes || '');
+    const acceptedNarrative = acceptedContentText(messageText);
     const markers = extractContinuityMarkers(messageText);
     if (settings.continuityMode === 'auto' && !markers.hasPresetParallel) {
         markers.hasPresetParallel = await activePresetHasContinuityPrompt();
@@ -7380,7 +7324,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     try {
         const actorShardResult = await collectActorShardProposals(captured, {
             base: scheduledBase,
-            messageText,
+            messageText: acceptedNarrative,
             token,
         });
         if (actorShardResult.status === 'stale') {
@@ -10769,7 +10713,6 @@ function buildSettingsPanel() {
     bindModelConnectionManager(wrapper.querySelector('.mvuad-connection-manager'));
     wrapper.querySelector('.mvuad-protocol-options').append(
         makeCheckbox('自动本地检查正文与装备硬合同（0次模型调用）', 'hardContractAuditEnabled'),
-        makeCheckbox('硬错误时用同一次变量诊断生成可撤回修正版', 'hardContractCorrectionEnabled'),
     );
     wrapper.querySelector('.mvuad-social-options').append(
         makeCheckbox('启用正文动机与人物自主性合同', 'socialNarrativeGuardEnabled'),
@@ -11136,6 +11079,7 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
+            await settleContinuityInjectionReceipts(captured);
             const existingSettlement = existingTargetSettlementRecord(captured);
             if (existingSettlement) {
                 return waitExistingTargetSettlement(existingSettlement);
@@ -11173,31 +11117,34 @@ function bindEvents() {
                     })
                     : result
             ));
-            const socialAudit = Promise.all([stateCommitting, hardAudit])
-                .then(([result, hardAuditResult]) => (
-                    result.status === 'settled'
-                        ? runSocialAuditTarget(
-                            hardAuditResult?.correctedTarget || result.captured,
-                        )
-                        : result
-                ));
-            const repair = Promise.all([settled, socialAudit, hardAudit])
-                .then(([result, socialResult, hardAuditResult]) => (
-                    result.status === 'settled' && socialResult?.status !== 'failed'
-                        ? enqueue(resolved, {
-                            queuedTarget: socialResult?.correctedTarget
-                                || hardAuditResult?.correctedTarget
-                                || result.captured,
-                            after: hardAudit,
-                            skipDelay: true,
-                        })
-                        : socialResult?.status === 'failed' ? socialResult : result
-                ));
+            // The variable doctor is the one automatic primary task for this
+            // turn. Read-only audits and world processing run beside it; none
+            // may delay or suppress the validated MVU patch.
+            const repair = stateCommitting.then((result) => (
+                result.status === 'settled'
+                    ? enqueue(resolved, {
+                        queuedTarget: result.captured,
+                        skipDelay: true,
+                    })
+                    : result
+            ));
             const openingSync = repair.then((repairResult) => (
                 ['stale', 'failed', 'blocked', 'busy'].includes(repairResult?.status)
                     ? repairResult
                     : enqueueOpeningResourceSync(resolved)
             ));
+            // Relationship review is a secondary writer. It starts only after
+            // the primary variable and deterministic opening writes have
+            // released the MVU path, and is not part of their settlement gate.
+            const socialAudit = openingSync.then((openingResult) => {
+                if (['stale', 'failed', 'blocked', 'busy'].includes(openingResult?.status)) {
+                    return openingResult;
+                }
+                const currentTarget = captureTarget(getContext(), resolved);
+                return currentTarget
+                    ? runSocialAuditTarget(currentTarget)
+                    : { status: 'stale', reason: '人物关系二审目标已经变化' };
+            });
             const finalReplySettlement = Promise.all([repair, openingSync])
                 .then(([repairResult, openingResult]) => {
                     const statuses = [repairResult?.status, openingResult?.status];
@@ -11216,103 +11163,36 @@ function bindEvents() {
                     };
                 });
             attachTargetSettlement(barrierRecord, finalReplySettlement);
-            // 阶段6起，活世界、记忆、数据库和论坛只能在持久屏障明确
-            // settled 后读取最终正文；failed/stale 不回退到旧正文。
-            const continuity = Promise.all([
-                barrierRecord.promise,
-                hardAudit,
-                socialAudit,
-            ]).then(async (
-                [barrierResult, hardAuditResult, socialAuditResult],
-            ) => {
-                if (barrierResult?.status !== 'settled') {
-                    return {
-                        status: barrierResult?.status || 'failed',
-                        reason: barrierResult?.reason || '正文稳定屏障未放行',
-                    };
-                }
-                if (socialAuditResult?.status === 'failed') {
-                    const blockedReason = socialAuditResult.reason
-                        || socialAuditResult.correction?.reason
-                        || '人物关系二审未能安全完成';
-                    setContinuityStatus(
-                        `世界连续性：已跳过本回合（${blockedReason}）；未推进账本`,
-                        '',
-                    );
-                    return { status: 'blocked', reason: blockedReason };
-                }
-                let effectiveHardAudit = hardAuditResult;
-                let continuityExpectedTarget = socialAuditResult?.correctedTarget
-                    || hardAuditResult?.correctedTarget
-                    || settledTarget
-                    || captured;
-                let hardErrors = (effectiveHardAudit?.issues || [])
-                    .filter((issue) => issue?.severity === 'error');
-                // Length is a presentation-quality contract. Keep reporting
-                // and correcting it, but do not disable the independent world
-                // ledger when the accepted reply is merely shorter than the
-                // requested target. State, dice, time and structure errors
-                // remain blocking.
-                let blockingHardErrors = hardErrors.filter(
-                    (issue) => issue?.code !== 'content-under-budget',
+            // World settlement consumes the accepted <content> independently.
+            // It does not wait for MVU, social, or read-only contract reports.
+            const continuity = stateCommitting.then((result) => (
+                result.status === 'settled'
+                    ? enqueueContinuity(resolved, {
+                        expectedTarget: result.captured,
+                    })
+                    : result
+            ));
+            socialAudit.then((socialAuditResult) => {
+                if (socialAuditResult?.status !== 'failed') return;
+                const auditReason = socialAuditResult.reason
+                    || socialAuditResult.correction?.reason
+                    || '人物关系二审未能完成';
+                recordOperation(
+                    '人物关系',
+                    `${auditReason}；已按失败零写入处理，不阻塞变量或世界结算`,
+                    'error',
                 );
-                // 结构、骰子、时间等确定性错误仍须先修正。只有这个
-                // 少数分支等待变量任务，修正后立即本地复核再决定。
-                if (blockingHardErrors.length) {
-                    const repairResult = await repair;
-                    await openingSync;
-                    const postRepairTarget = repairResult?.finalTarget
-                        || repairResult?.correctedTarget
-                        || captureTarget(getContext(), resolved);
-                    if (postRepairTarget) continuityExpectedTarget = postRepairTarget;
-                    effectiveHardAudit = postRepairTarget
-                        ? await enqueueHardContractAudit(resolved, {
-                            queuedTarget: postRepairTarget,
-                            skipDelay: true,
-                        })
-                        : {
-                            status: 'failed',
-                            reason: '修复后目标楼层不可用，无法复核硬合同',
-                        };
-                    hardErrors = (effectiveHardAudit?.issues || [])
-                        .filter((issue) => issue?.severity === 'error');
-                    blockingHardErrors = hardErrors.filter(
-                        (issue) => issue?.code !== 'content-under-budget',
-                    );
-                }
-                let blockedReason = '';
-                if (effectiveHardAudit?.status === 'failed') {
-                    blockedReason = effectiveHardAudit.reason || '硬合同检查失败';
-                } else if (blockingHardErrors.length) {
-                    blockedReason = `正文硬合同仍有 ${blockingHardErrors.length} 个阻断性错误`;
-                }
-                if (blockedReason) {
-                    setContinuityStatus(
-                        `世界连续性：已跳过本回合（${blockedReason}）；未调用模型、未推进账本`,
-                        '',
-                    );
-                    return {
-                        status: 'blocked',
-                        reason: blockedReason,
-                    };
-                }
-                return enqueueContinuity(resolved, {
-                    expectedTarget: continuityExpectedTarget,
-                });
             });
-            Promise.all([repair, continuity]).then(([repairResult, continuityResult]) => {
+            continuity.then((continuityResult) => {
                 if (['blocked', 'stale', 'failed'].includes(continuityResult?.status)) {
-                    setForumStatus('论坛：上游回复尚未稳定，本回合未自动刷新', '');
+                    setForumStatus('论坛：世界结算本轮不可用，自动刷新已跳过', '');
                     return continuityResult;
                 }
-                const expectedTarget = repairResult?.finalTarget
-                    || repairResult?.correctedTarget
-                    || captureTarget(getContext(), resolved)
-                    || settledTarget
-                    || captured;
                 return enqueueForum(resolved, {
                     after: continuity,
-                    expectedTarget,
+                    expectedTarget: captureTarget(getContext(), resolved)
+                        || settledTarget
+                        || captured,
                 });
             });
         },
@@ -11320,7 +11200,6 @@ function bindEvents() {
     context.eventSource.on(
         types.MESSAGE_SWIPED || 'message_swiped',
         (value) => {
-            if (internalSwipeMutationDepth > 0) return undefined;
             return restoreBranchCheckpointsForSwipe(value, { force: true }).catch((error) => {
                 console.warn('[MVU Auto Doctor] swipe 存档点恢复失败：', error);
             });
@@ -11595,6 +11474,10 @@ function initialize() {
         syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),
+        getContinuityInjectionReceipts: () => ({
+            queue: deepClone(readChatNamespace().continuityInjectionQueue || []),
+            batches: deepClone(readChatNamespace().continuityInjectionBatches || []),
+        }),
         clearContinuityState,
         runForum: refreshForumManual,
         getForumState: () => deepClone(readChatNamespace().forum),

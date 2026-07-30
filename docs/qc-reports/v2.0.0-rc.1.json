@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.1",
-  "testedAt": "2026-07-29T11:47:06.440Z",
-  "result": "pass",
-  "codeFingerprint": "beb57d39ab475c857ab9066df774e37dac7cfec72f3ac6934524706cc3dca415",
+  "testedAt": "2026-07-30T11:03:00.153Z",
+  "result": "blocked",
+  "codeFingerprint": "f62f41738778dd6441b3f4038d4847ca9a000554ce93e7f521fbf557289a1f9c",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -35,12 +35,12 @@
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 157967.9776
+      "durationMs": 135991.6071
     },
     "targeted": {
       "coreAndProtocolPassed": 27,
       "browserRuntimePassed": 1,
-      "browserRuntimeDurationMs": 157920.0777,
+      "browserRuntimeDurationMs": 135945.0492,
       "phase7ReplayCases": 17,
       "phase7ReplayPassed": 17,
       "phase7ReplayFailed": 0
@@ -124,7 +124,7 @@
           "id": "RC-LIFECYCLE-13",
           "severity": "critical",
           "disposition": "fixed",
-          "evidence": "Internal correction swipes preserve finalTarget; real regenerate, swipe and chat-switch late responses all became stale with zero old-target writes while TavernDB remained loaded."
+          "evidence": "The runtime no longer creates correction swipes; regenerate, swipe and chat-switch still invalidate old generation/branch identities with zero late writes."
         },
         {
           "id": "RC-DB-14",
@@ -142,13 +142,31 @@
           "id": "RC-DB-16",
           "severity": "environment",
           "disposition": "fixed",
-          "evidence": "The author import script was normalized in memory to spv8.7.4 inside a sterile real host. The bundle returned HTTP 200 before and after reload, exposed 116 API methods, mounted UI surfaces and returned a truthy object from the public update entry; doctor and database owned errors were both zero."
+          "evidence": "The author spv8.7.4 bundle returned HTTP 200 before and after reload, exposed 116 API methods, mounted UI surfaces and returned a truthy object from its own public update entry. The deprecated doctor bridge stayed disabled with zero trigger requests; doctor and database owned errors were both zero."
         },
         {
           "id": "RC-MODEL-17",
           "severity": "environment",
+          "disposition": "blocked",
+          "evidence": "The current synthetic real-model probe made one request through the memory-only proxy and received HTTP 401 because the saved approved QC credential is no longer valid. It performed zero MVU writes, made no retry, persisted no credential or payload, and closed both QC ports."
+        },
+        {
+          "id": "RC-WORLD-18",
+          "severity": "critical",
           "disposition": "fixed",
-          "evidence": "The current synthetic real-model probe made one request through the memory-only proxy and received HTTP 200. The doctor completed the structured model path in one attempt with no fallback or second model repair; credentials and payloads were not persisted and both QC ports closed."
+          "evidence": "Automated real-runtime coverage now records bounded world injection receipts with generation, priority, targets, expiry and budget, then marks the exact response as consumed or retained by content fingerprint."
+        },
+        {
+          "id": "RC-SOCIAL-19",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Malformed, timed-out and provider-rejected relationship reviews produce no revert decisions and zero MVU writes. The real 401 probe confirmed zero replaceMvuData calls."
+        },
+        {
+          "id": "RC-CONTENT-20",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Automatic task identity uses the accepted content fingerprint, so UpdateVariable and placeholder-only changes do not masquerade as narrative changes; doctor prompts treat content as read-only."
         }
       ]
     },
@@ -232,7 +250,7 @@
         "legacySourceRewriteExcludedFromSterileRoot": true,
         "legacySourceRewriteDetectedByDoctor": true,
         "authorImportSha256": "01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65",
-        "officialBundleSha256": "e10425f786fbadc3ea9bf46f54bba8857e5c0fd25192033cb8e2d1f866e78d6a",
+        "officialBundleSha256": "bb27c0936cbb719184b83890d4f2e6738895e04ec027ebc5618ed01ad29f1efb",
         "bundleRequestCount": 6,
         "bundleResponseCount": 6,
         "bundleSuccessResponseCount": 2,
@@ -243,14 +261,15 @@
         "publicUpdateReturnedTruthyObject": true,
         "independentBridgeInstalled": true,
         "independentBridgeVersion": "1.0.0",
+        "independentBridgeStatus": "disabled-independent-database",
         "independentBridgeSourceRewriteUsed": false,
         "independentBridgePrivateSchemaRead": false,
         "independentBridgeUnchangedSyncRequests": 0,
-        "independentBridgeChangedSyncRequests": 1,
-        "independentBridgeChangedSyncCompleted": 1,
-        "independentBridgeChangedSyncAttempts": 1,
+        "independentBridgeChangedSyncRequests": 0,
+        "independentBridgeChangedSyncCompleted": 0,
+        "independentBridgeChangedSyncAttempts": 0,
         "independentBridgeChangedSyncFailures": 0,
-        "reloadIndependentBridgeReady": true,
+        "reloadIndependentBridgeDisabled": true,
         "uiSurfaceCountBeforeReload": 7,
         "reloadApiMethods": 116,
         "reloadUiSurfaceCount": 3,
@@ -397,11 +416,13 @@
         "databaseApiMethods": 116,
         "publicUpdateReturnedTruthyObject": true,
         "independentBridgeVersion": "1.0.0",
+        "independentBridgeStatus": "disabled-independent-database",
         "independentBridgeUnchangedSyncRequests": 0,
-        "independentBridgeChangedSyncCompleted": 1,
-        "independentBridgeChangedSyncAttempts": 1,
+        "independentBridgeChangedSyncRequests": 0,
+        "independentBridgeChangedSyncCompleted": 0,
+        "independentBridgeChangedSyncAttempts": 0,
         "independentBridgeChangedSyncFailures": 0,
-        "reloadIndependentBridgeReady": true,
+        "reloadIndependentBridgeDisabled": true,
         "databaseUiSurfaceCountBeforeReload": 7,
         "reloadDatabaseApiMethods": 116,
         "reloadDatabaseUiSurfaceCount": 3,
@@ -415,17 +436,50 @@
         "originalUserDataModified": false,
         "temporaryDataRemoved": true,
         "portClosed": true
+      },
+      "currentManualUiProbe": {
+        "result": "pass",
+        "sillyTavernVersion": "1.18.0",
+        "candidateIndexSha256": "90242034b3acaac7099333cb5e13a873680552b2e6fb8f78f2dcf156027adbb4",
+        "mobile": {
+          "width": 390,
+          "height": 844,
+          "panelLeft": 6,
+          "panelRight": 384,
+          "panelTop": 170,
+          "panelBottom": 780,
+          "panelWithinViewport": true,
+          "horizontalOverflow": false
+        },
+        "desktop": {
+          "width": 1280,
+          "height": 720,
+          "panelLeft": 788,
+          "panelRight": 1268,
+          "panelTop": 178,
+          "panelBottom": 646,
+          "panelWithinViewport": true,
+          "horizontalOverflow": false
+        },
+        "variableDoctorControlVisible": true,
+        "worldEngineControlVisible": true,
+        "forumTabIndependent": true,
+        "narrativeRewriteControlCount": 0,
+        "chatContentRead": false,
+        "originalExtensionRestored": true,
+        "backupRetained": true,
+        "portClosed": true
       }
     },
     "realModel": {
-      "result": "affected-paths-passed",
+      "result": "blocked",
       "attempts": 1,
-      "succeeded": 1,
-      "failed": 0,
-      "evidenceEligibleAttempts": 1,
+      "succeeded": 0,
+      "failed": 1,
+      "evidenceEligibleAttempts": 0,
       "supportingDiagnosticAttempts": 1,
       "proxyStatuses": [
-        200
+        401
       ],
       "inputBytes": [
         2576
@@ -444,11 +498,13 @@
       "rawPayloadPersisted": false,
       "oldSuccessfulRunReusedAsCurrentEvidence": false,
       "blockedBeforeCredentialUse": false,
-      "externalCredentialRejected": false,
+      "externalCredentialRejected": true,
       "doctorModelCallDelta": 1,
       "doctorRetryCount": 0,
-      "doctorModelCompleted": true,
-      "doctorFallbackUsed": false,
+      "doctorModelCompleted": false,
+      "doctorFallbackUsed": true,
+      "socialFailureZeroWrite": true,
+      "stateWriterCalls": 0,
       "secondModelStructureRepairAttempted": false,
       "databaseRuntimeLoadedDuringModelProbe": false,
       "syntheticFixtureUsed": true,
@@ -526,7 +582,7 @@
       "model": "deepseek-v4-pro",
       "calls": 1,
       "httpStatuses": [
-        200
+        401
       ],
       "reviewerOnlyForSocialProof": false,
       "credentialPersisted": false,
@@ -737,14 +793,23 @@
       ]
     }
   },
+  "blocker": {
+    "code": "real_model_test_credential_rejected",
+    "message": "The saved approved memory-only QC credential was rejected by the provider, so the current runtime cannot be promoted as a release candidate.",
+    "releasePromotionBlocked": true,
+    "reasons": [
+      "The current synthetic real-model request returned HTTP 401.",
+      "No valid replacement credential was authorized or available.",
+      "Automated tests and real database compatibility passed, but they cannot substitute for a successful current real-model response."
+    ]
+  },
   "publication": {
-    "scope": "release",
+    "scope": "independent-branch-only",
     "allowedRemoteRefs": [
-      "refs/heads/codex/july29-db-compat-longrun",
-      "refs/heads/main"
+      "refs/heads/codex/doctor-world-closed-loop"
     ],
-    "mainAllowed": true,
-    "releaseCandidateAllowed": true,
+    "mainAllowed": false,
+    "releaseCandidateAllowed": false,
     "forcePushAllowed": false,
     "pullRequestUpdateAllowed": false,
     "maintainerAuthorizationObservedForThisRepair": true,
@@ -768,7 +833,7 @@
     "syntheticFixtureUsedForStrictWriteback": true,
     "sterileDatabaseDataRootUsed": true,
     "credentialInjectedOnlyIntoMemoryProcesses": true,
-    "validCredentialStoredOnlyInProxyMemory": true,
-    "credentialRejectedByProvider": false
+    "validCredentialStoredOnlyInProxyMemory": false,
+    "credentialRejectedByProvider": true
   }
 }
