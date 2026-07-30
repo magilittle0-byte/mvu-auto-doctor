@@ -44,6 +44,7 @@ import {
     mergeMarkerRecords,
     normalizeContinuityState,
     parseContinuityOutput,
+    scheduleWorldLanes,
     WORLD_ECONOMY_LABELS,
     WORLD_FACTION_CONDITION_LABELS,
     WORLD_FACTION_RELATION_LABELS,
@@ -256,6 +257,11 @@ let latestActorShardDiagnostics = {
     completed: 0,
     succeeded: 0,
     failed: 0,
+};
+let latestWorldLaneDiagnostics = {
+    turn: 0,
+    maxLanes: 0,
+    selected: [],
 };
 let latestForumStatus = '论坛：等待世界消息';
 let latestForumKind = '';
@@ -1679,6 +1685,7 @@ function diagnosticPayload() {
                 continuity: {
                     activeCount: continuity.activeCount,
                     resolvedCount: continuity.resolvedCount,
+                    worldLanes: deepClone(latestWorldLaneDiagnostics),
                 },
                 actors: {
                     actorCount: actors.actorCount,
@@ -7201,6 +7208,7 @@ function buildContinuityMessages({
     retryReason = '',
     excludedSourceIndexes = [],
     actorShardCandidates = null,
+    worldLaneSchedule = null,
 }) {
     const settings = getSettings();
     const jsonOnly = (
@@ -7264,6 +7272,8 @@ function buildContinuityMessages({
         '【职责边界】',
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
+        '- 世界采用双轨调度：人物轨维护有身份、有限认知与独立行动的角色；结构世界轨独立维护势力、环境、经济、长期趋势、传播与因果余波。任何一轨都不得替代或吞并另一轨。',
+        '- 势力与环境过程可以没有单一代表人物，并可在没有人物候选、人物分片失败或人物行动留在幕后时继续推进、结算或自行结束；不得为了调用人物轨而虚构一个代言NPC。',
         ...(customContinuityInstruction ? [customContinuityInstruction] : []),
         '- 调用模型前，本地事件时钟已为每条未结事件掷出success/hold/setback，并更新stageProgress；这是防止世界永久停摆的基线，不等于所有事件都要在正文显现。你可按真实能力、资源、信息、距离和阻力纠正阶段、进度与stalled，但不得为了热闹强推。',
         `- 每个账本轮次可让同一因果簇内最多${changeLimit}条旧事件产生新的实质叙事变化；优先选择共享人物、势力、地点、资源、传播链或causedBy关系的稀疏事件簇。其他事件只保留本地时钟结果。`,
@@ -7370,6 +7380,15 @@ function buildContinuityMessages({
                 'proposals仍是无写权限候选；acceptedActions与worldEvents已经通过本地身份、知识、时间、地点、资源、能力、因果和玩家主权校验，可结算为人物实际行动与世界后果。',
                 'rejectedActions必须保持拒绝，禁止模型绕过本地原因重新采用。后台行动可以永不进入主线；只有worldEvents中的可观察后果或主动接触才可进入事件/世界表面，且仍受汇流门槛和注入预算限制。',
                 safeJson(actorShardCandidates),
+            ]
+            : []),
+        ...(worldLaneSchedule?.selected?.length
+            ? [
+                '',
+                '=== 本轮非人物结构世界轨（独立预算）===',
+                '这些候选来自势力、环境、经济、趋势、公共信号或因果余波的本地有界调度；它们不依赖人物候选，也不得被人物行动覆盖。',
+                '到期候选必须在本轮世界结算中产生合法变化、结束/冷却，或给出具体尚未满足的时间、资源、地点或因果条件。未进入该列表的世界条目继续保留，不代表删除。',
+                safeJson(worldLaneSchedule),
             ]
             : []),
         '',
@@ -7783,6 +7802,21 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
     }
 
+    const worldLaneSchedule = scheduleWorldLanes(scheduledBase, {
+        turn: tickTurn,
+        maxLanes: settings.continuityMaxVisible,
+    });
+    latestWorldLaneDiagnostics = {
+        turn: worldLaneSchedule.turn,
+        maxLanes: worldLaneSchedule.maxLanes,
+        selected: worldLaneSchedule.selected.map((item) => ({
+            laneType: item.laneType,
+            sourceId: item.sourceId,
+            due: item.due,
+            score: item.score,
+            independentOfActors: true,
+        })),
+    };
     const actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
     const localProgressed = (
         clockPlan.changedThreadIds.length > 0
@@ -7813,6 +7847,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             retryReason,
             excludedSourceIndexes: sourcePlan.skippedIndexes,
             actorShardCandidates,
+            worldLaneSchedule,
         });
         let output = '';
         let validOutput = false;
@@ -8018,6 +8053,16 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const newDigest = continuityContentDigest(next);
     namespace.continuity = next;
     namespace.actorLedger = actorLedger;
+    namespace.continuityWorldLaneReceipts = [
+        ...(Array.isArray(namespace.continuityWorldLaneReceipts)
+            ? namespace.continuityWorldLaneReceipts
+            : []),
+        ...worldLaneSchedule.receipts.map((receipt) => ({
+            ...receipt,
+            status: modelValidated ? 'settled' : 'retained',
+            settledAt: Date.now(),
+        })),
+    ].slice(-80);
     namespace.continuityDirector = director;
     namespace.continuityDetected = true;
     if (!isReroll && !checkpointMatchesTarget(namespace.continuityCheckpoint, captured)) {
@@ -8043,6 +8088,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 'continuityCheckpoint',
                 'actorLedger',
                 'actorLedgerCheckpoint',
+                'continuityWorldLaneReceipts',
                 'continuityDirector',
                 'continuityDetected',
                 'continuitySourceReceipts',
@@ -11080,6 +11126,7 @@ function buildSettingsPanel() {
                             <div class="mvuad-description">
                                 默认2，可设1—4；实际仍允许采用0条。多个事件只有在各自触发条件已经成熟，
                                 或共享同一时间、地点、人物、势力、资源或因果簇时才可共同爆发，并继续受注入预算限制。
+                                人物行动与势力、环境、经济等结构世界过程分轨调度；关闭人物分片不会停止后者。
                             </div>
                             <label class="mvuad-select">
                                 <span>NPC 分片</span>
@@ -12064,6 +12111,9 @@ function initialize() {
             queue: deepClone(readChatNamespace().continuityInjectionQueue || []),
             batches: deepClone(readChatNamespace().continuityInjectionBatches || []),
         }),
+        getWorldLaneReceipts: () => deepClone(
+            readChatNamespace().continuityWorldLaneReceipts || [],
+        ),
         clearContinuityState,
         runForum: refreshForumManual,
         getForumState: () => deepClone(readChatNamespace().forum),

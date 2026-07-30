@@ -634,3 +634,21 @@ continuity policy、1—4接口、时效、优先级和字符预算。正文只�
 界面错误不得阻塞正文、数据库、变量医生、社交零写入门或 continuity 本地时钟。
 regenerate/swipe恢复人物与continuity的同楼前置checkpoint；旧generation/branch的
 迟到worker结果必须保持零写入。
+
+## 24. 非人物结构世界轨协议
+
+`scheduleWorldLanes` 只读取 normalization 后的 continuity world，不读取 Actor
+Ledger，也不把势力或环境转换成人物。候选类型限定为 `faction`、`environment`、
+`trend`、`public_signal` 与 `causal`，每轮本地上限0—4。评分只使用到期窗口、
+状态压力、剩余时限和沉默轮数；选择时先保证类型多样，再按分数补足剩余位置。
+
+每个入选项生成 `world-lane:<turn>:<laneType>:<sourceId>` 收据，并显式记录
+`independentOfActors=true`。模型通过世界连续性事务结算后标为 `settled`；模型失败
+但本地事件/传播时钟仍有效时标为 `retained`。这些收据不赋予模型直接写权限，也不
+绕过 `applyWorldUpdate`、`enforceContinuityPolicy`、知识分层、玩家主权、分支身份、
+1—4正文接口和字符预算。
+
+结构世界轨是附加调度输入，不是关键屏障。人物worker关闭、失败或返回空候选时不得
+删除该轨；结构世界轨自身失败也不得阻塞正文、数据库、变量医生或本地世界时钟。
+公开 API 可返回完整本地收据供玩家审计；脱敏诊断只允许 laneType、due 与
+independentOfActors，不得包含势力名、环境摘要、sourceId、剧情证据或 hidden 内容。

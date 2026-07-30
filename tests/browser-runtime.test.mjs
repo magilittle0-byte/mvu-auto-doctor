@@ -5247,7 +5247,36 @@ try {
                     urgency: 2,
                 },
             ],
-            world: {},
+            world: {
+                factions: [{
+                    id: 'FAC-NORTH-HARBOR',
+                    name: '北港运输联合体',
+                    condition: 'strained',
+                    goal: '在午夜前完成车次改道',
+                    summary: '公开车次变更仍在扩大',
+                    scope: '北港',
+                    knowledge: 'observed',
+                    basis: '北港公开公告',
+                    updatedTurn: 0,
+                }],
+                environment: {
+                    economy: 'strained',
+                    summary: '涨潮正在压缩北港运力',
+                    basis: '潮位站公开读数',
+                    updatedTurn: 0,
+                    incidents: [{
+                        id: 'INC-NORTH-HARBOR-TIDE',
+                        title: '北港涨潮',
+                        status: 'active',
+                        summary: '一轮内将达到旧码头封闭水位',
+                        scope: '北港',
+                        remainingTurns: 1,
+                        knowledge: 'observed',
+                        basis: '潮位站公开读数',
+                        updatedTurn: 0,
+                    }],
+                },
+            },
         };
         await t.context.eventSource.emit('generation_started', 'normal', {}, false);
         await t.context.eventSource.emit('message_received', 2);
@@ -5264,6 +5293,7 @@ try {
         diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
         actorLedger: window.MvuAutoDoctorAPI.getActorLedgerView(),
         actorReceipts: window.MvuAutoDoctorAPI.getActorActionReceipts(),
+        worldLaneReceipts: window.MvuAutoDoctorAPI.getWorldLaneReceipts(),
         controls: {
             mode: document.querySelector('.mvuad-actor-shard-mode').value,
             workers: document.querySelector('.mvuad-actor-shard-workers').value,
@@ -5286,6 +5316,8 @@ try {
     assert.match(actorIntegration.calls.continuityUser, /持久人物账本的本轮调度与行动收据/u);
     assert.match(actorIntegration.calls.continuityUser, /acceptedActions/u);
     assert.match(actorIntegration.calls.continuityUser, /沿已知传播链继续调查/u);
+    assert.match(actorIntegration.calls.continuitySystem, /世界采用双轨调度/u);
+    assert.match(actorIntegration.calls.continuityUser, /本轮非人物结构世界轨/u);
     assert.equal(actorIntegration.settings.actorShardMode, 'on');
     assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
     assert.deepEqual(actorIntegration.controls, {
@@ -5304,6 +5336,22 @@ try {
     assert.equal(actorIntegration.actorLedger.privateThoughtsExposed, false);
     assert.equal(
         actorIntegration.actorReceipts.some((receipt) => receipt.stage === 'world_settled'),
+        true,
+    );
+    assert.equal(
+        actorIntegration.diagnostic.currentChat.continuity.worldLanes.selected.length,
+        2,
+    );
+    assert.equal(
+        actorIntegration.diagnostic.currentChat.continuity.worldLanes.selected
+            .every((item) => item.independentOfActors === true),
+        true,
+    );
+    assert.equal(
+        actorIntegration.worldLaneReceipts.some((receipt) => (
+            receipt.laneType === 'environment'
+            && receipt.independentOfActors === true
+        )),
         true,
     );
     assert.deepEqual(

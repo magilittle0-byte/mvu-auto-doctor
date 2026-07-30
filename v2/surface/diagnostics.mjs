@@ -100,6 +100,28 @@ export function createPrivacySafeDiagnosticProjection({
             continuity: {
                 activeCount: Math.max(0, Number(chat?.continuity?.activeCount) || 0),
                 resolvedCount: Math.max(0, Number(chat?.continuity?.resolvedCount) || 0),
+                worldLanes: {
+                    turn: Math.max(
+                        0,
+                        Number(chat?.continuity?.worldLanes?.turn) || 0,
+                    ),
+                    maxLanes: Math.min(
+                        4,
+                        Math.max(
+                            0,
+                            Number(chat?.continuity?.worldLanes?.maxLanes) || 0,
+                        ),
+                    ),
+                    selected: (
+                        Array.isArray(chat?.continuity?.worldLanes?.selected)
+                            ? chat.continuity.worldLanes.selected
+                            : []
+                    ).slice(0, 4).map((item) => ({
+                        laneType: String(item?.laneType || ''),
+                        due: item?.due === true,
+                        independentOfActors: item?.independentOfActors === true,
+                    })),
+                },
             },
             forum: {
                 postCount: Math.max(0, Number(chat?.forum?.postCount) || 0),

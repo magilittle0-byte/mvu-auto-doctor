@@ -994,6 +994,189 @@ export function advanceContinuityClocks(value, {
     };
 }
 
+export function scheduleWorldLanes(value, {
+    turn,
+    maxLanes = 2,
+} = {}) {
+    const state = normalizeContinuityState(value, { maxThreads: 12 });
+    const scheduledTurn = boundedInteger(
+        turn,
+        state.turn,
+        Number.MAX_SAFE_INTEGER,
+        state.turn,
+    );
+    const limit = boundedInteger(maxLanes, 0, 4, 2);
+    const candidates = [];
+    const addCandidate = ({
+        laneType,
+        sourceId,
+        label,
+        updatedTurn = 0,
+        baseScore = 0,
+        dueScore = 0,
+        dueReason = '',
+        knowledge = 'hidden',
+        sourceThreads = [],
+    }) => {
+        const silenceTurns = Math.max(0, scheduledTurn - Number(updatedTurn || 0));
+        candidates.push({
+            laneType,
+            sourceId,
+            label: cleanText(label, 180),
+            score: baseScore + dueScore + Math.min(18, silenceTurns * 2),
+            due: dueScore > 0,
+            dueReason: cleanText(
+                dueReason || `已沉默${silenceTurns}轮，进入低频世界探索`,
+                300,
+            ),
+            silenceTurns,
+            knowledge: KNOWLEDGE.has(knowledge) ? knowledge : 'hidden',
+            sourceThreads: cleanList(sourceThreads, 8),
+            independentOfActors: true,
+        });
+    };
+
+    for (const item of state.world.environment.incidents) {
+        if (item.status === 'resolved') continue;
+        const remaining = Number(item.remainingTurns || 0);
+        const due = item.status === 'active' && remaining <= 1;
+        addCandidate({
+            laneType: 'environment',
+            sourceId: item.id,
+            label: item.title,
+            updatedTurn: item.updatedTurn,
+            baseScore: item.status === 'active' ? 80 : 45,
+            dueScore: due ? 35 : 0,
+            dueReason: due
+                ? `环境事件剩余窗口${remaining}轮，必须结算、转入冷却或说明具体阻塞`
+                : item.lastChange || item.summary,
+            knowledge: item.knowledge,
+            sourceThreads: item.sourceThreads,
+        });
+    }
+    if (
+        state.world.environment.summary
+        || state.world.environment.economy !== 'stable'
+    ) {
+        addCandidate({
+            laneType: 'environment',
+            sourceId: 'environment:economy',
+            label: `环境与经济：${state.world.environment.economy}`,
+            updatedTurn: state.world.environment.updatedTurn,
+            baseScore: state.world.environment.economy === 'stable' ? 40 : 58,
+            dueScore: 0,
+            dueReason: state.world.environment.summary
+                || state.world.environment.basis,
+            knowledge: 'observed',
+        });
+    }
+    for (const item of state.world.factions) {
+        if (item.condition === 'collapsed') continue;
+        const pressure = {
+            dominant: 4,
+            stable: 0,
+            divided: 12,
+            strained: 20,
+            declining: 24,
+        }[item.condition] || 0;
+        addCandidate({
+            laneType: 'faction',
+            sourceId: item.id,
+            label: item.name,
+            updatedTurn: item.updatedTurn,
+            baseScore: 60 + pressure,
+            dueScore: pressure >= 20 ? 8 : 0,
+            dueReason: item.goal || item.lastChange || item.summary,
+            knowledge: item.knowledge,
+            sourceThreads: item.sourceThreads,
+        });
+    }
+    for (const item of state.world.trends) {
+        if (item.status !== 'active') continue;
+        addCandidate({
+            laneType: 'trend',
+            sourceId: item.id,
+            label: item.name,
+            updatedTurn: item.updatedTurn,
+            baseScore: 50,
+            dueReason: item.summary || item.source,
+            knowledge: item.knowledge,
+            sourceThreads: item.sourceThreads,
+        });
+    }
+    for (const item of state.world.winds) {
+        const expiresSoon = item.expiresTurn > 0
+            && item.expiresTurn <= scheduledTurn + 1;
+        addCandidate({
+            laneType: 'public_signal',
+            sourceId: item.id,
+            label: item.topic,
+            updatedTurn: item.updatedTurn,
+            baseScore: 42 + item.strength * 5,
+            dueScore: expiresSoon ? 12 : 0,
+            dueReason: expiresSoon
+                ? `传播窗口将在第${item.expiresTurn}轮结束`
+                : item.content || item.source,
+            knowledge: item.knowledge,
+            sourceThreads: item.sourceThreads,
+        });
+    }
+    for (const item of state.world.influences) {
+        const expiresSoon = item.expiresTurn <= scheduledTurn + 1;
+        addCandidate({
+            laneType: 'causal',
+            sourceId: item.id,
+            label: item.trigger,
+            updatedTurn: item.updatedTurn,
+            baseScore: 52,
+            dueScore: expiresSoon ? 18 : 0,
+            dueReason: expiresSoon
+                ? `因果余波窗口将在第${item.expiresTurn}轮结束`
+                : item.fallout || item.impact,
+            knowledge: item.knowledge,
+            sourceThreads: item.sourceThreads,
+        });
+    }
+
+    const sorted = candidates.sort((left, right) => (
+        right.score - left.score
+        || Number(right.due) - Number(left.due)
+        || right.silenceTurns - left.silenceTurns
+        || left.laneType.localeCompare(right.laneType)
+        || left.sourceId.localeCompare(right.sourceId)
+    ));
+    const selected = [];
+    const seenTypes = new Set();
+    for (const candidate of sorted) {
+        if (selected.length >= limit) break;
+        if (seenTypes.has(candidate.laneType)) continue;
+        selected.push(candidate);
+        seenTypes.add(candidate.laneType);
+    }
+    for (const candidate of sorted) {
+        if (selected.length >= limit) break;
+        if (selected.includes(candidate)) continue;
+        selected.push(candidate);
+    }
+    const receipts = selected.map((candidate, index) => ({
+        receiptId: `world-lane:${scheduledTurn}:${candidate.laneType}:${candidate.sourceId}`,
+        turn: scheduledTurn,
+        rank: index + 1,
+        laneType: candidate.laneType,
+        sourceId: candidate.sourceId,
+        status: 'scheduled',
+        due: candidate.due,
+        dueReason: candidate.dueReason,
+        independentOfActors: true,
+    }));
+    return {
+        turn: scheduledTurn,
+        maxLanes: limit,
+        selected,
+        receipts,
+    };
+}
+
 export function continuityLedgerView(value, {
     chatId = '',
     maxThreads = 12,

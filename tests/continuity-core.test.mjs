@@ -18,6 +18,7 @@ import {
     mergeMarkerRecords,
     normalizeContinuityState,
     parseContinuityOutput,
+    scheduleWorldLanes,
 } from '../continuity-core.mjs';
 
 const marker = `
@@ -1185,6 +1186,97 @@ assert.notEqual(
 const scenarioLedger = continuityLedgerView(scenarioState);
 assert.equal(scenarioLedger.scenarioPlan.statusLabel, '进行中');
 assert.equal(scenarioLedger.scenarioPlan.latestAmendment.causeLabel, '世界因果链');
+
+const structuralWorldOnly = normalizeContinuityState({
+    chatId: 'world-lanes-no-actors',
+    turn: 12,
+    threads: [],
+    world: {
+        factions: [{
+            id: 'FAC-TIDE-GUILD',
+            name: '潮汐运输公会',
+            condition: 'strained',
+            goal: '在涨潮前恢复旧桥货运',
+            summary: '改道成本正持续上升',
+            scope: '港区',
+            knowledge: 'observed',
+            basis: '公开调度公告',
+            updatedTurn: 7,
+        }],
+        environment: {
+            economy: 'strained',
+            summary: '连续降雨正在压缩港区短途运力',
+            basis: '路况与运价记录',
+            updatedTurn: 8,
+            incidents: [{
+                id: 'INC-HIGH-TIDE',
+                title: '旧桥涨潮',
+                status: 'active',
+                summary: '桥面将在一轮内达到封闭水位',
+                scope: '港区旧桥',
+                remainingTurns: 1,
+                knowledge: 'observed',
+                basis: '潮位站公开读数',
+                updatedTurn: 11,
+            }],
+        },
+        trends: [{
+            id: 'TREND-RAIN',
+            name: '雨季延长',
+            status: 'active',
+            summary: '降雨周期比往年更长',
+            scope: '港区',
+            source: '气象记录',
+            knowledge: 'observed',
+            basis: '连续观测',
+            updatedTurn: 4,
+        }],
+    },
+});
+const structuralSchedule = scheduleWorldLanes(structuralWorldOnly, {
+    turn: 13,
+    maxLanes: 2,
+});
+assert.equal(structuralSchedule.selected.length, 2);
+assert.equal(structuralSchedule.selected[0].independentOfActors, true);
+assert.ok(
+    structuralSchedule.selected.some((item) => item.laneType === 'environment'),
+    '到期环境过程必须拥有独立于人物的调度位置',
+);
+assert.ok(
+    structuralSchedule.selected.some((item) => item.laneType === 'faction'),
+    '势力过程不得因没有人物候选而消失',
+);
+assert.equal(structuralSchedule.receipts.length, structuralSchedule.selected.length);
+assert.ok(
+    structuralSchedule.receipts.every((item) => item.status === 'scheduled'),
+);
+
+const boundedStructuralSchedule = scheduleWorldLanes(structuralWorldOnly, {
+    turn: 13,
+    maxLanes: 1,
+});
+assert.equal(boundedStructuralSchedule.selected.length, 1);
+assert.equal(boundedStructuralSchedule.selected[0].laneType, 'environment');
+
+const actorThreadDoesNotReplaceWorld = scheduleWorldLanes({
+    ...structuralWorldOnly,
+    threads: [{
+        id: 'WE-ACTOR-CONTACT',
+        title: '信使来访',
+        actors: ['信使'],
+        stage: 'advancing',
+        urgency: 4,
+    }],
+}, {
+    turn: 13,
+    maxLanes: 2,
+});
+assert.deepEqual(
+    actorThreadDoesNotReplaceWorld.selected.map((item) => item.sourceId),
+    structuralSchedule.selected.map((item) => item.sourceId),
+    '人物事件不得挤掉势力与环境自己的世界轨预算',
+);
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',

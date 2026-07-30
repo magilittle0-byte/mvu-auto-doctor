@@ -553,16 +553,22 @@ function loadAndValidateReport() {
     if (
         !affectedModel
         || affectedModel.result !== 'affected-paths-passed'
-        || affectedModel.attempts !== 1
-        || affectedModel.succeeded !== 1
+        || affectedModel.attempts !== 3
+        || affectedModel.succeeded !== 3
         || affectedModel.failed !== 0
-        || affectedModel.proxyStatuses?.join(',') !== '200'
-        || affectedModel.inputBytes?.length !== 1
-        || affectedModel.inputBytes[0] < 1
-        || affectedModel.doctorModelCallDelta !== 1
+        || affectedModel.proxyStatuses?.join(',') !== '200,200,200'
+        || affectedModel.inputBytes?.length !== 3
+        || affectedModel.inputBytes.some((bytes) => bytes < 1)
+        || affectedModel.doctorModelCallDelta !== 3
         || affectedModel.doctorRetryCount !== 0
         || affectedModel.doctorModelCompleted !== true
         || affectedModel.doctorFallbackUsed !== false
+        || affectedModel.appliedContinuityCalls < 1
+        || affectedModel.actorWorldSettled !== true
+        || affectedModel.actorReceiptCount < 1
+        || affectedModel.worldLaneTypes?.join(',') !== 'environment,faction'
+        || affectedModel.worldLaneReceiptCount < 2
+        || affectedModel.worldLaneIndependentOfActors !== true
         || affectedModel.secondModelStructureRepairAttempted !== false
         || affectedModel.databaseRuntimeLoadedDuringModelProbe !== false
         || affectedModel.syntheticFixtureUsed !== true

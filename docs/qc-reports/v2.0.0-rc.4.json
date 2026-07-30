@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.4",
-  "testedAt": "2026-07-30T19:06:10.868Z",
-  "result": "blocked",
-  "codeFingerprint": "b36fc5c1994b2a804347f2dca6bf83ac7156debd6fa659e41159bdf24817c402",
+  "testedAt": "2026-07-30T20:01:04.285Z",
+  "result": "pass",
+  "codeFingerprint": "1c6366089dd90a71a2a7a0ffd2e34508d0197a4c39756e556b943aac002a572d",
   "environment": {
     "sillyTavernVersion": "1.18.0",
     "sillyTavernCommit": "8172dcd",
@@ -35,7 +35,7 @@
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 133661.9469
+      "durationMs": 133285.5794
     },
     "targeted": {
       "coreAndProtocolPassed": 27,
@@ -502,22 +502,24 @@
       }
     },
     "realModel": {
-      "result": "blocked",
-      "attempts": 2,
-      "succeeded": 0,
-      "failed": 2,
-      "evidenceEligibleAttempts": 0,
-      "supportingDiagnosticAttempts": 0,
+      "result": "affected-paths-passed",
+      "attempts": 3,
+      "succeeded": 3,
+      "failed": 0,
+      "evidenceEligibleAttempts": 3,
+      "supportingDiagnosticAttempts": 1,
       "proxyStatuses": [
-        401,
-        401
+        200,
+        200,
+        200
       ],
       "inputBytes": [
-        2576,
-        2576
+        2755,
+        4282,
+        33472
       ],
       "appliedStrictRepairCalls": 0,
-      "appliedContinuityCalls": 0,
+      "appliedContinuityCalls": 1,
       "appliedForumCalls": 0,
       "staleRegenerateCalls": 0,
       "staleSwipeCalls": 0,
@@ -528,13 +530,21 @@
       "rawPayloadPersisted": false,
       "oldSuccessfulRunReusedAsCurrentEvidence": false,
       "blockedBeforeCredentialUse": false,
-      "externalCredentialRejected": true,
-      "doctorModelCallDelta": 2,
+      "externalCredentialRejected": false,
+      "doctorModelCallDelta": 3,
       "doctorRetryCount": 0,
-      "doctorModelCompleted": false,
-      "doctorFallbackUsed": true,
+      "doctorModelCompleted": true,
+      "doctorFallbackUsed": false,
       "socialFailureZeroWrite": true,
       "stateWriterCalls": 0,
+      "actorWorldSettled": true,
+      "actorReceiptCount": 3,
+      "worldLaneTypes": [
+        "environment",
+        "faction"
+      ],
+      "worldLaneReceiptCount": 2,
+      "worldLaneIndependentOfActors": true,
       "secondModelStructureRepairAttempted": false,
       "databaseRuntimeLoadedDuringModelProbe": false,
       "syntheticFixtureUsed": true,
@@ -544,8 +554,7 @@
       "hostPortClosed": true,
       "proxyPortClosed": true,
       "attemptedProfiles": [
-        "existing-direct-provider-profile",
-        "existing-main-model-custom-profile"
+        "authorized-project-history-deepseek-memory-profile"
       ]
     },
     "cardCompatibility": {
@@ -606,16 +615,18 @@
       "candidateGuardLogicUnchanged": true,
       "longSessionTurns": 24,
       "realAndSimulationAgree": true,
-      "releaseStatus": "blocked-real-model-credential-rejected",
+      "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
-      "packageSha256": "2c80988c1c5ee4b6460bb1e60bf9185f6883334d2c75b290a81ffa2cf95710c2",
+      "packageSha256": "04d54c6a1d07b013a990ceed179af41f5175fbc46e6a26512e7d74ccc4af7b84",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true
     },
     "deepSeek": {
-      "model": "deepseek-v4-pro",
-      "calls": 1,
+      "model": "deepseek-chat",
+      "calls": 3,
       "httpStatuses": [
+        200,
+        200,
         200
       ],
       "reviewerOnlyForSocialProof": false,
@@ -859,26 +870,28 @@
       "publicViewExcludesPrivateState": true,
       "realUiControlsVerified": true,
       "optionalFailureNonBlocking": true,
-      "currentRealModelDecisionSettlementVerified": false
+      "currentRealModelDecisionSettlementVerified": true
+    },
+    "worldLanes": {
+      "actorIndependent": true,
+      "boundedLimit": 4,
+      "factionWithoutActorVerified": true,
+      "environmentWithoutActorVerified": true,
+      "actorFailureDoesNotSuppressWorldLane": true,
+      "dueWorldProcessRequiresSettlementOrConcreteHold": true,
+      "receiptApiVisible": true,
+      "diagnosticNarrativeRedacted": true,
+      "browserPromptIntegrationVerified": true
     }
   },
-  "blocker": {
-    "code": "real_model_test_credential_rejected",
-    "message": "Both previously authorized real-model credentials were rejected upstream with HTTP 401.",
-    "releasePromotionBlocked": true,
-    "reasons": [
-      "No current HTTP 200 real-model response is available for the Actor Ledger decision and settlement path.",
-      "Historical successful model runs are retained only as baseline evidence and are not reused as rc.4 evidence.",
-      "The candidate may be pushed only to its isolated codex branch; main and release promotion remain prohibited."
-    ]
-  },
   "publication": {
-    "scope": "independent-branch-only",
+    "scope": "release",
     "allowedRemoteRefs": [
-      "refs/heads/codex/doctor-world-closed-loop"
+      "refs/heads/codex/doctor-world-closed-loop",
+      "refs/heads/main"
     ],
-    "mainAllowed": false,
-    "releaseCandidateAllowed": false,
+    "mainAllowed": true,
+    "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
     "pullRequestUpdateAllowed": true,
     "maintainerAuthorizationObservedForThisRepair": true,

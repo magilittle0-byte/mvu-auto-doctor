@@ -156,12 +156,53 @@ async function isPortClosed(port) {
     }
 }
 
+async function loadMemoryBrokerCredentials() {
+    const rawUrl = String(process.env.MVUAD_QC_CREDENTIAL_BROKER_URL || '').trim();
+    process.env.MVUAD_QC_CREDENTIAL_BROKER_URL = '';
+    if (!rawUrl) return { opencode: '', deepseek: '', source: 'local-profile' };
+    let brokerUrl = null;
+    try {
+        brokerUrl = new URL(rawUrl);
+    } catch {
+        throw new Error('Approved memory credential broker is unavailable');
+    }
+    if (
+        brokerUrl.protocol !== 'http:'
+        || brokerUrl.hostname !== '127.0.0.1'
+        || !brokerUrl.port
+        || !brokerUrl.pathname.startsWith('/credential/')
+        || brokerUrl.username
+        || brokerUrl.password
+    ) {
+        throw new Error('Approved memory credential broker is unavailable');
+    }
+    const response = await fetch(brokerUrl, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+        throw new Error('Approved memory credential broker is unavailable');
+    }
+    const body = await response.json();
+    return {
+        opencode: String(body?.opencode || '').trim(),
+        deepseek: String(body?.deepseek || '').trim(),
+        source: 'authorized-project-history-memory',
+    };
+}
+
+const brokerCredentials = await loadMemoryBrokerCredentials();
 const sourceSettings = JSON.parse(fs.readFileSync(sourceSettingsPath, 'utf8'));
 const sourceModel = sourceSettings.extension_settings?.mvu_auto_doctor || {};
 const directModelConfig = {
-    endpoint: String(sourceModel.connectionEndpoint || '').trim(),
-    apiKey: String(sourceModel.connectionApiKey || '').trim(),
-    model: String(sourceModel.connectionModel || '').trim(),
+    endpoint: brokerCredentials.deepseek
+        ? `http://127.0.0.1:${proxyPort}/v1`
+        : String(sourceModel.connectionEndpoint || '').trim(),
+    apiKey: brokerCredentials.deepseek
+        || String(sourceModel.connectionApiKey || '').trim(),
+    model: brokerCredentials.deepseek
+        ? 'deepseek-chat'
+        : String(sourceModel.connectionModel || '').trim(),
     proxy: 'deepseek',
 };
 const sourceSecrets = JSON.parse(fs.readFileSync(sourceSecretsPath, 'utf8'));
@@ -173,6 +214,9 @@ const activeCustomSecret = Array.isArray(sourceSecrets.api_key_custom)
     : null;
 const customBase = String(sourceSettings.oai_settings?.custom_url || '').trim();
 const customModel = String(sourceSettings.oai_settings?.custom_model || '').trim();
+const brokerSupplied = (
+    brokerCredentials.source === 'authorized-project-history-memory'
+);
 let customOrigin = null;
 try {
     customOrigin = new URL(customBase).origin;
@@ -182,13 +226,18 @@ try {
 const approvedCustom = (
     sourceSettings.oai_settings?.chat_completion_source === 'custom'
     && customOrigin === 'https://opencode.ai'
-    && activeCustomSecret
+    && (
+        brokerSupplied
+            ? brokerCredentials.opencode
+            : activeCustomSecret
+    )
     && customModel
 );
 const modelConfig = approvedCustom
     ? {
         endpoint: `http://127.0.0.1:${proxyPort}/v1`,
-        apiKey: String(activeCustomSecret.value || '').trim(),
+        apiKey: brokerCredentials.opencode
+            || String(activeCustomSecret.value || '').trim(),
         model: customModel,
         proxy: 'opencode',
     }
@@ -246,6 +295,7 @@ const report = {
         syntheticFixture: true,
         originalUserDataModified: false,
         model: modelConfig.model,
+        credentialSource: brokerCredentials.source,
         candidateVersion,
         candidateIndexSha256: sha256(
             fs.readFileSync(path.join(doctorRoot, 'index.js')),
@@ -476,7 +526,10 @@ try {
             {
                 is_user: false,
                 is_system: false,
-                mes: 'The subject becomes fanatically loyal immediately.\n'
+                mes: '<content>The subject becomes fanatically loyal immediately. '
+                    + 'At midnight, the public North Harbor tide gauge shows that '
+                    + 'the old bridge will close within one turn. Ada reads the '
+                    + 'public notice while standing in North Harbor.</content>\n'
                     + '<UpdateVariable><Analysis>synthetic relationship jump</Analysis>'
                     + '<JSONPatch>[]</JSONPatch></UpdateVariable>',
                 swipe_id: 0,
@@ -545,8 +598,79 @@ try {
 
         const callsBefore = window.MvuAutoDoctorAPI.getModelCallStats();
         const audit = await window.MvuAutoDoctorAPI.auditSocialRelations();
-        const callsAfter = window.MvuAutoDoctorAPI.getModelCallStats();
         const latestAudit = window.MvuAutoDoctorAPI.getSocialAudits().at(0) || {};
+        Object.assign(settings, {
+            continuityMode: 'on',
+            builtInContinuityEnabled: true,
+            continuityAutonomy: 'living',
+            continuityMaxThreads: 12,
+            continuityMaxVisible: 2,
+            actorShardMode: 'on',
+            actorShardMaxWorkers: 1,
+            actorLedgerMaxActorsPerTurn: 1,
+            actorLedgerExplorationSlots: 0,
+            actorLedgerCollisionIntensity: 2,
+        });
+        syntheticContext.chatMetadata.mvu_auto_doctor = {
+            continuity: {
+                version: 5,
+                chatId: syntheticContext.chatId,
+                turn: 3,
+                threads: [{
+                    id: 'QC-ACTOR-ADA',
+                    title: 'Ada checks North Harbor freight records',
+                    kind: 'parallel',
+                    eventType: 'progress',
+                    level: 2,
+                    origin: 'setting_independent',
+                    relation: 'independent',
+                    stage: 'advancing',
+                    stageProgress: 3,
+                    summary: 'Ada is checking public freight records in North Harbor.',
+                    nextBeat: 'Ada will compare the midnight arrival list.',
+                    trigger: 'The midnight shift begins.',
+                    seedBasis: 'Synthetic QC setting: North Harbor freight rules.',
+                    actors: ['Ada'],
+                    locations: ['North Harbor'],
+                    knowledge: 'observed',
+                    urgency: 3,
+                }],
+                world: {
+                    factions: [{
+                        id: 'FAC-QC-HARBOR',
+                        name: 'North Harbor Freight Union',
+                        condition: 'strained',
+                        goal: 'Reroute freight before the old bridge closes.',
+                        summary: 'Public rerouting costs are rising.',
+                        scope: 'North Harbor',
+                        knowledge: 'observed',
+                        basis: 'Synthetic public dispatch notice.',
+                        updatedTurn: 1,
+                    }],
+                    environment: {
+                        economy: 'strained',
+                        summary: 'The rising tide is reducing short-haul capacity.',
+                        basis: 'Synthetic public tide gauge.',
+                        updatedTurn: 2,
+                        incidents: [{
+                            id: 'INC-QC-TIDE',
+                            title: 'North Harbor rising tide',
+                            status: 'active',
+                            summary: 'The old bridge reaches closure level within one turn.',
+                            scope: 'North Harbor',
+                            remainingTurns: 1,
+                            knowledge: 'observed',
+                            basis: 'Synthetic public tide gauge.',
+                            updatedTurn: 3,
+                        }],
+                    },
+                },
+            },
+        };
+        const continuityResult = await window.MvuAutoDoctorAPI.runContinuity();
+        const callsAfter = window.MvuAutoDoctorAPI.getModelCallStats();
+        const actorReceipts = window.MvuAutoDoctorAPI.getActorActionReceipts();
+        const worldLaneReceipts = window.MvuAutoDoctorAPI.getWorldLaneReceipts();
         settings.connectionApiKey = '';
         config.apiKey = '';
         return {
@@ -574,6 +698,19 @@ try {
                 && latestData.stat_data.characters.Subject.trust === 40
                 && latestData.stat_data.characters.Subject.relationship === 'fanatic'
             ),
+            continuityStatus: continuityResult?.status || '',
+            actorWorldSettled: actorReceipts.some(
+                (receipt) => receipt.stage === 'world_settled',
+            ),
+            actorReceiptCount: actorReceipts.length,
+            worldLaneTypes: [...new Set(
+                worldLaneReceipts.map((receipt) => receipt.laneType),
+            )].sort(),
+            worldLaneReceiptCount: worldLaneReceipts.length,
+            worldLaneIndependentOfActors: worldLaneReceipts.length > 0
+                && worldLaneReceipts.every(
+                    (receipt) => receipt.independentOfActors === true,
+                ),
             promptInfo: window.MvuAutoDoctorAPI.getLastPromptInfo(),
         };
     }, modelConfig);
@@ -613,13 +750,18 @@ try {
         errorDigests: [...new Set(runtimeErrors.map((entry) => entry.digest))],
     };
     if (
-        modelResult.modelCallDelta !== 1
+        modelResult.modelCallDelta !== 3
         || modelResult.attemptCount !== 1
         || modelResult.modelAttempted !== true
         || modelResult.modelCompleted !== true
         || modelResult.fallbackUsed === true
-        || metrics.length !== 1
-        || metrics[0]?.status !== 200
+        || modelResult.continuityStatus !== 'applied'
+        || modelResult.actorWorldSettled !== true
+        || modelResult.worldLaneIndependentOfActors !== true
+        || !modelResult.worldLaneTypes.includes('environment')
+        || !modelResult.worldLaneTypes.includes('faction')
+        || metrics.length !== 3
+        || metrics.some((metric) => metric.status !== 200)
         || credentialDelete.status !== 200
         || proxyHealthAfter.credentialLoaded !== false
     ) {
@@ -646,6 +788,8 @@ try {
     };
 } finally {
     modelConfig.apiKey = '';
+    brokerCredentials.opencode = '';
+    brokerCredentials.deepseek = '';
     if (browser) await browser.close().catch(() => undefined);
     const serverStopped = await stopChild(server);
     const proxyStopped = proxyPreexisting ? false : await stopChild(proxy);
