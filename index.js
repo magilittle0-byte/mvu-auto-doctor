@@ -100,7 +100,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.2';
+const VERSION = '2.0.0-rc.3';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 8;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -158,9 +158,9 @@ const DEFAULTS = Object.freeze({
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
     floatingOrbEnabled: true,
-    continuitySettingsVersion: 5,
+    continuitySettingsVersion: 6,
     continuityMaxThreads: 12,
-    continuityMaxVisible: 1,
+    continuityMaxVisible: 2,
     continuityInjectionBudgetChars: 6000,
     continuityContextMessages: 12,
     continuityMaxTokens: 12288,
@@ -333,6 +333,20 @@ function getSettings() {
     }
     if (!['conservative', 'living', 'expansive'].includes(settings.continuityAutonomy)) {
         settings.continuityAutonomy = 'living';
+        changed = true;
+    }
+    const normalizedContinuityMaxVisible = Math.min(
+        4,
+        Math.max(
+            1,
+            Math.round(
+                Number(settings.continuityMaxVisible)
+                || DEFAULTS.continuityMaxVisible,
+            ),
+        ),
+    );
+    if (settings.continuityMaxVisible !== normalizedContinuityMaxVisible) {
+        settings.continuityMaxVisible = normalizedContinuityMaxVisible;
         changed = true;
     }
     settings.continuityInjectionBudgetChars = Math.min(
@@ -572,6 +586,16 @@ function getSettings() {
             settings.continuityMaxTokens = DEFAULTS.continuityMaxTokens;
         }
         settings.continuitySettingsVersion = 5;
+        changed = true;
+    }
+    if (previousContinuitySettingsVersion < 6) {
+        // rc.2 had no player-facing control and always exposed at most one
+        // main-world interface. Migrate that hidden default to two so events
+        // whose independent triggers mature together can land in one turn.
+        if (Number(settings.continuityMaxVisible) === 1) {
+            settings.continuityMaxVisible = DEFAULTS.continuityMaxVisible;
+        }
+        settings.continuitySettingsVersion = 6;
         changed = true;
     }
     if (changed) context.saveSettingsDebounced?.();
@@ -6663,7 +6687,7 @@ function continuityInjectionCandidates(state) {
 }
 
 function prepareContinuityInjectionBatch(namespace, state, {
-    maxVisible = 1,
+    maxVisible = 2,
     budgetChars = 6000,
     isReroll = false,
 } = {}) {
@@ -10778,6 +10802,15 @@ function buildSettingsPanel() {
                                     <option value="expansive">活跃·更多幕后事件</option>
                                 </select>
                             </label>
+                            <label class="mvuad-number">
+                                <span>每回合最多进入正文的世界接口</span>
+                                <input class="text_pole mvuad-continuity-max-visible"
+                                    type="number" min="1" max="4" step="1">
+                            </label>
+                            <div class="mvuad-description">
+                                默认2，可设1—4；实际仍允许采用0条。多个事件只有在各自触发条件已经成熟，
+                                或共享同一时间、地点、人物、势力、资源或因果簇时才可共同爆发，并继续受注入预算限制。
+                            </div>
                             <label class="mvuad-select">
                                 <span>NPC 分片</span>
                                 <select class="text_pole mvuad-actor-shard-mode">
@@ -11022,6 +11055,18 @@ function buildSettingsPanel() {
     continuityAutonomy.value = getSettings().continuityAutonomy;
     continuityAutonomy.addEventListener('change', () => {
         getSettings().continuityAutonomy = continuityAutonomy.value;
+        saveSettings();
+        applyContinuityInjection();
+    });
+    const continuityMaxVisible = wrapper.querySelector('.mvuad-continuity-max-visible');
+    continuityMaxVisible.value = String(getSettings().continuityMaxVisible);
+    continuityMaxVisible.addEventListener('change', () => {
+        const normalized = Math.min(
+            4,
+            Math.max(1, Math.round(Number(continuityMaxVisible.value) || 2)),
+        );
+        getSettings().continuityMaxVisible = normalized;
+        continuityMaxVisible.value = String(normalized);
         saveSettings();
         applyContinuityInjection();
     });

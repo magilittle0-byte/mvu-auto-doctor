@@ -808,10 +808,18 @@ try {
         hardDetails: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-details')?.textContent || '',
         hasSettingsLedger: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger'),
         hasWorldPanelButton: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-continuity-open'),
+        worldInterfaceLimit: document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-continuity-max-visible',
+        )?.value || '',
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.2');
+    assert.equal(continuity.version, '2.0.0-rc.3');
+    assert.equal(
+        continuity.worldInterfaceLimit,
+        '2',
+        '世界接口默认应允许两个成熟事件在同一回合共同爆发',
+    );
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -1177,6 +1185,13 @@ try {
     });
     assert.ok(worldReceipt.registered.length <= 1800, '世界注入必须遵守字符预算');
     assert.match(worldReceipt.registered, /注入批次=.*收据=.*预算=1800字符/u);
+    assert.match(worldReceipt.registered, /可自然采用0—2条接口/u);
+    assert.match(worldReceipt.registered, /多个触发条件在同一时点分别成熟/u);
+    assert.equal(
+        worldReceipt.receipts.batches.at(-1).selectedCount,
+        2,
+        '配置为2时必须生成两条逐事件收据',
+    );
     const consumedWorldReceipt = worldReceipt.receipts.queue.find(
         (receipt) => receipt.threadId === 'WE-TRACE-01',
     );
@@ -2453,7 +2468,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.2');
+    assert.equal(lifecycle.version, '2.0.0-rc.3');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

@@ -2024,7 +2024,7 @@ export function mergeMarkerRecords(state, records, {
 
 export function buildContinuityInjection(state, {
     director = 'standalone',
-    maxVisible = 1,
+    maxVisible = 2,
 } = {}) {
     const normalized = normalizeContinuityState(state, { maxThreads: 12 });
     const canReachMain = (thread) => !!thread
@@ -2135,10 +2135,11 @@ export function buildContinuityInjection(state, {
                     : director === 'mixed'
                         ? '预设、缝合怪或世界引擎负责剧情与世界提案；本账本只做去重、接续与回收。'
                         : '当前没有检测到外部剧情推进器；可按账本低频推进世界支线。';
-    const candidateLimit = Math.min(
+    const visibleLimit = Math.min(
         4,
-        Math.max(1, Math.max(0, Number(maxVisible) || 1) * 3),
+        Math.max(1, Math.round(Number(maxVisible) || 2)),
     );
+    const candidateLimit = visibleLimit;
     const rows = active
         .sort((left, right) => (
             Number(right.relation === 'converging')
@@ -2201,7 +2202,8 @@ export function buildContinuityInjection(state, {
             ? `最近世界调度=${CONTINUITY_TICK_LABELS[normalized.lastTick.action] || normalized.lastTick.action}；对象=${normalized.lastTick.threadId || '全局'}；依据=${tickReason}`
             : '最近世界调度=尚未运行。',
         '以下只包含已经接入主线或具备真实汇流证据的“小型主线接口”，不是完整后台账本；未列出的复杂支线仍会在幕后独立演化。',
-        `本回合可自然采用0—${Math.max(0, Number(maxVisible) || 1)}条接口；没有合适叙事位置时必须采用0条，禁止为了证明世界引擎存在而生硬插入。`,
+        `本回合可自然采用0—${visibleLimit}条接口；没有合适叙事位置时必须采用0条，禁止为了证明世界引擎存在而生硬插入。`,
+        '多个触发条件在同一时点分别成熟，或事件共享同一时间、地点、人物、势力、资源或直接因果簇时，可以在同一回合共同爆发；上限不是要求凑数，也不得把互不相关、尚未成熟的事件强行拼成一场。',
         '只可推动NPC、势力、环境、约定与敌方行动；禁止替玩家角色决定、说话、移动、消费资源或追加检定。',
         '外部预设、缝合怪或世界引擎安排的未来桥段都只是条件式导演提案：成功路线只在真实成功后启用，失败路线也必须保留，不得把计划目标当成已发生事实。',
         hasScenarioPlan

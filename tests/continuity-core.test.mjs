@@ -150,13 +150,48 @@ assert.equal(ledger.resolved[0].kindLabel, '约定/承诺');
 
 const injection = buildContinuityInjection(state, {
     director: 'mixed',
-    maxVisible: 1,
+    maxVisible: 2,
 });
 assert.match(injection, /预设、缝合怪或世界引擎负责剧情与世界提案/u);
-assert.match(injection, /可自然采用0—1条接口/u);
+assert.match(injection, /可自然采用0—2条接口/u);
+assert.match(injection, /多个触发条件在同一时点分别成熟/u);
 assert.match(injection, /禁止替玩家角色决定/u);
 assert.match(injection, /PE-港口-哨兵-01/u);
 assert.match(injection, /禁止为了展示伏笔而强行写入正文/u);
+
+const burstState = normalizeContinuityState({
+    ...state,
+    threads: [
+        {
+            ...state.threads[0],
+            id: 'BURST-01',
+            title: '城门同时封锁',
+            urgency: 4,
+        },
+        {
+            ...state.threads[0],
+            id: 'BURST-02',
+            title: '码头同时起火',
+            urgency: 3,
+        },
+        {
+            ...state.threads[0],
+            id: 'BURST-03',
+            title: '远郊同时降雨',
+            urgency: 1,
+        },
+    ],
+}, { chatId: 'chat-a', maxThreads: 4 });
+const boundedBurstInjection = buildContinuityInjection(burstState, {
+    maxVisible: 2,
+});
+assert.match(boundedBurstInjection, /城门同时封锁/u);
+assert.match(boundedBurstInjection, /码头同时起火/u);
+assert.doesNotMatch(
+    boundedBurstInjection,
+    /远郊同时降雨/u,
+    '注入上限为2时不得暗中列出第3个剧情接口',
+);
 
 const livingBase = normalizeContinuityState({
     chatId: 'living-chat',
@@ -389,7 +424,7 @@ const matureConvergence = enforceContinuityPolicy(
 assert.equal(matureConvergence.threads[0].relation, 'converging');
 assert.deepEqual(matureConvergence.threads[0].propagation, ['WIND-01']);
 const matureInjection = buildContinuityInjection(matureConvergence);
-assert.match(matureInjection, /可自然采用0—1条接口/u);
+assert.match(matureInjection, /可自然采用0—2条接口/u);
 assert.match(matureInjection, /常用药材报价上涨/u);
 assert.match(matureInjection, /旧城药材延迟/u);
 assert.doesNotMatch(

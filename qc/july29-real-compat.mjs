@@ -454,6 +454,9 @@ try {
                 element.textContent || '',
             )
         )).length;
+        const worldInterfaceLimit = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-continuity-max-visible',
+        );
         return {
             width: window.innerWidth,
             height: window.innerHeight,
@@ -472,6 +475,11 @@ try {
                 document.documentElement.scrollWidth > document.documentElement.clientWidth,
             tabs,
             narrativeRewriteControlCount,
+            worldInterfaceLimit: {
+                value: worldInterfaceLimit?.value || '',
+                min: worldInterfaceLimit?.min || '',
+                max: worldInterfaceLimit?.max || '',
+            },
         };
     };
     const mobileUi = await page.evaluate(inspectPanel);
@@ -486,6 +494,10 @@ try {
             && desktopUi.horizontalOverflow === false
             && mobileUi.narrativeRewriteControlCount === 0
             && desktopUi.narrativeRewriteControlCount === 0
+            && mobileUi.worldInterfaceLimit.value === '2'
+            && mobileUi.worldInterfaceLimit.min === '1'
+            && mobileUi.worldInterfaceLimit.max === '4'
+            && desktopUi.worldInterfaceLimit.value === '2'
         ) ? 'pass' : 'fail',
         mobile: mobileUi,
         desktop: desktopUi,
