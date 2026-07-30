@@ -14,8 +14,19 @@ const sourceSettingsPath = path.join(
     'default-user',
     'settings.json',
 );
+const legacyPublicDoctorRoot = path.join(
+    stRoot,
+    'public',
+    'scripts',
+    'extensions',
+    'third-party',
+    'mvu-auto-doctor',
+);
 const hostPort = 8011;
 const proxyPort = 9328;
+const candidateVersion = JSON.parse(
+    fs.readFileSync(path.join(doctorRoot, 'manifest.json'), 'utf8'),
+).version;
 const bundledNodeModules = path.join(
     process.env.USERPROFILE || '',
     '.cache',
@@ -78,6 +89,7 @@ function copyDoctorRuntime(targetRoot) {
         'social-core.mjs',
         'style.css',
     ];
+    fs.rmSync(targetRoot, { recursive: true, force: true });
     fs.mkdirSync(targetRoot, { recursive: true });
     for (const relativePath of rootFiles) {
         fs.copyFileSync(
@@ -161,6 +173,9 @@ if (
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mvuad-real-model-qc-'));
 const resolvedTemp = path.resolve(tempRoot);
+const legacyPublicBackupRoot = path.join(tempRoot, 'legacy-public-doctor-backup');
+const legacyPublicExisted = fs.existsSync(legacyPublicDoctorRoot);
+let legacyPublicRestored = false;
 if (
     path.dirname(resolvedTemp) !== path.resolve(os.tmpdir())
     || !path.basename(resolvedTemp).startsWith('mvuad-real-model-qc-')
@@ -192,6 +207,11 @@ const report = {
         syntheticFixture: true,
         originalUserDataModified: false,
         model: modelConfig.model,
+        candidateVersion,
+        candidateIndexSha256: sha256(
+            fs.readFileSync(path.join(doctorRoot, 'index.js')),
+        ),
+        legacyPublicRuntimeTemporarilyReplaced: true,
     },
     runtime: {},
     cleanup: {},
@@ -214,6 +234,12 @@ try {
         'extensions',
         'mvu-auto-doctor',
     ));
+    if (legacyPublicExisted) {
+        fs.cpSync(legacyPublicDoctorRoot, legacyPublicBackupRoot, {
+            recursive: true,
+        });
+    }
+    copyDoctorRuntime(legacyPublicDoctorRoot);
 
     try {
         const existingHealth = await (
@@ -264,6 +290,14 @@ try {
     ) {
         throw new Error('Memory-only model proxy health check failed');
     }
+    try {
+        const occupied = await fetch(`http://127.0.0.1:${hostPort}/`, {
+            signal: AbortSignal.timeout(1_000),
+        });
+        if (occupied) throw new Error('isolated QC host port is already occupied');
+    } catch (error) {
+        if (/already occupied/u.test(String(error?.message || error))) throw error;
+    }
 
     server = spawn(process.execPath, [
         'server.js',
@@ -288,6 +322,12 @@ try {
         });
     }
     const hostResponse = await waitForHttp(`http://127.0.0.1:${hostPort}/`);
+    if (
+        server.exitCode !== null
+        || runtimeErrors.some((entry) => entry.owner === 'host')
+    ) {
+        throw new Error('isolated SillyTavern server did not own the QC port');
+    }
 
     const systemBrowser = [
         process.env.MVUAD_BROWSER_EXECUTABLE_PATH,
@@ -506,6 +546,9 @@ try {
     const proxyHealthAfter = await (
         await fetch(`http://127.0.0.1:${proxyPort}/health`)
     ).json();
+    if (modelResult.doctorVersion !== candidateVersion) {
+        throw new Error('served doctor version does not match the candidate');
+    }
     report.runtime = {
         hostHttpStatus: hostResponse.status,
         credentialPreloadedInMemoryProxy: proxyPreexisting,
@@ -546,6 +589,10 @@ try {
     report.failure = {
         code: /profile is unavailable/u.test(safeMessage)
             ? 'approved_model_profile_unavailable'
+            : /already occupied|did not own the QC port/u.test(safeMessage)
+                ? 'isolated_qc_port_not_owned'
+            : /doctor version does not match/u.test(safeMessage)
+                ? 'candidate_version_mismatch'
             : /acceptance criteria failed/u.test(safeMessage)
                 ? 'real_model_acceptance_failed'
                 : /service did not become ready/u.test(safeMessage)
@@ -562,6 +609,19 @@ try {
     const proxyPortClosed = proxyPreexisting
         ? false
         : await isPortClosed(proxyPort);
+    fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
+    if (legacyPublicExisted) {
+        fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
+            recursive: true,
+        });
+    }
+    legacyPublicRestored = legacyPublicExisted
+        ? (
+            fs.existsSync(path.join(legacyPublicDoctorRoot, 'index.js'))
+            && sha256(fs.readFileSync(path.join(legacyPublicDoctorRoot, 'index.js')))
+                === sha256(fs.readFileSync(path.join(legacyPublicBackupRoot, 'index.js')))
+        )
+        : !fs.existsSync(legacyPublicDoctorRoot);
     fs.rmSync(resolvedTemp, { recursive: true, force: true });
     report.cleanup = {
         browserClosed: browser !== null,
@@ -571,6 +631,7 @@ try {
         hostPortClosed,
         proxyPortClosed,
         temporaryDataRemoved: !fs.existsSync(resolvedTemp),
+        legacyPublicRuntimeRestored: legacyPublicRestored,
         credentialClearedFromNodeMemory: modelConfig.apiKey === '',
         originalUserDataModified: false,
     };

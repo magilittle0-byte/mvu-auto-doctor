@@ -811,7 +811,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.1');
+    assert.equal(continuity.version, '2.0.0-rc.2');
     assert.equal(
         continuity.calls.repairOptions[0]?.maxTokens,
         8192,
@@ -2453,7 +2453,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.1');
+    assert.equal(lifecycle.version, '2.0.0-rc.2');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2742,6 +2742,40 @@ try {
     );
     assert.doesNotMatch(sameTurnSettle.status, /目标回复正文已经变化/u);
     await sameTurnSettlePage.close();
+
+    const stuckBusyFlagPage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await stuckBusyFlagPage.goto(`http://127.0.0.1:${port}/`, {
+        waitUntil: 'networkidle',
+    });
+    await stuckBusyFlagPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await stuckBusyFlagPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.extensionSettings.mvu_auto_doctor.delayMs = 300;
+        window.Mvu.isDuringExtraAnalysis = () => true;
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await stuckBusyFlagPage.waitForFunction(() => (
+        window.__TEST__.calls.model.filter((kind) => kind === 'repair').length === 1
+    ), null, { timeout: 15000 });
+    const stuckBusyFlagResult = await stuckBusyFlagPage.evaluate(() => ({
+        repairCalls: window.__TEST__.calls.model.filter((kind) => kind === 'repair').length,
+        replacements: window.__TEST__.calls.replace.length,
+        operationText: [...document.querySelectorAll('.mvuad-oplog-text')]
+            .map((element) => element.textContent || '')
+            .join('\n'),
+    }));
+    assert.equal(
+        stuckBusyFlagResult.repairCalls,
+        1,
+        '正文和变量快照稳定时，卡住的 MVU 忙碌标记不得长期阻塞变量医生',
+    );
+    assert.equal(stuckBusyFlagResult.replacements, 1);
+    assert.match(stuckBusyFlagResult.operationText, /忙碌标记持续未释放/u);
+    assert.match(stuckBusyFlagResult.operationText, /数据库不参与/u);
+    await stuckBusyFlagPage.close();
 
     const queuedManualPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await queuedManualPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -4273,10 +4307,86 @@ try {
         };
     });
     assert.equal(maxRetryResult.result.status, 'failed');
-    assert.equal(maxRetryResult.result.attempts, 2);
-    assert.equal(maxRetryResult.calls, 2, '手动连续分析失败时整轮最多尝试两次');
+    assert.equal(maxRetryResult.result.attempts, 4);
+    assert.equal(maxRetryResult.calls, 4, '默认失败重试3次时，同一主任务最多调用4次');
     assert.equal(maxRetryResult.replacements, 0);
+    assert.equal(maxRetryResult.result.zeroWrite, true);
+    assert.match(maxRetryResult.result.reason, /已尝试 4\/4 次/u);
+    assert.match(maxRetryResult.result.reason, /怎么解决/u);
+    assert.match(
+        maxRetryResult.result.reason,
+        /无需重 roll|不需要重 roll|不要为修变量而重 roll/u,
+    );
     await maxRetryPage.close();
+
+    const configurableRetryPage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await configurableRetryPage.goto(`http://127.0.0.1:${port}/`, {
+        waitUntil: 'networkidle',
+    });
+    await configurableRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const configurableRetryResult = await configurableRetryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const input = document.querySelector('.mvuad-variable-retry-count');
+        input.value = '0';
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        t.setMode('missing-always');
+        const callsBefore = t.calls.model.length;
+        const result = await window.MvuAutoDoctorAPI.runLatest();
+        return {
+            result,
+            calls: t.calls.model.length - callsBefore,
+            saved: t.context.extensionSettings.mvu_auto_doctor.variableRetryLimit,
+            inputValue: input.value,
+            replacements: t.calls.replace.length,
+        };
+    });
+    assert.equal(configurableRetryResult.saved, 0);
+    assert.equal(configurableRetryResult.inputValue, '0');
+    assert.equal(configurableRetryResult.calls, 1, '玩家设为0次时首次失败后不得重试');
+    assert.equal(configurableRetryResult.result.attempts, 1);
+    assert.equal(configurableRetryResult.replacements, 0);
+    await configurableRetryPage.close();
+
+    const automaticRetryPage = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+    });
+    await automaticRetryPage.goto(`http://127.0.0.1:${port}/`, {
+        waitUntil: 'networkidle',
+    });
+    await automaticRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await automaticRetryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        t.context.extensionSettings.mvu_auto_doctor.delayMs = 300;
+        t.setMode('missing-always');
+        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
+        await t.context.eventSource.emit('message_received', 2);
+    });
+    await automaticRetryPage.waitForFunction(() => (
+        window.__TEST__.calls.model.filter((kind) => kind === 'repair').length === 4
+    ), null, { timeout: 30000 });
+    await automaticRetryPage.waitForFunction(() => (
+        Object.values(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor
+                ?.phase6Runtime?.records || {},
+        ).filter((entry) => entry?.value?.state === 'failed').length === 1
+    ), null, { timeout: 30000 });
+    const automaticRetryResult = await automaticRetryPage.evaluate(() => ({
+        repairCalls: window.__TEST__.calls.model.filter((kind) => kind === 'repair').length,
+        replacements: window.__TEST__.calls.replace.length,
+        failedRecords: Object.values(
+            window.__TEST__.context.chatMetadata?.mvu_auto_doctor
+                ?.phase6Runtime?.records || {},
+        ).filter((entry) => entry?.value?.state === 'failed').length,
+        status: window.MvuAutoDoctorAPI.getStatus(),
+    }));
+    assert.equal(automaticRetryResult.repairCalls, 4);
+    assert.equal(automaticRetryResult.replacements, 0);
+    assert.equal(automaticRetryResult.failedRecords, 1, '自动重试必须仍归属于一个主任务');
+    assert.match(automaticRetryResult.status, /零写入/u);
+    assert.match(automaticRetryResult.status, /怎么解决/u);
+    await automaticRetryPage.close();
 
     const recoveryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await recoveryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -4568,7 +4678,10 @@ try {
         return { result, calls: structuredClone(t.calls) };
     });
     assert.equal(busy.result.status, 'busy');
-    assert.match(busy.result.reason, /仍在更新/u);
+    assert.match(busy.result.reason, /正文已经生成/u);
+    assert.match(busy.result.reason, /正在分析.*持续未释放/u);
+    assert.match(busy.result.reason, /数据库填表不参与/u);
+    assert.match(busy.result.reason, /怎么解决/u);
     assert.equal(busy.calls.replace.length, 0);
     assert.equal(busy.calls.model.length, 0, 'MVU 持续繁忙时必须在调用模型前安全终止');
     await busyPage.close();

@@ -100,7 +100,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.1';
+const VERSION = '2.0.0-rc.2';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 8;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -139,11 +139,11 @@ const DEFAULTS = Object.freeze({
     delayMs: 1600,
     contextMessages: 8,
     maxTokens: 8192,
-    variableRetryLimit: 2,
+    variableRetryLimit: 3,
     variablePromptAddon: '',
-    variableAuditSettingsVersion: 2,
+    variableAuditSettingsVersion: 3,
     modelTimeoutMs: 120000,
-    mvuIdleTimeoutMs: 120000,
+    mvuIdleTimeoutMs: 8000,
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
     hardContractCorrectionEnabled: false,
@@ -519,9 +519,23 @@ function getSettings() {
         settings.variableAuditSettingsVersion = 2;
         changed = true;
     }
+    if (previousVariableAuditSettingsVersion < 3) {
+        // Retries are now user-configurable for both automatic and manual
+        // variable checks. The value means retries after the initial request,
+        // not total attempts, so the default 3 allows at most 4 calls inside
+        // one target-bound primary task.
+        settings.variableRetryLimit = DEFAULTS.variableRetryLimit;
+        if (Number(settings.mvuIdleTimeoutMs) === 120000) {
+            settings.mvuIdleTimeoutMs = DEFAULTS.mvuIdleTimeoutMs;
+        }
+        settings.variableAuditSettingsVersion = 3;
+        changed = true;
+    }
     settings.variableRetryLimit = Math.min(
-        2,
-        Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
+        5,
+        Math.max(0, Number.isFinite(Number(settings.variableRetryLimit))
+            ? Math.round(Number(settings.variableRetryLimit))
+            : DEFAULTS.variableRetryLimit),
     );
     if (settings.hardContractCorrectionEnabled !== false) {
         settings.hardContractCorrectionEnabled = false;
@@ -852,7 +866,14 @@ function scheduleOperationLogSave() {
 }
 
 function recordOperation(category, text, kind = '') {
-    const value = String(text || '').trim();
+    const scope = {
+        变量: 'variable',
+        硬合同: 'contract',
+        人物关系: 'social',
+        世界: 'world',
+        论坛: 'forum',
+    }[category] || 'variable';
+    const value = actionableStatusText(text, kind, scope);
     if (!value) return;
     const last = operationLog[0];
     if (last && last.category === category && last.text === value) {
@@ -899,8 +920,21 @@ function renderOperationLog() {
     }
 }
 
+function actionableStatusText(text, kind, scope) {
+    const source = String(text || '').trim();
+    if (kind !== 'error' || /怎么解决[：:]/u.test(source)) return source;
+    const resolutions = {
+        variable: '查看变量操作记录与严格模型连通测试，修正连接或规则后直接检查当前回合；不要为了修变量而重 roll 正文。',
+        contract: '查看硬合同明细并修正角色卡规则或变量数据；该检查不会自动改写正文。',
+        social: '检查轻量模型连接与本回合关系证据；失败时关系变量保持不变，也不阻塞正文、数据库或变量医生。',
+        world: '检查轻量模型连接与世界事件账本，然后可手动“整理世界”；失败不阻塞正文、数据库或变量结算。',
+        forum: '检查轻量模型连接、公开风声与论坛来源，然后手动刷新论坛；失败不阻塞正文、数据库或变量结算。',
+    };
+    return `问题：${source || '任务未能完成'}。怎么解决：${resolutions[scope] || resolutions.variable}`;
+}
+
 function setStatus(text, kind = '', { record = true } = {}) {
-    latestStatus = String(text || '');
+    latestStatus = actionableStatusText(text, kind, 'variable');
     latestStatusKind = kind;
     if (record) recordOperation('变量', latestStatus, kind);
     if (ui?.status) {
@@ -915,7 +949,7 @@ function setStatus(text, kind = '', { record = true } = {}) {
 }
 
 function setHardContractStatus(text, kind = '', { record = true } = {}) {
-    latestHardContractStatus = String(text || '');
+    latestHardContractStatus = actionableStatusText(text, kind, 'contract');
     latestHardContractKind = kind;
     if (record) recordOperation('硬合同', latestHardContractStatus, kind);
     if (ui?.hardContractStatus) {
@@ -961,7 +995,7 @@ function renderSocialAudit() {
 }
 
 function setSocialStatus(text, kind = '', { record = true } = {}) {
-    latestSocialStatus = String(text || '');
+    latestSocialStatus = actionableStatusText(text, kind, 'social');
     latestSocialKind = kind;
     if (record) recordOperation('人物关系', latestSocialStatus, kind);
     if (ui?.socialStatus) {
@@ -973,7 +1007,7 @@ function setSocialStatus(text, kind = '', { record = true } = {}) {
 }
 
 function setContinuityStatus(text, kind = '', { record = true } = {}) {
-    latestContinuityStatus = String(text || '');
+    latestContinuityStatus = actionableStatusText(text, kind, 'world');
     latestContinuityKind = kind;
     if (record) recordOperation('世界', latestContinuityStatus, kind);
     if (ui?.continuityStatus) {
@@ -989,7 +1023,7 @@ function setContinuityStatus(text, kind = '', { record = true } = {}) {
 }
 
 function setForumStatus(text, kind = '', { record = true } = {}) {
-    latestForumStatus = String(text || '');
+    latestForumStatus = actionableStatusText(text, kind, 'forum');
     latestForumKind = kind;
     if (record) recordOperation('论坛', latestForumStatus, kind);
     if (ui?.forumStatus) {
@@ -2778,9 +2812,14 @@ async function waitAutomaticTargetSettled(initialCaptured) {
     const started = Date.now();
     let previousSignature = '';
     let stableSince = 0;
+    let busySince = 0;
+    let lastWaitKind = 'initializing';
     const Mvu = await getMvu();
 
-    setStatus('等待本回合正文与 MVU 稳定…', 'busy');
+    setStatus(
+        '本回合正文已生成；正在确认正文与 MVU 变量停止变化（数据库填表不参与此等待）…',
+        'busy',
+    );
     while (Date.now() - started < timeoutMs) {
         let branch = targetBranchIsCurrent(initialCaptured);
         if (!branch.ok) return { status: 'stale', reason: branch.reason };
@@ -2791,12 +2830,8 @@ async function waitAutomaticTargetSettled(initialCaptured) {
         } catch {
             busy = true;
         }
-        if (busy) {
-            previousSignature = '';
-            stableSince = 0;
-            await sleep(intervalMs);
-            continue;
-        }
+        if (busy && !busySince) busySince = Date.now();
+        if (!busy) busySince = 0;
 
         let mvuFingerprint = 'mvu-unavailable';
         if (typeof Mvu?.getMvuData === 'function') {
@@ -2810,18 +2845,56 @@ async function waitAutomaticTargetSettled(initialCaptured) {
 
         branch = targetBranchIsCurrent(initialCaptured);
         if (!branch.ok) return { status: 'stale', reason: branch.reason };
-        const signature = `${branch.captured.fingerprint}:${mvuFingerprint}`;
+        const signature = `${branch.captured.contentFingerprint}:${mvuFingerprint}`;
         if (signature !== previousSignature) {
             previousSignature = signature;
             stableSince = Date.now();
-        } else if (Date.now() - stableSince >= quietMs) {
-            return { status: 'settled', captured: branch.captured };
+            lastWaitKind = busy ? 'mvu-busy-and-changing' : 'content-or-mvu-changing';
+        } else {
+            const stableForMs = Date.now() - stableSince;
+            if (!busy && stableForMs >= quietMs) {
+                return {
+                    status: 'settled',
+                    captured: branch.captured,
+                    waitKind: 'content-and-mvu-stable',
+                };
+            }
+            if (
+                busy
+                && stableForMs >= Math.max(3000, quietMs * 2)
+                && Date.now() - busySince >= Math.max(3000, quietMs * 2)
+            ) {
+                recordOperation(
+                    '变量',
+                    'MVU 忙碌标记持续未释放，但正文与变量快照已连续静止；医生将继续使用写前身份与状态复核，数据库不参与此判断',
+                    'busy',
+                );
+                return {
+                    status: 'settled',
+                    captured: branch.captured,
+                    waitKind: 'stuck-mvu-busy-flag-bypassed',
+                };
+            }
+            lastWaitKind = busy ? 'mvu-busy-flag' : 'quiet-window';
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+            setStatus(
+                busy
+                    ? `正文和当前变量快照未再变化；MVU 内部仍报告“正在分析”（已等 ${elapsedSeconds} 秒，数据库填表不参与）`
+                    : `正文与变量已停止变化；正在完成 ${quietMs}ms 安静窗口确认（已等 ${elapsedSeconds} 秒）`,
+                'busy',
+                { record: false },
+            );
         }
         await sleep(intervalMs);
     }
+    const resolution = lastWaitKind.startsWith('mvu-busy')
+        ? 'MVU 的“正在分析”标记持续未释放。先确认没有重复启用 MVU/变量脚本，必要时刷新酒馆；随后直接检查当前回合，不需要重 roll 正文。'
+        : '正文或 MVU 变量在确认窗口内仍被其他脚本修改。查看变量操作记录，等状态栏停止变化后直接检查当前回合。';
     return {
         status: 'busy',
-        reason: '本回合正文或 MVU 长时间仍在更新，已安全等待下一次完成事件',
+        waitKind: lastWaitKind,
+        reason: `本回合未进入变量检查，且零写入。原因：${resolution} 数据库填表已独立完成也不会被重复触发。`,
+        resolution,
     };
 }
 
@@ -4812,6 +4885,49 @@ async function parseCandidate(Mvu, oldData, output, {
     };
 }
 
+function variableFailureResolution(candidate) {
+    switch (candidate?.failureKind) {
+    case 'transport-error':
+        return '先在“模型通道”测试严格通道，核对 API 地址、密钥和模型名；若是超时，检查网络或换更快模型，然后直接检查当前回合，不需要重 roll 正文。';
+    case 'rate-limit':
+        return '服务商正在限流。等待片刻、降低失败重试次数或更换模型后直接检查当前回合；正文和变量都未被本次失败改动。';
+    case 'incomplete-output':
+        return '模型输出被截断。提高“单次分析 max_tokens”或换格式遵从性更强的模型，再直接检查当前回合。';
+    case 'missing-output':
+        return '模型没有按协议返回变量补丁。测试严格通道，并在模型适配提示中强调只输出 UpdateVariable；无需重 roll 或重新生成正文。';
+    case 'invalid-patch':
+    case 'mvu-parse-failed':
+        return '模型补丁的 JSON 或操作结构不合法。可换格式能力更强的模型，保留当前正文后直接检查；医生不会写入这份补丁。';
+    case 'validation-failed':
+        return '补丁触碰了不允许的路径，或类型、范围、删除规则未通过。查看拒绝明细并核对角色卡变量 Schema；修正规则或换模型后直接检查。';
+    default:
+        return '查看模型通道连通测试与变量操作记录，修正连接或规则后直接检查当前回合；不要为修变量而重 roll 正文。';
+    }
+}
+
+function variableFailureReport(candidate, maxAttempts) {
+    const attempts = Math.max(0, Number(candidate?.attempts) || 0);
+    const reason = safeDiagnosticReason(candidate?.reason || '没有得到可安全应用的补丁');
+    const detail = Array.isArray(candidate?.details)
+        ? candidate.details.slice(0, 2).map((entry) => {
+            const path = String(entry?.path || '').slice(0, 180);
+            const issue = safeDiagnosticReason(entry?.reason || '');
+            return [path, issue].filter(Boolean).join('：');
+        }).filter(Boolean).join('；')
+        : '';
+    const resolution = variableFailureResolution(candidate);
+    return {
+        reason,
+        resolution,
+        text: [
+            `变量检查失败（已尝试 ${attempts}/${maxAttempts} 次，零写入）`,
+            `原因：${reason}`,
+            detail ? `拒绝明细：${detail}` : '',
+            `怎么解决：${resolution}`,
+        ].filter(Boolean).join('。'),
+    };
+}
+
 function applyBlockToCurrentSwipe(message, block, includeBlock, removeBlock = '') {
     if (!message || typeof message.mes !== 'string') return false;
     const before = message.mes;
@@ -5173,6 +5289,7 @@ async function runTarget(targetId, {
     manual = false,
     queuedTarget = null,
     skipDelay = false,
+    skipStabilityWait = false,
 } = {}) {
     const settings = getSettings();
     if (!manual && !settings.enabled) return { status: 'disabled' };
@@ -5191,12 +5308,13 @@ async function runTarget(targetId, {
     const captured = queuedTarget || captureTarget(initialContext, initialResolved);
     if (!captured) return { status: 'stale', reason: '目标回复不可用' };
     const token = operationToken(captured);
-    const maxAttempts = manual
-        ? Math.min(
-            2,
-            Math.max(1, Number(settings.variableRetryLimit) || DEFAULTS.variableRetryLimit),
-        )
-        : 1;
+    const retryCount = Math.min(
+        5,
+        Math.max(0, Number.isFinite(Number(settings.variableRetryLimit))
+            ? Math.round(Number(settings.variableRetryLimit))
+            : DEFAULTS.variableRetryLimit),
+    );
+    const maxAttempts = retryCount + 1;
     const progressId = beginTaskProgress('变量审计', maxAttempts);
     try {
     updateTaskProgress(progressId, '读取 MVU 与目标楼层');
@@ -5210,7 +5328,12 @@ async function runTarget(targetId, {
         || typeof Mvu.parseMessage !== 'function'
         || typeof Mvu.replaceMvuData !== 'function'
     ) {
-        const result = { status: 'failed', reason: '未检测到完整的 MVU API' };
+        const result = {
+            status: 'failed',
+            reason: '未检测到完整的 MVU API，零写入。怎么解决：确认角色卡的 MVU/变量结构脚本已启用，刷新酒馆后直接检查当前回合；无需重 roll 正文。',
+            resolution: '启用角色卡 MVU/变量结构脚本并刷新酒馆。',
+            zeroWrite: true,
+        };
         setStatus(result.reason, 'error');
         if (manual) toast('warning', result.reason);
         return result;
@@ -5222,27 +5345,59 @@ async function runTarget(targetId, {
     }
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-    const idle = await waitMvuIdle(
-        Mvu,
-        Math.max(100, Number(settings.mvuIdleTimeoutMs) || DEFAULTS.mvuIdleTimeoutMs),
-    );
-    if (!idle) {
-        const result = { status: 'busy', reason: 'MVU 长时间仍在更新，已安全跳过本次自动修复' };
-        setStatus(result.reason, 'busy');
-        if (manual) toast('warning', result.reason);
-        return result;
-    }
-    targetCheck = targetIsCurrent(captured, token);
-    if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
-    const stable = await waitMvuStable(
-        Mvu,
-        Math.max(100, Number(settings.mvuStableTimeoutMs) || DEFAULTS.mvuStableTimeoutMs),
-    );
-    if (!stable) {
-        const result = { status: 'busy', reason: 'MVU 状态未能稳定，已安全跳过本次自动修复' };
-        setStatus(result.reason, 'busy');
-        if (manual) toast('warning', result.reason);
-        return result;
+    if (!skipStabilityWait) {
+        updateTaskProgress(
+            progressId,
+            '正文已完成；确认 MVU 内部写入结束（数据库不参与）',
+        );
+        const idleTimeoutMs = Math.max(
+            100,
+            Number(settings.mvuIdleTimeoutMs) || DEFAULTS.mvuIdleTimeoutMs,
+        );
+        const idle = await waitMvuIdle(Mvu, idleTimeoutMs);
+        let stableBusyFallback = false;
+        if (!idle) {
+            stableBusyFallback = await waitMvuStable(
+                Mvu,
+                Math.min(3000, idleTimeoutMs),
+                250,
+                6,
+            );
+            if (!stableBusyFallback) {
+                const result = {
+                    status: 'busy',
+                    reason: '变量检查未开始，且零写入。原因：正文已经生成，但 MVU 内部“正在分析”标记持续未释放，当前变量快照也未通过稳定复核。怎么解决：检查是否重复启用了 MVU/变量脚本，或刷新酒馆后直接检查当前回合；数据库填表不参与此等待，也不会被重新触发。',
+                    resolution: '排查重复 MVU/变量脚本或刷新酒馆，然后直接检查当前回合。',
+                    zeroWrite: true,
+                };
+                setStatus(result.reason, 'error');
+                if (manual) toast('warning', result.reason);
+                return result;
+            }
+            recordOperation(
+                '变量',
+                'MVU 忙碌标记未释放，但变量快照已连续稳定；继续执行，并在写入前再次核对目标与变量状态',
+                'busy',
+            );
+        }
+        targetCheck = targetIsCurrent(captured, token);
+        if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
+        const stable = stableBusyFallback || await waitMvuStable(
+            Mvu,
+            Math.max(100, Number(settings.mvuStableTimeoutMs)
+                || DEFAULTS.mvuStableTimeoutMs),
+        );
+        if (!stable) {
+            const result = {
+                status: 'busy',
+                reason: '变量检查未开始，且零写入。原因：正文已经生成，但 MVU 变量仍被其他脚本持续改动。怎么解决：查看变量操作记录，等状态栏停止变化后直接检查当前回合；无需重 roll 正文，数据库也不会被重新触发。',
+                resolution: '等待变量停止变化，并排查持续改写变量的脚本。',
+                zeroWrite: true,
+            };
+            setStatus(result.reason, 'error');
+            if (manual) toast('warning', result.reason);
+            return result;
+        }
     }
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
@@ -5263,7 +5418,12 @@ async function runTarget(targetId, {
     targetCheck = targetIsCurrent(captured, token);
     if (!targetCheck.ok) return { status: 'stale', reason: targetCheck.reason };
     if (!hasUsableStatData(currentData)) {
-        const result = { status: 'failed', reason: '最新楼层没有可读取的 stat_data' };
+        const result = {
+            status: 'failed',
+            reason: '最新楼层没有可读取的 stat_data，零写入。怎么解决：确认角色卡变量结构已加载、当前回合已初始化变量，然后直接检查当前回合；无需重 roll 正文。',
+            resolution: '确认变量结构和当前楼层 stat_data 已初始化。',
+            zeroWrite: true,
+        };
         setStatus(result.reason, 'error');
         if (manual) toast('warning', result.reason);
         return result;
@@ -5308,7 +5468,7 @@ async function runTarget(targetId, {
         } catch (error) {
             candidate = {
                 status: 'failed',
-                retryable: false,
+                retryable: error?.name !== 'AbortError' && !isRateLimitError(error),
                 failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
                 reason: `模型调用失败：${error.message || error}`,
                 output: '',
@@ -5372,10 +5532,23 @@ async function runTarget(targetId, {
         };
     }
     if (candidate?.status !== 'ready') {
-        const reason = candidate?.reason || '没有得到可安全应用的补丁';
-        setStatus(`已跳过：${reason}`, 'error');
-        toast('warning', `未改动变量。\n${reason}`);
-        return candidate || { status: 'failed', reason };
+        const failure = variableFailureReport(candidate, maxAttempts);
+        setStatus(failure.text, 'error');
+        toast('warning', failure.text);
+        return candidate
+            ? {
+                ...candidate,
+                technicalReason: failure.reason,
+                reason: failure.text,
+                resolution: failure.resolution,
+                zeroWrite: true,
+            }
+            : {
+                status: 'failed',
+                reason: failure.text,
+                resolution: failure.resolution,
+                zeroWrite: true,
+            };
     }
 
     let result;
@@ -5397,7 +5570,9 @@ async function runTarget(targetId, {
         result = {
             status: 'failed',
             attempts: candidate.attempts,
-            reason: `提交补丁失败：${error.message || error}`,
+            reason: `提交补丁失败，未确认变量写入：${safeDiagnosticReason(error?.message || error)}。怎么解决：检查变量操作记录与其他并发写入脚本，再直接检查当前回合；不要重 roll 正文。`,
+            resolution: '排查并发变量写入后直接重新检查当前回合。',
+            writeState: 'unconfirmed',
         };
     }
 
@@ -6030,9 +6205,15 @@ function enqueue(targetId, options = {}) {
         })
         .catch((error) => {
             console.error('[MVU Auto Doctor] 自动处理异常：', error);
-            setStatus(`运行异常：${error.message || error}`, 'error');
-            toast('warning', `运行异常，未改动变量：${error.message || error}`);
-            return { status: 'failed', reason: String(error.message || error) };
+            const reason = `变量任务运行异常，未进入安全写入：${safeDiagnosticReason(error?.message || error)}。怎么解决：查看变量操作记录与严格模型连通测试，修正后直接检查当前回合；不要重 roll 正文。`;
+            setStatus(reason, 'error');
+            toast('warning', reason);
+            return {
+                status: 'failed',
+                reason,
+                resolution: '查看变量操作记录和模型连通测试后直接重新检查。',
+                zeroWrite: true,
+            };
         })
         .finally(() => {
             if (dedupeKey) automaticPendingKeys.delete(dedupeKey);
@@ -10454,12 +10635,20 @@ function buildSettingsPanel() {
                                     <div class="mvuad-description">
                                         医生会自动提供完整的 Schema、规则、状态、正文和补丁协议。
                                         下框只用于粘贴你自己的破限/模型适配语句；正常成功只调用一次，
-                                        自动回合固定一次；手动检查仅在分析结果损坏时最多两次。
+                                        失败重试仍属于同一个目标绑定任务；目标过期、取消或切换分支会立即停止。
                                     </div>
                                     <label class="mvuad-number">
                                         <span>单次分析 max_tokens</span>
                                         <input class="text_pole mvuad-variable-max-tokens" type="number" min="4096" step="1024">
                                     </label>
+                                    <label class="mvuad-number">
+                                        <span>失败后重试次数</span>
+                                        <input class="text_pole mvuad-variable-retry-count" type="number" min="0" max="5" step="1">
+                                    </label>
+                                    <div class="mvuad-description">
+                                        默认3次，可设0—5次；0表示首次失败后不重试。自动与手动检查均适用，
+                                        但每回合仍只有一个自动主任务，最终失败始终零写入。
+                                    </div>
                                     <div class="mvuad-token-chips" aria-label="常用输出上限">
                                         <button type="button" data-max-tokens="8192">8192</button>
                                         <button type="button" data-max-tokens="16384">16384</button>
@@ -10750,6 +10939,23 @@ function buildSettingsPanel() {
             variableMaxTokens.dispatchEvent(new Event('change'));
         });
     }
+    const variableRetryCount = wrapper.querySelector('.mvuad-variable-retry-count');
+    variableRetryCount.value = String(getSettings().variableRetryLimit);
+    variableRetryCount.addEventListener('change', () => {
+        const requested = Number(variableRetryCount.value);
+        const normalized = Math.min(
+            5,
+            Math.max(0, Number.isFinite(requested)
+                ? Math.round(requested)
+                : DEFAULTS.variableRetryLimit),
+        );
+        getSettings().variableRetryLimit = normalized;
+        variableRetryCount.value = String(normalized);
+        saveSettings();
+        if (!Number.isFinite(requested) || requested !== normalized) {
+            toast('info', `失败重试次数已调整为 ${normalized}。`);
+        }
+    });
     const variablePromptAddon = wrapper.querySelector('.mvuad-variable-prompt-addon');
     const promptSaveHint = wrapper.querySelector('.mvuad-save-hint');
     variablePromptAddon.value = String(getSettings().variablePromptAddon || '');
@@ -11125,6 +11331,7 @@ function bindEvents() {
                     ? enqueue(resolved, {
                         queuedTarget: result.captured,
                         skipDelay: true,
+                        skipStabilityWait: true,
                     })
                     : result
             ));

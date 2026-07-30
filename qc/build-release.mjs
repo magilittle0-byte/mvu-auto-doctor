@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const candidate = '2.0.0-rc.1';
+const candidate = '2.0.0-rc.2';
 const artifactName = `05_MVU自动医生_v${candidate}_离线候选.zip`;
 const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
@@ -24,8 +24,6 @@ const rootFiles = [
     'core.mjs',
     'forum-core.mjs',
     'index.js',
-    'integrations/database-final-reply-bridge.js',
-    'integrations/MVU医生-数据库最终正文桥.json',
     'LICENSE',
     'manifest.json',
     'model-queue.mjs',

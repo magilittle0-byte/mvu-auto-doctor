@@ -15,6 +15,14 @@ const sourceTavernHelperRoot = path.join(
     'extensions',
     'TavernHelper',
 );
+const legacyPublicDoctorRoot = path.join(
+    stRoot,
+    'public',
+    'scripts',
+    'extensions',
+    'third-party',
+    'mvu-auto-doctor',
+);
 const authorLoaderPath = [
     path.join(
         process.env.USERPROFILE || '',
@@ -29,6 +37,9 @@ const authorLoaderPath = [
 ].find((candidate) => fs.existsSync(candidate));
 const targetDatabaseVersion = 'spv8.7.4';
 const port = 8011;
+const candidateVersion = JSON.parse(
+    fs.readFileSync(path.join(doctorRoot, 'manifest.json'), 'utf8'),
+).version;
 const bundledNodeModules = path.join(
     process.env.USERPROFILE || '',
     '.cache',
@@ -118,14 +129,7 @@ function cleanAuthorScript() {
     };
 }
 
-function createSterileSettings(authorScript, bridgeSource) {
-    const bridgeScript = {
-        type: 'script',
-        enabled: true,
-        name: 'MVU医生·数据库最终正文桥（隔离QC）',
-        id: 'bbf7953e-f0ee-4b5f-a91c-a5db7f678e2c',
-        content: bridgeSource,
-    };
+function createSterileSettings(authorScript) {
     return {
         extension_settings: {
             disabledExtensions: [],
@@ -140,7 +144,7 @@ function createSterileSettings(authorScript, bridgeSource) {
                         characters: [],
                         presets: [],
                     },
-                    scripts: [bridgeScript, authorScript],
+                    scripts: [authorScript],
                 },
             },
         },
@@ -179,17 +183,6 @@ function copyDoctorRuntime(targetRoot) {
             || /\.(?:mjs|mts)$/u.test(source)
         ),
     });
-    fs.cpSync(
-        path.join(doctorRoot, 'integrations'),
-        path.join(targetRoot, 'integrations'),
-        {
-            recursive: true,
-            filter: (source) => (
-                fs.statSync(source).isDirectory()
-                || source.endsWith('database-final-reply-bridge.js')
-            ),
-        },
-    );
 }
 
 async function waitForHost(url, timeoutMs = 60_000) {
@@ -245,6 +238,9 @@ function classifyRuntimeError(value) {
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mvuad-spv874-qc-'));
 const resolvedTemp = path.resolve(tempRoot);
+const legacyPublicBackupRoot = path.join(tempRoot, 'legacy-public-doctor-backup');
+const legacyPublicExisted = fs.existsSync(legacyPublicDoctorRoot);
+let legacyPublicRestored = false;
 if (
     path.dirname(resolvedTemp) !== path.resolve(os.tmpdir())
     || !path.basename(resolvedTemp).startsWith('mvuad-spv874-qc-')
@@ -273,21 +269,25 @@ const report = {
 };
 
 try {
+    try {
+        const occupied = await fetch(`http://127.0.0.1:${port}/`, {
+            signal: AbortSignal.timeout(1_000),
+        });
+        if (occupied) throw new Error('isolated QC port is already occupied');
+    } catch (error) {
+        if (/already occupied/u.test(String(error?.message || error))) throw error;
+    }
     const tempUserRoot = path.join(tempRoot, 'default-user');
     fs.mkdirSync(tempUserRoot, { recursive: true });
     const settingsPath = path.join(tempUserRoot, 'settings.json');
     const authorScript = cleanAuthorScript();
-    const bridgeSource = fs.readFileSync(
-        path.join(doctorRoot, 'integrations', 'database-final-reply-bridge.js'),
-        'utf8',
-    );
     if (!fs.existsSync(sourceTavernHelperRoot)) {
         throw new Error('TavernHelper runtime is unavailable');
     }
     fs.writeFileSync(
         settingsPath,
         `${JSON.stringify(
-            createSterileSettings(authorScript.record, bridgeSource),
+            createSterileSettings(authorScript.record),
             null,
             2,
         )}\n`,
@@ -298,6 +298,12 @@ try {
         { recursive: true },
     );
     copyDoctorRuntime(path.join(tempUserRoot, 'extensions', 'mvu-auto-doctor'));
+    if (legacyPublicExisted) {
+        fs.cpSync(legacyPublicDoctorRoot, legacyPublicBackupRoot, {
+            recursive: true,
+        });
+    }
+    copyDoctorRuntime(legacyPublicDoctorRoot);
     report.setup = {
         authorImportSha256: sha256(fs.readFileSync(authorLoaderPath)),
         cleanAuthorLoaderSha256: sha256(authorScript.source),
@@ -307,10 +313,17 @@ try {
         privateCharactersCopied: false,
         credentialsCopied: false,
         originalUserDataModified: false,
+        legacyPublicRuntimeTemporarilyReplaced: true,
+        legacyPublicOriginalIndexSha256: legacyPublicExisted
+            ? sha256(fs.readFileSync(path.join(legacyPublicBackupRoot, 'index.js')))
+            : '',
         doctorSourceInstalledInSterileRoot: true,
+        candidateVersion,
+        candidateIndexSha256: sha256(
+            fs.readFileSync(path.join(doctorRoot, 'index.js')),
+        ),
         tavernHelperRuntimeInstalledInSterileRoot: true,
-        independentBridgeInstalledInSterileRoot: true,
-        independentBridgeSha256: sha256(bridgeSource),
+        independentBridgeInstalledInSterileRoot: false,
     };
 
     server = spawn(process.execPath, [
@@ -334,6 +347,9 @@ try {
         });
     }
     const hostStatus = await waitForHost(`http://127.0.0.1:${port}/`);
+    if (serverFailure || server.exitCode !== null) {
+        throw new Error('isolated SillyTavern server did not own the QC port');
+    }
 
     const systemBrowser = [
         process.env.MVUAD_BROWSER_EXECUTABLE_PATH,
@@ -414,11 +430,81 @@ try {
             ) || null,
         };
     });
+    if (preDatabase.doctorVersion !== candidateVersion) {
+        throw new Error('served doctor version does not match the candidate');
+    }
+    await page.locator('#mvuad-floating-orb').waitFor({
+        state: 'visible',
+        timeout: 30_000,
+    });
+    await page.locator('#mvuad-floating-orb').click();
+    const inspectPanel = () => {
+        const panel = document.querySelector('#mvuad-floating-panel');
+        const rect = panel?.getBoundingClientRect();
+        const tabs = [...document.querySelectorAll(
+            '#mvuad-floating-panel .mvuad-floating-tabs button',
+        )].map((element) => ({
+            page: element.getAttribute('data-page') || '',
+            text: element.textContent?.trim() || '',
+        }));
+        const narrativeRewriteControlCount = [...document.querySelectorAll(
+            '#mvuad-floating-panel button, #extensions_settings button',
+        )].filter((element) => (
+            /(?:重写|纠错|修正).{0,4}正文|正文.{0,4}(?:重写|纠错|修正)/u.test(
+                element.textContent || '',
+            )
+        )).length;
+        return {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            panelLeft: rect?.left ?? -1,
+            panelRight: rect?.right ?? -1,
+            panelTop: rect?.top ?? -1,
+            panelBottom: rect?.bottom ?? -1,
+            panelWithinViewport: Boolean(
+                rect
+                && rect.left >= 0
+                && rect.top >= 0
+                && rect.right <= window.innerWidth
+                && rect.bottom <= window.innerHeight
+            ),
+            horizontalOverflow:
+                document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            tabs,
+            narrativeRewriteControlCount,
+        };
+    };
+    const mobileUi = await page.evaluate(inspectPanel);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const desktopUi = await page.evaluate(inspectPanel);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const uiProbe = {
+        result: (
+            mobileUi.panelWithinViewport
+            && desktopUi.panelWithinViewport
+            && mobileUi.horizontalOverflow === false
+            && desktopUi.horizontalOverflow === false
+            && mobileUi.narrativeRewriteControlCount === 0
+            && desktopUi.narrativeRewriteControlCount === 0
+        ) ? 'pass' : 'fail',
+        mobile: mobileUi,
+        desktop: desktopUi,
+        forumTabIndependent: mobileUi.tabs.some((tab) => (
+            tab.page === 'forum' || /论坛/u.test(tab.text)
+        )),
+        worldEngineTabVisible: mobileUi.tabs.some((tab) => (
+            tab.page === 'world' || /世界/u.test(tab.text)
+        )),
+    };
+    if (uiProbe.result !== 'pass') {
+        throw new Error('candidate floating UI probe failed');
+    }
     report.runtime = {
         hostHttpStatus: hostStatus,
         serverFailureDigest: serverFailure,
         bootState,
         ...preDatabase,
+        uiProbe,
         databaseBundleRequestCount: databaseRequests.length,
         databaseBundleResponses: databaseResponses,
     };
@@ -433,24 +519,7 @@ try {
         report.runtime.databaseApiReady = true;
     } catch {
         report.runtime.databaseApiReady = false;
-        report.runtime.bridgeGlobalReady = await page.evaluate(() => (
-            !!window.MvuAutoDoctorDatabaseBridge
-        ));
         throw new Error('database public API did not become ready');
-    }
-    try {
-        await page.waitForFunction(() => (
-            window.MvuAutoDoctorDatabaseBridge?.getState?.().status
-                === 'disabled-independent-database'
-        ), null, {
-            timeout: 30_000,
-        });
-        report.runtime.bridgeGlobalReady = true;
-    } catch {
-        report.runtime.bridgeGlobalReady = await page.evaluate(() => (
-            !!window.MvuAutoDoctorDatabaseBridge
-        ));
-        throw new Error('inert database bridge did not expose its disabled state');
     }
     const runtime = await page.evaluate(async () => {
         const api = window.MvuAutoDoctorAPI;
@@ -479,27 +548,6 @@ try {
                 truthy: false,
             };
         }
-        const bridge = window.MvuAutoDoctorDatabaseBridge;
-        const unchangedDetail = {
-            status: 'settled',
-            chatId: 'sterile-bridge-qc',
-            targetIndex: 2,
-            serial: 1,
-            generationId: 'sterile-generation-1',
-            branchId: 'sterile-branch-1',
-            contentChanged: false,
-            receipt: { writeAllowed: true },
-        };
-        const changedDetail = {
-            ...unchangedDetail,
-            serial: 2,
-            generationId: 'sterile-generation-2',
-            contentChanged: true,
-        };
-        await bridge.sync(unchangedDetail);
-        const bridgeUnchanged = bridge.getState();
-        const bridgeSyncResult = await bridge.sync(changedDetail);
-        const bridgeAfterChanged = bridge.getState();
         let social = { status: 'not-run' };
         try {
             social = await api.auditSocialRelations();
@@ -520,21 +568,8 @@ try {
                 (key) => typeof databaseApi[key] === 'function',
             ).length,
             databaseUpdate,
-            independentBridge: {
-                id: bridge.id,
-                version: bridge.version,
-                status: bridgeAfterChanged.status,
-                unchangedRequestedDelta:
-                    bridgeUnchanged.requested,
-                unchangedSkipped:
-                    bridgeUnchanged.skipped,
-                changedSyncStatus: bridgeSyncResult?.status || '',
-                changedSyncAttempts: Number(bridgeSyncResult?.attempts) || 0,
-                databaseApiReady: bridgeAfterChanged.databaseApiReady === true,
-                requested: bridgeAfterChanged.requested,
-                completed: bridgeAfterChanged.completed,
-                failed: bridgeAfterChanged.failed,
-            },
+            independentBridgeInstalled: false,
+            independentBridgeAbsent: !window.MvuAutoDoctorDatabaseBridge,
             databaseUiSurfaceCount: [...document.querySelectorAll(
                 '[id], [class]',
             )].filter((element) => (
@@ -564,12 +599,6 @@ try {
     ), null, {
         timeout: 120_000,
     });
-    await page.waitForFunction(() => (
-        window.MvuAutoDoctorDatabaseBridge?.getState?.().status
-            === 'disabled-independent-database'
-    ), null, {
-        timeout: 120_000,
-    });
     const reload = await page.evaluate(async () => {
         const doctorApi = window.MvuAutoDoctorAPI;
         const databaseApi = window.AutoCardUpdaterAPI
@@ -592,9 +621,12 @@ try {
                     `${element.id || ''} ${element.className || ''}`,
                 )
             )).length,
-            independentBridge: window.MvuAutoDoctorDatabaseBridge?.getState?.() || null,
+            independentBridgeAbsent: !window.MvuAutoDoctorDatabaseBridge,
         };
     });
+    if (reload.doctorVersion !== candidateVersion) {
+        throw new Error('reloaded doctor version does not match the candidate');
+    }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     const errorCounts = Object.fromEntries(
         ['doctor', 'database', 'tavern-helper', 'host-or-other'].map((owner) => [
@@ -634,10 +666,12 @@ try {
     );
     const code = hasNetworkFailure
         ? 'database_bundle_network_unavailable'
+        : /already occupied|did not own the QC port/u.test(message)
+            ? 'isolated_qc_port_not_owned'
+            : /doctor version does not match/u.test(message)
+                ? 'candidate_version_mismatch'
         : /database public API did not become ready/u.test(message)
             ? 'database_api_not_ready_timeout'
-            : /inert database bridge did not expose/u.test(message)
-                ? 'database_bridge_not_ready_timeout'
         : /did not become ready/u.test(message)
             ? 'host_not_ready'
             : /Author loader is unavailable/u.test(message)
@@ -678,12 +712,26 @@ try {
     } catch {
         portClosed = true;
     }
+    fs.rmSync(legacyPublicDoctorRoot, { recursive: true, force: true });
+    if (legacyPublicExisted) {
+        fs.cpSync(legacyPublicBackupRoot, legacyPublicDoctorRoot, {
+            recursive: true,
+        });
+    }
+    legacyPublicRestored = legacyPublicExisted
+        ? (
+            fs.existsSync(path.join(legacyPublicDoctorRoot, 'index.js'))
+            && sha256(fs.readFileSync(path.join(legacyPublicDoctorRoot, 'index.js')))
+                === sha256(fs.readFileSync(path.join(legacyPublicBackupRoot, 'index.js')))
+        )
+        : !fs.existsSync(legacyPublicDoctorRoot);
     fs.rmSync(resolvedTemp, { recursive: true, force: true });
     report.cleanup = {
         browserClosed: browser !== null,
         serverStopped: !server || server.exitCode !== null || server.killed,
         portClosed,
         temporaryDataRemoved: !fs.existsSync(resolvedTemp),
+        legacyPublicRuntimeRestored: legacyPublicRestored,
         originalUserDataModified: false,
     };
 }

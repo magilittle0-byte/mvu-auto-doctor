@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +23,16 @@ assert.equal(
     packageJson.version,
     manifest.version,
     `package.json 的 version（${packageJson.version}）必须与 manifest.json 的 version（${manifest.version}）一致`,
+);
+assert.equal(
+    existsSync(join(root, 'integrations', 'database-final-reply-bridge.js')),
+    false,
+    'rc.2 发行源码不得保留数据库最终正文桥',
+);
+assert.equal(
+    existsSync(join(root, 'integrations', 'MVU医生-数据库最终正文桥.json')),
+    false,
+    'rc.2 发行源码不得保留数据库最终正文桥导入条目',
 );
 assert.ok(readme.includes(repositoryUrl), 'README 必须提供在线安装仓库地址');
 assert.ok(readme.includes('点击这一行自己的“更新”'), 'README 必须提供从main直接在线更新步骤');

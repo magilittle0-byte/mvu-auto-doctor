@@ -34,8 +34,6 @@ const runtimeFiles = [
     'core.mjs',
     'forum-core.mjs',
     'index.js',
-    'integrations/database-final-reply-bridge.js',
-    'integrations/MVU医生-数据库最终正文桥.json',
     'manifest.json',
     'model-queue.mjs',
     'package-lock.json',
@@ -165,13 +163,9 @@ function validateBlockedReport(report) {
         || database.latest?.apiVisible !== true
         || database.latest?.apiMethods < 100
         || database.latest?.publicUpdateReturnedTruthyObject !== true
-        || database.latest?.independentBridgeStatus
-            !== 'disabled-independent-database'
-        || database.latest?.independentBridgeChangedSyncRequests !== 0
-        || database.latest?.independentBridgeChangedSyncCompleted !== 0
-        || database.latest?.independentBridgeChangedSyncAttempts !== 0
-        || database.latest?.independentBridgeChangedSyncFailures !== 0
-        || database.latest?.reloadIndependentBridgeDisabled !== true
+        || database.latest?.independentBridgeInstalled !== false
+        || database.latest?.independentBridgeAbsent !== true
+        || database.latest?.reloadIndependentBridgeAbsent !== true
         || database.latest?.uiSurfaceCountBeforeReload < 1
         || database.latest?.reloadApiMethods !== database.latest?.apiMethods
         || database.latest?.reloadUiSurfaceCount < 1
@@ -507,18 +501,9 @@ function loadAndValidateReport() {
         || latestDatabase.apiVisible !== true
         || latestDatabase.apiMethods < 100
         || latestDatabase.publicUpdateReturnedTruthyObject !== true
-        || latestDatabase.independentBridgeInstalled !== true
-        || latestDatabase.independentBridgeVersion !== '1.0.0'
-        || latestDatabase.independentBridgeStatus
-            !== 'disabled-independent-database'
-        || latestDatabase.independentBridgeSourceRewriteUsed !== false
-        || latestDatabase.independentBridgePrivateSchemaRead !== false
-        || latestDatabase.independentBridgeUnchangedSyncRequests !== 0
-        || latestDatabase.independentBridgeChangedSyncRequests !== 0
-        || latestDatabase.independentBridgeChangedSyncCompleted !== 0
-        || latestDatabase.independentBridgeChangedSyncAttempts !== 0
-        || latestDatabase.independentBridgeChangedSyncFailures !== 0
-        || latestDatabase.reloadIndependentBridgeDisabled !== true
+        || latestDatabase.independentBridgeInstalled !== false
+        || latestDatabase.independentBridgeAbsent !== true
+        || latestDatabase.reloadIndependentBridgeAbsent !== true
         || latestDatabase.uiSurfaceCountBeforeReload < 1
         || latestDatabase.reloadApiMethods !== latestDatabase.apiMethods
         || latestDatabase.reloadUiSurfaceCount < 1
