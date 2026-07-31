@@ -1,7 +1,17 @@
 import http from 'node:http';
 
 const port = Number(process.env.OPENCODE_QC_PORT || 9331);
-const upstreamBase = 'https://opencode.ai/zen/go/v1';
+const approvedUpstreams = new Set([
+    'https://opencode.ai/zen/go/v1',
+    'https://api2.gemai.cc/v1',
+]);
+const requestedUpstream = String(
+    process.env.OPENCODE_QC_UPSTREAM || 'https://opencode.ai/zen/go/v1',
+).replace(/\/+$/u, '');
+if (!approvedUpstreams.has(requestedUpstream)) {
+    throw new Error('Unapproved OpenAI-compatible QC upstream');
+}
+const upstreamBase = requestedUpstream;
 const metrics = [];
 let apiKey = '';
 

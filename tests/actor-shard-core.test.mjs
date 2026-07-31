@@ -35,10 +35,14 @@ function proposal(candidate, overrides = {}) {
         actorName: candidate.name,
         time: '第三日午夜',
         location: '北港',
+        travelTurns: 0,
         knowledgeBasis: [candidate.knowledgeBasis[0]],
         currentGoal: candidate.goals[0] || '继续既定目标',
         candidateAction: '沿既有线索调查仓库',
         interactionTargets: [],
+        resourceCosts: [],
+        capabilityUsed: '',
+        waitCondition: '',
         sourceThreads: [candidate.sourceThreads[0]],
         evidence: [candidate.evidence[0]],
         causalChain: [candidate.causalChain[0]],
@@ -131,6 +135,70 @@ test('strict proposal parser rejects extra fields and identity/evidence escape',
             { candidate },
         ).error,
         'actor_shard.required_evidence_missing',
+    );
+    assert.equal(
+        parseActorShardProposal(
+            JSON.stringify({
+                ...valid,
+                location: '南站',
+                travelTurns: 0,
+            }),
+            { candidate },
+        ).error,
+        'actor_shard.travel_invalid',
+    );
+});
+
+test('persistent actor proposals whitelist resource costs and capabilities before local settlement', () => {
+    const actorLedger = {
+        actors: [{
+            id: 'NPC-ADA',
+            name: '艾达',
+            status: 'active',
+            tier: 'secondary',
+            location: { name: '北港' },
+            knowledge: [{ id: 'K1', claim: '仓库起火' }],
+            currentGoals: ['调查仓库'],
+            longTermGoals: [],
+            plan: { summary: '调查仓库' },
+            evidence: ['E1'],
+            resources: [{ id: 'coin', name: '银币', amount: 3 }],
+            capabilities: ['交涉'],
+            commitments: [],
+            hidden: {},
+        }],
+    };
+    const candidate = selectActorShardCandidates({
+        continuity: { threads: [] },
+        actorLedger,
+        schedule: {
+            selected: [{
+                actorId: 'NPC-ADA',
+                score: 10,
+                slot: 'priority',
+                reasons: ['action-due'],
+            }],
+        },
+        maxWorkers: 1,
+    })[0];
+    const valid = proposal(candidate, {
+        resourceCosts: [{ resourceId: 'coin', amount: 2 }],
+        capabilityUsed: '交涉',
+    });
+    assert.equal(parseActorShardProposal(JSON.stringify(valid), { candidate }).error, undefined);
+    assert.equal(
+        parseActorShardProposal(JSON.stringify({
+            ...valid,
+            resourceCosts: [{ resourceId: 'coin', amount: 4 }],
+        }), { candidate }).error,
+        'actor_shard.resource_invalid',
+    );
+    assert.equal(
+        parseActorShardProposal(JSON.stringify({
+            ...valid,
+            capabilityUsed: '瞬间移动',
+        }), { candidate }).error,
+        'actor_shard.capability_invalid',
     );
 });
 
@@ -270,6 +338,9 @@ test('actor shard output example is directly valid against the candidate evidenc
         causalChain: ['cause-1'],
     };
     const messages = buildActorShardMessages(candidate);
+    assert.match(messages[0].content, /资源列表为空时必须输出\[\]/u);
+    assert.match(messages[0].content, /能力列表为空时必须输出空字符串/u);
+    assert.match(messages[0].content, /没有提供可核验目标ID时必须输出\[\]/u);
     const shape = JSON.parse(messages[1].content.split('\n').at(-1));
     assert.deepEqual(shape.knowledgeBasis, candidate.knowledgeBasis);
     assert.deepEqual(shape.sourceThreads, candidate.sourceThreads);

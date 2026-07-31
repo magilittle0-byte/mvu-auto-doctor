@@ -1236,6 +1236,9 @@ const structuralWorldOnly = normalizeContinuityState({
 const structuralSchedule = scheduleWorldLanes(structuralWorldOnly, {
     turn: 13,
     maxLanes: 2,
+    factionSlots: 1,
+    environmentSlots: 1,
+    receiptScope: 'chat:message-13:swipe-0:generation-2:branch-main',
 });
 assert.equal(structuralSchedule.selected.length, 2);
 assert.equal(structuralSchedule.selected[0].independentOfActors, true);
@@ -1249,12 +1252,25 @@ assert.ok(
 );
 assert.equal(structuralSchedule.receipts.length, structuralSchedule.selected.length);
 assert.ok(
-    structuralSchedule.receipts.every((item) => item.status === 'scheduled'),
+    structuralSchedule.receipts.every((item) => (
+        item.due ? item.status === 'scheduled' : item.status === 'retained'
+    )),
+);
+assert.equal(
+    new Set(structuralSchedule.receipts.map((item) => item.receiptId)).size,
+    structuralSchedule.receipts.length,
+);
+assert.ok(
+    structuralSchedule.receipts.every((item) => (
+        item.receiptId.includes('branch-main')
+    )),
 );
 
 const boundedStructuralSchedule = scheduleWorldLanes(structuralWorldOnly, {
     turn: 13,
     maxLanes: 1,
+    factionSlots: 0,
+    environmentSlots: 1,
 });
 assert.equal(boundedStructuralSchedule.selected.length, 1);
 assert.equal(boundedStructuralSchedule.selected[0].laneType, 'environment');
@@ -1271,12 +1287,34 @@ const actorThreadDoesNotReplaceWorld = scheduleWorldLanes({
 }, {
     turn: 13,
     maxLanes: 2,
+    factionSlots: 1,
+    environmentSlots: 1,
 });
 assert.deepEqual(
     actorThreadDoesNotReplaceWorld.selected.map((item) => item.sourceId),
     structuralSchedule.selected.map((item) => item.sourceId),
     '人物事件不得挤掉势力与环境自己的世界轨预算',
 );
+
+const ambientEnvironmentSchedule = scheduleWorldLanes(normalizeContinuityState({
+    chatId: 'ambient-environment',
+    turn: 4,
+    world: {
+        environment: {
+            economy: 'stable',
+            summary: '持续降雨让旧码头地面湿滑',
+            basis: '连续气象观测',
+            updatedTurn: 3,
+        },
+    },
+}), {
+    turn: 5,
+    maxLanes: 1,
+    factionSlots: 0,
+    environmentSlots: 1,
+});
+assert.equal(ambientEnvironmentSchedule.selected[0].sourceId, 'environment:ambient');
+assert.equal(ambientEnvironmentSchedule.selected[0].label.includes('经济'), false);
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',

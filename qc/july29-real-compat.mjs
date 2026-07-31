@@ -169,6 +169,8 @@ function copyDoctorRuntime(targetRoot) {
         'README.md',
         'social-core.mjs',
         'style.css',
+        'world-pressure-core.d.mts',
+        'world-pressure-core.mjs',
     ];
     fs.rmSync(targetRoot, { recursive: true, force: true });
     fs.mkdirSync(targetRoot, { recursive: true });
@@ -479,6 +481,21 @@ try {
         const actorCollisionIntensity = document.querySelector(
             '#mvu-auto-doctor-settings .mvuad-actor-collision-intensity',
         );
+        const factionSlots = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-world-faction-slots',
+        );
+        const environmentSlots = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-world-environment-slots',
+        );
+        const recoveryCadence = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-world-recovery-cadence',
+        );
+        const pressureCap = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-world-pressure-cap',
+        );
+        const bossCap = document.querySelector(
+            '#mvu-auto-doctor-settings .mvuad-world-boss-cap',
+        );
         const controlSnapshot = (element) => ({
             value: element?.value || '',
             min: element?.min || '',
@@ -511,6 +528,11 @@ try {
                 actorsPerTurn: controlSnapshot(actorLimit),
                 explorationSlots: controlSnapshot(actorExplorationSlots),
                 collisionIntensity: controlSnapshot(actorCollisionIntensity),
+                factionSlots: controlSnapshot(factionSlots),
+                environmentSlots: controlSnapshot(environmentSlots),
+                recoveryCadence: controlSnapshot(recoveryCadence),
+                pressureCap: controlSnapshot(pressureCap),
+                bossCap: controlSnapshot(bossCap),
             },
         };
     };
@@ -527,7 +549,7 @@ try {
             && mobileUi.narrativeRewriteControlCount === 0
             && desktopUi.narrativeRewriteControlCount === 0
             && mobileUi.worldInterfaceLimit.value === '2'
-            && mobileUi.worldInterfaceLimit.min === '1'
+            && mobileUi.worldInterfaceLimit.min === '0'
             && mobileUi.worldInterfaceLimit.max === '4'
             && desktopUi.worldInterfaceLimit.value === '2'
             && mobileUi.actorControls.actorsPerTurn.value === '2'
@@ -537,6 +559,19 @@ try {
             && mobileUi.actorControls.explorationSlots.min === '0'
             && mobileUi.actorControls.explorationSlots.max === '2'
             && mobileUi.actorControls.collisionIntensity.value === '2'
+            && mobileUi.actorControls.factionSlots.value === '1'
+            && mobileUi.actorControls.factionSlots.min === '0'
+            && mobileUi.actorControls.factionSlots.max === '3'
+            && mobileUi.actorControls.environmentSlots.value === '1'
+            && mobileUi.actorControls.environmentSlots.min === '0'
+            && mobileUi.actorControls.environmentSlots.max === '3'
+            && mobileUi.actorControls.recoveryCadence.value === 'balanced'
+            && mobileUi.actorControls.pressureCap.value === '3'
+            && mobileUi.actorControls.pressureCap.min === '0'
+            && mobileUi.actorControls.pressureCap.max === '6'
+            && mobileUi.actorControls.bossCap.value === '1'
+            && mobileUi.actorControls.bossCap.min === '0'
+            && mobileUi.actorControls.bossCap.max === '3'
             && desktopUi.actorControls.actorsPerTurn.value === '2'
         ) ? 'pass' : 'fail',
         mobile: mobileUi,

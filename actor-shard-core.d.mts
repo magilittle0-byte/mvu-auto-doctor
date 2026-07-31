@@ -15,10 +15,14 @@ export interface ActorShardProposal {
     actorName: string;
     time: string;
     location: string;
+    travelTurns: number;
     knowledgeBasis: string[];
     currentGoal: string;
     candidateAction: string;
     interactionTargets: Array<{ actorId: string; actorName: string }>;
+    resourceCosts: Array<{ resourceId: string; amount: number }>;
+    capabilityUsed: string;
+    waitCondition: string;
     sourceThreads: string[];
     evidence: string[];
     causalChain: string[];

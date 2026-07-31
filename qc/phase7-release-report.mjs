@@ -12,6 +12,7 @@ import { buildReplayAutomationReport } from '../v2/runtime/index.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const corpusPath = path.join(root, 'fixtures', '2.0', 'replay-cases.json');
 const outputPath = path.join(root, 'docs', 'qc-reports', 'v2.0-phase7-replay.json');
+const manifest = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const testFiles = readdirSync(path.join(root, 'tests'))
     .filter((name) => /^v2-.*\.test\.mjs$/u.test(name))
     .sort()
@@ -36,7 +37,7 @@ const report = buildReplayAutomationReport(corpus, results, {
     environment: 'node-unit-integration-browser-release',
 });
 report.phase = 7;
-report.candidate = '2.0.0-rc.1';
+report.candidate = manifest.version;
 report.command = `node --test ${testFiles.join(' ')}`;
 report.testFiles = testFiles;
 report.phase7OwnedCases = [

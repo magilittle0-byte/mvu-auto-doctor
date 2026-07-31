@@ -96,6 +96,8 @@ function copyDoctorRuntime(targetRoot) {
         'README.md',
         'social-core.mjs',
         'style.css',
+        'world-pressure-core.d.mts',
+        'world-pressure-core.mjs',
     ];
     fs.rmSync(targetRoot, { recursive: true, force: true });
     fs.mkdirSync(targetRoot, { recursive: true });
@@ -360,6 +362,9 @@ try {
                 DS_TEST_KEY: '',
                 DS_TEST_PORT: String(proxyPort),
                 OPENCODE_QC_PORT: String(proxyPort),
+                OPENCODE_QC_UPSTREAM: String(
+                    process.env.OPENCODE_QC_UPSTREAM || '',
+                ),
             },
         });
         for (const stream of [proxy.stdout, proxy.stderr]) {
@@ -528,8 +533,8 @@ try {
                 is_system: false,
                 mes: '<content>The subject becomes fanatically loyal immediately. '
                     + 'At midnight, the public North Harbor tide gauge shows that '
-                    + 'the old bridge will close within one turn. Ada reads the '
-                    + 'public notice while standing in North Harbor.</content>\n'
+                    + 'the old bridge will close within one turn. The public notice '
+                    + 'is posted at North Harbor; the investigator remains offscreen.</content>\n'
                     + '<UpdateVariable><Analysis>synthetic relationship jump</Analysis>'
                     + '<JSONPatch>[]</JSONPatch></UpdateVariable>',
                 swipe_id: 0,
@@ -634,6 +639,11 @@ try {
                     locations: ['North Harbor'],
                     knowledge: 'observed',
                     urgency: 3,
+                    causedBy: ['QC-HARBOR-PUBLIC-NOTICE'],
+                    sourceRefs: [{
+                        messageId: 'assistant-2',
+                        hash: 'qc-harbor-public-notice',
+                    }],
                 }],
                 world: {
                     factions: [{
@@ -671,6 +681,9 @@ try {
         const callsAfter = window.MvuAutoDoctorAPI.getModelCallStats();
         const actorReceipts = window.MvuAutoDoctorAPI.getActorActionReceipts();
         const worldLaneReceipts = window.MvuAutoDoctorAPI.getWorldLaneReceipts();
+        const finalDiagnostic = window.MvuAutoDoctorAPI.getDiagnosticProjection();
+        const actorShardDiagnostic = finalDiagnostic.actorShards || {};
+        const actorLedgerView = window.MvuAutoDoctorAPI.getActorLedgerView();
         settings.connectionApiKey = '';
         config.apiKey = '';
         return {
@@ -703,6 +716,22 @@ try {
                 (receipt) => receipt.stage === 'world_settled',
             ),
             actorReceiptCount: actorReceipts.length,
+            actorLedgerPublicCount: actorLedgerView.actors.length,
+            actorShardDiagnostic: {
+                status: actorShardDiagnostic.status || '',
+                selected: Number(actorShardDiagnostic.selected || 0),
+                completed: Number(actorShardDiagnostic.completed || 0),
+                succeeded: Number(actorShardDiagnostic.succeeded || 0),
+                failed: Number(actorShardDiagnostic.failed || 0),
+                failureCodes: Array.isArray(actorShardDiagnostic.failureCodes)
+                    ? actorShardDiagnostic.failureCodes.slice(0, 8)
+                    : [],
+                acceptedActions: Number(actorShardDiagnostic.acceptedActions || 0),
+                rejectedActions: Number(actorShardDiagnostic.rejectedActions || 0),
+                rejectionReasons: Array.isArray(actorShardDiagnostic.rejectionReasons)
+                    ? actorShardDiagnostic.rejectionReasons.slice(0, 8)
+                    : [],
+            },
             worldLaneTypes: [...new Set(
                 worldLaneReceipts.map((receipt) => receipt.laneType),
             )].sort(),

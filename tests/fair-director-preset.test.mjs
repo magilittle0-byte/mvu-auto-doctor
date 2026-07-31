@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+    GLOBAL_FAIR_DIRECTOR_GATE,
+    transformFairDirectorPreset,
+} from '../fair-director-preset-core.mjs';
+
+const ids = [
+    ['520e0405-8a69-4e68-af98-2174d075f516', '<NPC_Soft_Hard_Action_Amendment_V1>old</NPC_Soft_Hard_Action_Amendment_V1>'],
+    ['869bf19b-7764-4c01-8370-155f62ea5be4', 'old advance'],
+    ['3ad6a624-d98f-4f18-a821-a2bd7258899b', '<External_Dice_Arbitration>old</External_Dice_Arbitration><Stitches_Compatibility>old</Stitches_Compatibility><Director_Draft_And_Information_Firewall_Amendment_V2>old</Director_Draft_And_Information_Firewall_Amendment_V2>'],
+    ['c27a5e1b-5acc-43a7-8e71-9c4441490df9', 'old gate'],
+    ['dad86601-1688-471b-96d9-e252d1624bbb', '<Parallel_Event_Lifecycle>连续2—4个有实际时间推进的回合不能毫无变化</Parallel_Event_Lifecycle>'],
+    ['d6d69788-6791-4813-98db-6286e43858a3', '<Dice_Source_Stage>old</Dice_Source_Stage><Dice_First_Causal_Order_V3>old</Dice_First_Causal_Order_V3><Stitches_Transaction_Stage>old</Stitches_Transaction_Stage><External_Director_Time_Reconciliation_V2>old</External_Director_Time_Reconciliation_V2><Causal_Persistence_And_Clock_Stage_V1>old</Causal_Persistence_And_Clock_Stage_V1>'],
+    ['d8e4b241-be25-4009-9b37-f5a90a4c7427', '<Final_Fair_Director_Gate_V1>old</Final_Fair_Director_Gate_V1><Final_Dice_Gate>old</Final_Dice_Gate>'],
+    ['9c077696-71c7-4469-9fad-1f3e241497a7', '<Final_Causal_Persistence_Check_V1>old</Final_Causal_Persistence_Check_V1>'],
+    ['55c128dd-54d4-4028-ac30-96fd40452f93', 'old dice'],
+    ['c925621e-88b9-4a8a-b320-b3f422e3b18f', '【S1·出门】时间/地点/资源/任务/奖励/敌人/关系Δ与真实路径=；持续成功账=；情报钟/威胁钟及证据=；导演事实化× NPC越知× 风味惩罚× 免费反制× 越权× 双掷× 补判× 漏奖× 数据库未来污染× 短正文×；结尾四项候选✓。'],
+];
+
+function fixture() {
+    return {
+        name: '公平导演改良副本',
+        prompts: ids.map(([identifier, content], index) => ({
+            identifier,
+            name: `prompt-${index}`,
+            content,
+            enabled: true,
+        })),
+        prompt_order: [{
+            character_id: 100001,
+            order: ids.map(([identifier]) => ({ identifier, enabled: true })),
+        }],
+    };
+}
+
+test('global gate preserves long-form agency while adding aggregate pressure and dice semantics', () => {
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /3000～4000字/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /一名NPC每轮只能行动一次/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /阶段总上限/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /恢复债务/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /最低可玩性/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /D4\/D40改成D2\/D5/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /成就、图鉴、未来目标/u);
+    assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /组队、接受、回答、移动、消费/u);
+});
+
+test('transform keeps prompt order and enabled chain synchronized while deduplicating authority', () => {
+    const source = fixture();
+    const before = structuredClone(source);
+    const { preset, audit } = transformFairDirectorPreset(source);
+    assert.deepEqual(source, before, 'source object must stay untouched');
+    assert.equal(preset.prompts.length, before.prompts.length);
+    assert.equal(preset.prompt_order[0].order.length, before.prompt_order[0].order.length);
+    assert.equal(audit.enabledCount, ids.length);
+    assert.equal(audit.globalGateOrderIndex, 3);
+    assert.match(preset.name, /全局节奏闭环版$/u);
+    const gate = preset.prompts.find((item) => (
+        item.identifier === 'c27a5e1b-5acc-43a7-8e71-9c4441490df9'
+    ));
+    assert.equal(gate.content, GLOBAL_FAIR_DIRECTOR_GATE);
+    const authority = preset.prompts.find((item) => (
+        item.identifier === '3ad6a624-d98f-4f18-a821-a2bd7258899b'
+    ));
+    assert.doesNotMatch(authority.content, /<Stitches_Compatibility>/u);
+    assert.match(authority.content, /Fair_Director_Authority_Reference_V2/u);
+    const dice = preset.prompts.find((item) => (
+        item.identifier === '55c128dd-54d4-4028-ac30-96fd40452f93'
+    ));
+    assert.match(dice.content, /每回合先读取当前角色卡声明/u);
+    assert.match(dice.content, /短收据/u);
+});

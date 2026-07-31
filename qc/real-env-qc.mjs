@@ -43,6 +43,8 @@ const runtimeFiles = [
     'protocol-core.mjs',
     'social-core.mjs',
     'style.css',
+    'world-pressure-core.d.mts',
+    'world-pressure-core.mjs',
     ...collectRuntimeFiles('v2'),
 ].sort();
 
@@ -79,7 +81,7 @@ function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
     if (
         !actorLedger
-        || actorLedger.version !== 1
+        || actorLedger.version !== 2
         || actorLedger.persistentAuditLedger !== true
         || actorLedger.continuousMigration !== true
         || actorLedger.privateThoughtsHidden !== true
@@ -99,6 +101,33 @@ function validateActorLedgerEvidence(report) {
         || actorLedger.realUiControlsVerified !== true
         || actorLedger.optionalFailureNonBlocking !== true
     ) fail('Actor Ledger closed-loop evidence is incomplete');
+}
+
+function validateWorldPressureEvidence(report) {
+    const pressure = report.checks?.worldPressure;
+    if (
+        !pressure
+        || pressure.doctorOwnedOnly !== true
+        || pressure.contentRewriteCount !== 0
+        || pressure.channels?.join(',') !== 'actor,faction,environment'
+        || pressure.sharedInjectionBudget !== true
+        || pressure.phaseBudgetVerified !== true
+        || pressure.aggregateBudgetVerified !== true
+        || pressure.sameSceneBossCapVerified !== true
+        || pressure.recoveryDebtVerified !== true
+        || pressure.minimumPlayabilityVerified !== true
+        || pressure.quietProgressAccepted !== true
+        || pressure.externalThreatsObservedOnly !== true
+        || pressure.dueFalseSettlementRejected !== true
+        || pressure.receiptStages?.join(',') !== (
+            'plan,execution,world-settlement,injection,narrative-consumption'
+        )
+        || pressure.branchAndGenerationIdentityVerified !== true
+        || pressure.oldSwipeWrites !== 0
+        || pressure.wrongBranchWrites !== 0
+        || pressure.staleGenerationWrites !== 0
+        || pressure.nonTechnicalControlsVerified !== true
+    ) fail('world-pressure closed-loop evidence is incomplete');
 }
 
 function validateBlockedReport(report) {
@@ -456,6 +485,7 @@ function loadAndValidateReport() {
         fail('automated suite evidence is incomplete');
     }
     validateActorLedgerEvidence(report);
+    validateWorldPressureEvidence(report);
     if (report.result === 'blocked') {
         validateBlockedReport(report);
         const testedAt = Date.parse(report.testedAt);
@@ -557,8 +587,16 @@ function loadAndValidateReport() {
         || affectedModel.succeeded !== 3
         || affectedModel.failed !== 0
         || affectedModel.proxyStatuses?.join(',') !== '200,200,200'
-        || affectedModel.inputBytes?.length !== 3
-        || affectedModel.inputBytes.some((bytes) => bytes < 1)
+        || (
+            affectedModel.inputBytes?.length === 3
+                ? affectedModel.inputBytes.some((bytes) => bytes < 1)
+                : (
+                    affectedModel.inputPayloadNonEmpty?.length !== 3
+                    || affectedModel.inputPayloadNonEmpty.some(
+                        (present) => present !== true,
+                    )
+                )
+        )
         || affectedModel.doctorModelCallDelta !== 3
         || affectedModel.doctorRetryCount !== 0
         || affectedModel.doctorModelCompleted !== true

@@ -54,7 +54,7 @@ loaded.
    `actor-shard-core.d.mts`, `actor-shard-core.mjs`, `continuity-core.mjs`,
    `core.mjs`, `forum-core.mjs`, `index.js`,
    `LICENSE`, `manifest.json`, `model-queue.mjs`, `protocol-core.mjs`, `social-core.mjs`, `README.md`,
-   and `style.css`.
+   `style.css`, `world-pressure-core.d.mts`, and `world-pressure-core.mjs`.
 4. Confirm the served manifest and the in-app version badge match the release.
 
 ## 2. Start the real host
@@ -85,6 +85,9 @@ the forum/lightweight model route to `http://127.0.0.1:9328/v1`. When the approv
 credential is already stored in the explicitly selected local QC profile, the proxy
 may instead accept that profile's `Authorization: Bearer ...` header for the current
 request only. It forwards the value without logging, returning, or retaining it.
+An explicitly user-authorized historical OpenAI-compatible endpoint may be selected
+only when it is present in the proxy's source allowlist; arbitrary environment URLs
+must fail closed before a request is sent.
 
 Before continuing, verify `/health` reports `ok: true` and
 `requestCredentialAccepted: true`. If using explicit injection, also require

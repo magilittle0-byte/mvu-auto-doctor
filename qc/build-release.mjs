@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const candidate = '2.0.0-rc.4';
+const candidate = '2.0.0-rc.5';
 const artifactName = `05_MVU自动医生_v${candidate}_离线候选.zip`;
 const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
@@ -33,6 +33,8 @@ const rootFiles = [
     'README.md',
     'social-core.mjs',
     'style.css',
+    'world-pressure-core.d.mts',
+    'world-pressure-core.mjs',
     'docs/2.0/MIGRATION_ROLLBACK_GUIDE.md',
     'docs/2.0/USER_GUIDE_2.0_RC.md',
     'docs/2.0/RELEASE_CHECKLIST.md',

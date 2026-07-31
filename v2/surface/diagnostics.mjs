@@ -135,6 +135,15 @@ export function createPrivacySafeDiagnosticProjection({
             completed: Math.max(0, Number(actorShards?.completed) || 0),
             succeeded: Math.max(0, Number(actorShards?.succeeded) || 0),
             failed: Math.max(0, Number(actorShards?.failed) || 0),
+            failureCodes: [
+                ...new Set(
+                    (Array.isArray(actorShards?.failureCodes)
+                        ? actorShards.failureCodes
+                        : [])
+                        .map((value) => String(value || ''))
+                        .filter((value) => /^actor_shard\.[a-z0-9_.-]+$/u.test(value)),
+                ),
+            ].slice(0, 8),
         },
         userPrompts: Object.fromEntries(
             Object.entries(userPrompts || {}).map(([key, value]) => [

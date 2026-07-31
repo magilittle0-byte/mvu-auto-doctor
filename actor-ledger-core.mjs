@@ -1,16 +1,20 @@
 import { fingerprint } from './core.mjs';
 
-export const ACTOR_LEDGER_VERSION = 1;
+export const ACTOR_LEDGER_VERSION = 2;
 export const ACTOR_LEDGER_MAX_ACTORS = 96;
 export const ACTOR_LEDGER_MAX_RECEIPTS = 240;
 
 const TIERS = new Set(['key', 'secondary', 'background']);
-const STATUSES = new Set(['active', 'dormant', 'resolved']);
+const STATUSES = new Set(['active', 'dormant', 'departed', 'deceased', 'resolved']);
 const KNOWLEDGE_KINDS = new Set(['observed', 'reported', 'inferred']);
 const INTENTS = new Set(['execute', 'replan', 'wait']);
 const PRIVATE_NARRATION = /(?:心想|暗想|暗自|内心|心底|心理|秘密想|私下决定|未说出口|回忆起|玩家的秘密|玩家私密)/u;
 const PLAYER_SOVEREIGNTY = /(?:让|迫使|命令|说服|要求)(?:了)?玩家(?:接受|同意|服从|支付|交出|前往|离开|攻击|回答|承诺|决定)|玩家(?:接受了|同意了|服从了|支付了|交出了|前往了|离开了|攻击了|回答了|承诺了|决定了)/u;
 const GENERIC_WAIT = /^(?:等待|继续等待|暂时不动|按兵不动|保持现状|没有变化|暂无变化|无事发生|条件未成熟)[。.!！]?$/u;
+const GROUP_NAME = /(?:队|军|协会|组织|公司|家族|势力|居民|商户|人群|群众|议会|公会|商会)$/u;
+const NON_ACTOR_NAME = /^(?:玩家|player|user|系统|system|环境|environment|世界|world|旁白|narrator|主持人|gm|game master)$/iu;
+const DIRECT_OBSERVATION = /(?:看见|看到|目睹|注意到|发现|听见|听到|闻到|察觉|收到|读到|被告知|获悉|亲历|遭遇|触碰|检查到|观察到)/u;
+const OBSERVATION_NEGATION = /(?:没看见|没有看见|未看见|没听见|没有听见|未听见|一无所知|并不知道|不知情|尚未知晓)/u;
 
 function clone(value) {
     return value === undefined ? undefined : structuredClone(value);
@@ -49,6 +53,14 @@ function stableActorId(name) {
     return `NPC-${fingerprint(cleanText(name, 160).toLocaleLowerCase()).slice(0, 16)}`;
 }
 
+function isActorName(value) {
+    const name = cleanText(value, 160);
+    return !!name
+        && name.length >= 2
+        && !NON_ACTOR_NAME.test(name)
+        && !GROUP_NAME.test(name);
+}
+
 function normalizeSourceRef(value) {
     if (!value || typeof value !== 'object') return null;
     const chatId = cleanText(value.chatId, 180);
@@ -60,6 +72,8 @@ function normalizeSourceRef(value) {
         messageId,
         index: integer(value.index, 0, Number.MAX_SAFE_INTEGER, 0),
         swipeId: integer(value.swipeId, 0, Number.MAX_SAFE_INTEGER, 0),
+        generation: integer(value.generation, 0, Number.MAX_SAFE_INTEGER, 0),
+        branchId: cleanText(value.branchId, 180),
         hash,
     };
 }
@@ -128,6 +142,7 @@ function normalizeActor(value, index, turn) {
     if (!name) return null;
     const identity = value.identity && typeof value.identity === 'object' ? value.identity : {};
     const hidden = value.hidden && typeof value.hidden === 'object' ? value.hidden : {};
+    const lineage = value.lineage && typeof value.lineage === 'object' ? value.lineage : {};
     const plan = value.plan && typeof value.plan === 'object' ? value.plan : {};
     const location = value.location && typeof value.location === 'object'
         ? value.location
@@ -138,12 +153,32 @@ function normalizeActor(value, index, turn) {
         name,
         tier: TIERS.has(value.tier) ? value.tier : 'background',
         status: STATUSES.has(value.status) ? value.status : 'active',
+        inactiveReason: ['sleep', 'absence', 'quiet'].includes(value.inactiveReason)
+            ? value.inactiveReason
+            : '',
         identity: {
             role: cleanText(identity.role, 180),
             aliases: cleanList(identity.aliases, 8, 120),
             traits: cleanList(identity.traits, 12, 180),
             desires: cleanList(identity.desires, 12, 240),
             boundaries: cleanList(identity.boundaries, 12, 240),
+        },
+        lineage: {
+            rootActorId: cleanText(lineage.rootActorId, 120) || id,
+            currentForm: cleanText(lineage.currentForm, 160) || name,
+            forms: (Array.isArray(lineage.forms) ? lineage.forms : [{
+                name,
+                turn: integer(value.createdTurn, 0, Number.MAX_SAFE_INTEGER, turn),
+                evidence: cleanList(value.evidence, 4, 240),
+            }])
+                .filter((item) => item && typeof item === 'object')
+                .map((item) => ({
+                    name: cleanText(item.name, 160),
+                    turn: integer(item.turn, 0, Number.MAX_SAFE_INTEGER, turn),
+                    evidence: cleanList(item.evidence, 8, 240),
+                }))
+                .filter((item) => item.name)
+                .slice(-12),
         },
         longTermGoals: cleanList(value.longTermGoals, 12, 400),
         currentGoals: cleanList(value.currentGoals, 8, 400),
@@ -218,6 +253,16 @@ function normalizeReceipt(value) {
         status: cleanText(value.status, 80) || 'pending',
         observableConsequence: cleanText(value.observableConsequence, 500),
         createdTurn: integer(value.createdTurn, 0, Number.MAX_SAFE_INTEGER, 0),
+        target: value.target && typeof value.target === 'object'
+            ? {
+                chatId: cleanText(value.target.chatId, 180),
+                messageId: cleanText(value.target.messageId, 180),
+                swipeId: integer(value.target.swipeId, 0, Number.MAX_SAFE_INTEGER, 0),
+                generation: integer(value.target.generation, 0, Number.MAX_SAFE_INTEGER, 0),
+                branchId: cleanText(value.target.branchId, 180),
+                hash: cleanText(value.target.hash, 100),
+            }
+            : null,
     };
 }
 
@@ -229,7 +274,7 @@ export function emptyActorLedger(chatId = '') {
         actors: [],
         actionReceipts: [],
         observationReceipts: [],
-        migrations: { continuityV5: false },
+        migrations: { continuityV5: false, actorLedgerV2: true },
         updatedAt: 0,
     };
 }
@@ -265,6 +310,7 @@ export function normalizeActorLedger(value, {
             : []).slice(-120),
         migrations: {
             continuityV5: source.migrations?.continuityV5 === true,
+            actorLedgerV2: true,
         },
         updatedAt: integer(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -280,6 +326,7 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
     const turn = integer(continuity?.turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
     for (const thread of Array.isArray(continuity?.threads) ? continuity.threads : []) {
         for (const actorName of cleanList(thread?.actors, 16, 160)) {
+            if (!isActorName(actorName)) continue;
             const id = stableActorId(actorName);
             const current = byId.get(id) || normalizeActor({
                 id,
@@ -340,6 +387,39 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
     }, { chatId: ledger.chatId || continuity?.chatId });
 }
 
+export function mergeActorIdentityReveal(value, {
+    actorId = '',
+    revealedName = '',
+    aliases = [],
+    evidence = [],
+    turn = null,
+} = {}) {
+    const ledger = normalizeActorLedger(value);
+    const id = cleanText(actorId, 120);
+    const name = cleanText(revealedName, 160);
+    if (!id || !isActorName(name)) return ledger;
+    const index = ledger.actors.findIndex((actor) => (
+        actor.id === id
+        || actor.name === id
+        || actor.identity.aliases.includes(id)
+    ));
+    if (index < 0) return ledger;
+    const actor = clone(ledger.actors[index]);
+    const previousName = actor.name;
+    actor.name = name;
+    actor.identity.aliases = cleanList([
+        ...actor.identity.aliases,
+        previousName,
+        ...aliases,
+    ], 12, 160).filter((item) => item !== name);
+    actor.evidence = mergeEvidence(actor.evidence, evidence);
+    actor.updatedTurn = integer(turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
+    actor.version += 1;
+    ledger.actors[index] = actor;
+    ledger.updatedAt = Date.now();
+    return ledger;
+}
+
 function observableStatements(content) {
     const accepted = String(content ?? '')
         .replace(/^[\s\S]*?<content\b[^>]*>/iu, '')
@@ -352,6 +432,156 @@ function observableStatements(content) {
         .slice(0, 12);
 }
 
+function actorNames(actor) {
+    return [actor.name, ...actor.identity.aliases]
+        .map((item) => cleanText(item, 160))
+        .filter((item) => item.length >= 2);
+}
+
+function directlyObservedBy(statement, actor) {
+    if (!DIRECT_OBSERVATION.test(statement) || OBSERVATION_NEGATION.test(statement)) return false;
+    return actorNames(actor).some((name) => {
+        const index = statement.indexOf(name);
+        if (index < 0) return false;
+        const local = statement.slice(index, index + name.length + 28);
+        return DIRECT_OBSERVATION.test(local) && !OBSERVATION_NEGATION.test(local);
+    });
+}
+
+function escapePattern(value) {
+    return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+export function reconcileActorIdentityRevealsFromAcceptedContent(value, {
+    content = '',
+    sourceRef = null,
+} = {}) {
+    let ledger = normalizeActorLedger(value);
+    const ref = normalizeSourceRef(sourceRef);
+    if (!ref) return ledger;
+    const body = String(content ?? '')
+        .replace(/^[\s\S]*?<content\b[^>]*>/iu, '')
+        .replace(/<\/content>[\s\S]*$/iu, '');
+    for (const current of [...ledger.actors]) {
+        const names = actorNames(current);
+        let revealedName = '';
+        for (const alias of names) {
+            const pattern = new RegExp(
+                `${escapePattern(alias)}[^。！？.!?]{0,48}`
+                + '(?:真实身份(?:是|为)|原来(?:就是|是)|自称(?:为)?)'
+                + '\\s*([\\p{L}\\p{N}·・_-]{2,40})',
+                'u',
+            );
+            const match = body.match(pattern);
+            if (match) {
+                revealedName = cleanText(match[1], 160)
+                    .replace(/(?:本人|自己)$/u, '');
+                break;
+            }
+        }
+        if (!isActorName(revealedName) || revealedName === current.name) continue;
+        const duplicate = ledger.actors.find((actor) => (
+            actor.id !== current.id
+            && (
+                actor.name === revealedName
+                || actor.identity.aliases.includes(revealedName)
+            )
+        ));
+        ledger = mergeActorIdentityReveal(ledger, {
+            actorId: current.id,
+            revealedName,
+            aliases: names,
+            evidence: [`${ref.messageId}:${ref.swipeId}:${ref.generation}:${ref.hash}`],
+            turn: ledger.turn,
+        });
+        if (!duplicate) continue;
+        const stable = ledger.actors.find((actor) => actor.id === current.id);
+        stable.knowledge = [
+            ...stable.knowledge,
+            ...duplicate.knowledge.filter((item) => (
+                !stable.knowledge.some((known) => known.id === item.id)
+            )),
+        ].slice(-48);
+        stable.evidence = mergeEvidence(stable.evidence, duplicate.evidence);
+        stable.identity.aliases = cleanList([
+            ...stable.identity.aliases,
+            duplicate.name,
+            ...duplicate.identity.aliases,
+        ], 12, 160).filter((item) => item !== stable.name);
+        stable.resources = stable.resources.length ? stable.resources : clone(duplicate.resources);
+        stable.capabilities = mergeEvidence(stable.capabilities, duplicate.capabilities, 24);
+        stable.version += 1;
+        ledger.actors = ledger.actors.filter((actor) => actor.id !== duplicate.id);
+    }
+    ledger.updatedAt = Date.now();
+    return normalizeActorLedger(ledger, { chatId: ledger.chatId });
+}
+
+export function reconcileActorMutationLineageFromAcceptedContent(value, {
+    content = '',
+    sourceRef = null,
+} = {}) {
+    const ledger = normalizeActorLedger(value);
+    const ref = normalizeSourceRef(sourceRef);
+    if (!ref) return ledger;
+    const body = String(content ?? '')
+        .replace(/^[\s\S]*?<content\b[^>]*>/iu, '')
+        .replace(/<\/content>[\s\S]*$/iu, '');
+    for (const actor of [...ledger.actors]) {
+        let form = '';
+        for (const name of actorNames(actor)) {
+            const pattern = new RegExp(
+                `${escapePattern(name)}[^。！？.!?]{0,36}`
+                + '(?:异变为|变异成|转化为|进化为|蜕变为)'
+                + '\\s*([\\p{L}\\p{N}·・_-]{2,60})',
+                'u',
+            );
+            const match = body.match(pattern);
+            if (match) {
+                form = cleanText(match[1], 160);
+                break;
+            }
+        }
+        if (!isActorName(form)) continue;
+        const stable = ledger.actors.find((item) => item.id === actor.id);
+        const evidence = `${ref.messageId}:${ref.swipeId}:${ref.generation}:${ref.hash}`;
+        if (!stable.lineage.forms.some((item) => item.name === form)) {
+            stable.lineage.forms.push({
+                name: form,
+                turn: ledger.turn,
+                evidence: [evidence],
+            });
+        }
+        stable.lineage.forms = stable.lineage.forms.slice(-12);
+        stable.lineage.currentForm = form;
+        stable.identity.aliases = cleanList([
+            ...stable.identity.aliases,
+            form,
+        ], 12, 160).filter((item) => item !== stable.name);
+        stable.evidence = mergeEvidence(stable.evidence, [evidence]);
+        stable.version += 1;
+        const duplicate = ledger.actors.find((item) => (
+            item.id !== stable.id
+            && (item.name === form || item.identity.aliases.includes(form))
+        ));
+        if (duplicate) {
+            stable.knowledge = [
+                ...stable.knowledge,
+                ...duplicate.knowledge.filter((item) => (
+                    !stable.knowledge.some((known) => known.id === item.id)
+                )),
+            ].slice(-48);
+            stable.resources = stable.resources.length
+                ? stable.resources
+                : clone(duplicate.resources);
+            stable.capabilities = mergeEvidence(stable.capabilities, duplicate.capabilities, 24);
+            ledger.actors = ledger.actors.filter((item) => item.id !== duplicate.id);
+        }
+    }
+    ledger.updatedAt = Date.now();
+    return normalizeActorLedger(ledger, { chatId: ledger.chatId });
+}
+
 export function applyAcceptedContentObservations(value, {
     content = '',
     sourceRef = null,
@@ -362,11 +592,22 @@ export function applyAcceptedContentObservations(value, {
     const observers = new Set(cleanList(observerActorIds, 32, 120));
     const statements = observableStatements(content);
     if (!ref || !observers.size || !statements.length) return ledger;
+    const receiptId = `actor-observation:${fingerprint(JSON.stringify([
+        ref.chatId,
+        ref.messageId,
+        ref.swipeId,
+        ref.generation,
+        ref.branchId,
+        ref.hash,
+    ])).slice(0, 18)}`;
+    if (ledger.observationReceipts.some((receipt) => receipt.receiptId === receiptId)) {
+        return ledger;
+    }
     const learnedIds = [];
     ledger.actors = ledger.actors.map((actor) => {
         if (!observers.has(actor.id)) return actor;
         const next = clone(actor);
-        for (const claim of statements) {
+        for (const claim of statements.filter((item) => directlyObservedBy(item, actor))) {
             const knowledge = normalizeKnowledge({
                 claim,
                 kind: 'observed',
@@ -384,8 +625,9 @@ export function applyAcceptedContentObservations(value, {
         next.version += 1;
         return next;
     });
+    if (!learnedIds.length) return ledger;
     ledger.observationReceipts.push({
-        receiptId: `actor-observation:${fingerprint(`${ref.messageId}|${ref.swipeId}|${ref.hash}`).slice(0, 18)}`,
+        receiptId,
         sourceRef: ref,
         observerActorIds: [...observers],
         knowledgeIds: [...new Set(learnedIds)],
@@ -399,20 +641,83 @@ export function applyAcceptedContentObservations(value, {
 
 export function inferObserverActorIds(value, content) {
     const ledger = normalizeActorLedger(value);
-    const source = String(content ?? '');
+    const statements = observableStatements(content);
     return ledger.actors
-        .filter((actor) => {
-            const names = [actor.name, ...actor.identity.aliases]
-                .map((item) => cleanText(item, 160))
-                .filter((item) => item.length >= 2);
-            return names.some((name) => {
-                const index = source.indexOf(name);
-                if (index < 0) return false;
-                const context = source.slice(Math.max(0, index - 12), index + name.length + 16);
-                return !/(?:不在场|已经离场|远在|另一边|并未到场|缺席)/u.test(context);
-            });
-        })
+        .filter((actor) => ['active', 'dormant'].includes(actor.status))
+        .filter((actor) => statements.some((statement) => directlyObservedBy(statement, actor)))
         .map((actor) => actor.id);
+}
+
+export function reconcileActorLifecycleFromAcceptedContent(value, {
+    content = '',
+    sourceRef = null,
+} = {}) {
+    const ledger = normalizeActorLedger(value);
+    const ref = normalizeSourceRef(sourceRef);
+    if (!ref) return ledger;
+    const statements = observableStatements(content);
+    const transitions = [];
+    ledger.actors = ledger.actors.map((current) => {
+        const actor = clone(current);
+        const relevant = statements.filter((statement) => (
+            actorNames(actor).some((name) => statement.includes(name))
+        ));
+        if (!relevant.length) return actor;
+        let nextStatus = actor.status;
+        if (relevant.some((statement) => /(?:已经|确认|当场|彻底)?(?:死亡|身亡|毙命|被杀死|咽气|尸体)/u.test(statement))) {
+            nextStatus = 'deceased';
+        } else if (
+            actor.status !== 'deceased'
+            && relevant.some((statement) => /(?:已经)?(?:离开|离场|撤离|远走|失踪|退出)(?:了|当前|此地|港区|现场)?/u.test(statement))
+        ) {
+            nextStatus = 'departed';
+        } else if (
+            actor.status !== 'deceased'
+            && relevant.some((statement) => /(?:昏迷|沉睡|休眠|失去意识|无法行动)/u.test(statement))
+        ) {
+            nextStatus = 'dormant';
+        } else if (
+            actor.status !== 'deceased'
+            && relevant.some((statement) => /(?:苏醒|醒来|回归|返回|重新回到|恢复行动)/u.test(statement))
+        ) {
+            nextStatus = 'active';
+        }
+        if (nextStatus === actor.status) return actor;
+        transitions.push({
+            actorId: actor.id,
+            from: actor.status,
+            to: nextStatus,
+        });
+        actor.status = nextStatus;
+        actor.inactiveReason = nextStatus === 'dormant'
+            ? 'sleep'
+            : nextStatus === 'departed'
+                ? 'absence'
+                : '';
+        actor.updatedTurn = ledger.turn;
+        actor.version += 1;
+        actor.evidence = mergeEvidence(actor.evidence, [
+            `${ref.messageId}:${ref.swipeId}:${ref.generation}:${ref.hash}`,
+        ]);
+        return actor;
+    });
+    if (!transitions.length) return ledger;
+    ledger.observationReceipts.push({
+        receiptId: `actor-lifecycle:${fingerprint(JSON.stringify([
+            ref.chatId,
+            ref.messageId,
+            ref.swipeId,
+            ref.generation,
+            ref.branchId,
+            ref.hash,
+        ])).slice(0, 18)}`,
+        sourceRef: ref,
+        transitions,
+        settledAt: Date.now(),
+    });
+    ledger.observationReceipts = ledger.observationReceipts.slice(-120);
+    ledger.updatedAt = Date.now();
+    return ledger;
 }
 
 function schedulingScore(actor, turn) {
@@ -446,7 +751,8 @@ function schedulingScore(actor, turn) {
     score += Math.min(20, actor.resources.reduce((total, item) => total + item.amount, 0));
     score -= Math.min(40, actor.attentionScore / 10);
     if (actor.status === 'dormant') score -= 10;
-    if (actor.status === 'resolved') score = -Infinity;
+    if (actor.status === 'dormant' && actor.inactiveReason === 'sleep') score = -Infinity;
+    if (!['active', 'dormant'].includes(actor.status)) score = -Infinity;
     return { score, reasons };
 }
 
@@ -543,12 +849,17 @@ export function actorActionCandidatesFromShard(value, proposals, {
             location: {
                 from: actor.location.name,
                 to: cleanText(proposal?.location, 180) || actor.location.name,
-                travelTurns: 0,
+                travelTurns: integer(proposal?.travelTurns, 0, 10_000, 0),
             },
             action,
             knowledgeRefs,
-            resourceCosts: [],
-            capabilityUsed: '',
+            resourceCosts: (Array.isArray(proposal?.resourceCosts)
+                ? proposal.resourceCosts
+                : []).map((item) => ({
+                resourceId: cleanText(item?.resourceId, 100),
+                amount: number(item?.amount, 0, 1_000_000_000, 0),
+            })),
+            capabilityUsed: cleanText(proposal?.capabilityUsed, 160),
             contact: contactMatch
                 ? {
                     mode: cleanText(contactMatch[0], 80),
@@ -560,7 +871,9 @@ export function actorActionCandidatesFromShard(value, proposals, {
                 }
                 : null,
             planUpdate: cleanText(proposal?.currentGoal, 500),
-            waitCondition: wait ? action : '',
+            waitCondition: wait
+                ? cleanText(proposal?.waitCondition, 500) || action
+                : '',
             evidence: evidence.length ? evidence : actor.evidence.slice(0, 1),
         };
     });
@@ -623,6 +936,12 @@ function validateCandidate(actor, candidate, turn) {
     const reasons = [];
     if (!actor || cleanText(candidate?.actorId, 120) !== actor.id) {
         return ['actor-identity-mismatch'];
+    }
+    if (
+        !['active', 'dormant'].includes(actor.status)
+        || (actor.status === 'dormant' && actor.inactiveReason === 'sleep')
+    ) {
+        reasons.push('actor-not-actionable');
     }
     if (cleanText(candidate?.actorName, 160) !== actor.name) {
         reasons.push('actor-identity-mismatch');
@@ -840,6 +1159,17 @@ export function settleActorInjectionReceipts(value, {
     if (!ref) return ledger;
     ledger.actionReceipts = ledger.actionReceipts.map((receipt) => {
         if (receipt.stage !== 'injected' || receipt.status !== 'pending') return receipt;
+        const target = receipt.target && typeof receipt.target === 'object'
+            ? receipt.target
+            : null;
+        if (target && (
+            (target.chatId && target.chatId !== ref.chatId)
+            || (target.messageId && target.messageId !== ref.messageId)
+            || (target.swipeId && target.swipeId !== ref.swipeId)
+            || (target.generation && target.generation !== ref.generation)
+            || (target.branchId && target.branchId !== ref.branchId)
+            || (target.hash && target.hash !== ref.hash)
+        )) return receipt;
         const evidence = receipt.observableConsequence
             && accepted.includes(receipt.observableConsequence)
             ? receipt.observableConsequence

@@ -4,8 +4,12 @@ import {
     actorLedgerView,
     applyAcceptedContentObservations,
     emptyActorLedger,
+    mergeActorIdentityReveal,
     migrateActorLedgerFromContinuity,
     normalizeActorLedger,
+    reconcileActorIdentityRevealsFromAcceptedContent,
+    reconcileActorLifecycleFromAcceptedContent,
+    reconcileActorMutationLineageFromAcceptedContent,
     scheduleActorTurns,
     settleActorActionCandidates,
     settleActorInjectionReceipts,
@@ -17,6 +21,8 @@ function sourceRef(index = 4) {
         messageId: `message-${index}`,
         index,
         swipeId: 0,
+        generation: index,
+        branchId: 'branch-main',
         hash: `hash-${index}`,
     };
 }
@@ -120,6 +126,165 @@ test('accepted content updates only named observers and excludes private/interna
     assert.equal(ada.knowledge.some((item) => item.claim.includes('钥匙')), false);
     assert.equal(bella.knowledge.length, 0);
     assert.equal(next.observationReceipts.at(-1).observerActorIds.includes('ADA'), true);
+});
+
+test('accepted content writes back only direct observations and is idempotent for one target identity', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 3,
+        actors: [actor('ADA', { name: '艾达' }), actor('BELLA', { name: '贝拉' })],
+    });
+    const payload = {
+        content: [
+            '<content>',
+            '艾达看见码头仓库起火。',
+            '贝拉在另一处密室把钥匙藏进靴子，艾达对此一无所知。',
+            '旁白知道第三方候选准备伏击，但消息尚未传播。',
+            '</content>',
+        ].join(''),
+        sourceRef: sourceRef(9),
+        observerActorIds: ['ADA'],
+    };
+    const first = applyAcceptedContentObservations(ledger, payload);
+    const second = applyAcceptedContentObservations(first, payload);
+    const ada = second.actors.find((item) => item.id === 'ADA');
+    assert.equal(ada.knowledge.some((item) => item.claim.includes('仓库起火')), true);
+    assert.equal(ada.knowledge.some((item) => item.claim.includes('钥匙')), false);
+    assert.equal(ada.knowledge.some((item) => item.claim.includes('伏击')), false);
+    assert.equal(second.observationReceipts.length, 1);
+});
+
+test('identity reveal keeps the original stable actor id and merges aliases', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 4,
+        actors: [actor('NPC-MASKED-01', {
+            name: '蒙面女人',
+            identity: {
+                role: '身份未知',
+                aliases: ['红围巾'],
+                traits: [],
+                desires: [],
+                boundaries: [],
+            },
+        })],
+    });
+    const next = mergeActorIdentityReveal(ledger, {
+        actorId: 'NPC-MASKED-01',
+        revealedName: '艾达·王',
+        aliases: ['蒙面女人', '红围巾'],
+        evidence: ['message-10:hash-10'],
+        turn: 5,
+    });
+    assert.equal(next.actors.length, 1);
+    assert.equal(next.actors[0].id, 'NPC-MASKED-01');
+    assert.equal(next.actors[0].name, '艾达·王');
+    assert.equal(next.actors[0].identity.aliases.includes('蒙面女人'), true);
+});
+
+test('accepted explicit identity reveal merges a duplicate revealed-name actor into the unknown stable id', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 5,
+        actors: [
+            actor('NPC-MASKED-01', { name: '蒙面女人' }),
+            actor('NPC-ADA-DUPLICATE', {
+                name: '艾达',
+                knowledge: [{
+                    id: 'K-ADA',
+                    claim: '北港仓库起火',
+                    kind: 'reported',
+                    confidence: 0.6,
+                    learnedTurn: 5,
+                    sourceRef: sourceRef(10),
+                    propagation: [],
+                }],
+            }),
+        ],
+    });
+    const next = reconcileActorIdentityRevealsFromAcceptedContent(ledger, {
+        content: '<content>蒙面女人摘下面具，确认自己的真实身份是艾达。</content>',
+        sourceRef: sourceRef(10),
+    });
+    assert.equal(next.actors.length, 1);
+    assert.equal(next.actors[0].id, 'NPC-MASKED-01');
+    assert.equal(next.actors[0].name, '艾达');
+    assert.equal(next.actors[0].identity.aliases.includes('蒙面女人'), true);
+    assert.equal(next.actors[0].knowledge.some((item) => item.id === 'K-ADA'), true);
+});
+
+test('migration excludes player system environment and group labels from the actor pool', () => {
+    const migrated = migrateActorLedgerFromContinuity(
+        emptyActorLedger('chat-actor-ledger'),
+        {
+            turn: 7,
+            threads: [{
+                id: 'PUBLIC',
+                actors: ['艾达', '玩家', '系统', '环境', '码头商会'],
+                locations: ['北港'],
+                stage: 'advancing',
+                knowledge: 'observed',
+                summary: '公开调度信息。',
+                nextBeat: '第八日出发',
+                seedBasis: 'message-4:hash-4',
+                sourceRefs: [sourceRef()],
+            }],
+        },
+    );
+    assert.deepEqual(migrated.actors.map((item) => item.name), ['艾达']);
+});
+
+test('mutation lineage keeps one actor id and records forms instead of spawning a second actor', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 12,
+        actors: [
+            actor('NPC-GAO', { name: '高阳' }),
+            actor('NPC-MUTANT-DUP', { name: '暴食者·生化温床' }),
+        ],
+    });
+    const next = reconcileActorMutationLineageFromAcceptedContent(ledger, {
+        content: '<content>高阳在病毒冲击下异变为暴食者·生化温床。</content>',
+        sourceRef: sourceRef(13),
+    });
+    assert.equal(next.actors.length, 1);
+    assert.equal(next.actors[0].id, 'NPC-GAO');
+    assert.equal(next.actors[0].lineage.currentForm, '暴食者·生化温床');
+    assert.deepEqual(
+        next.actors[0].lineage.forms.map((item) => item.name),
+        ['高阳', '暴食者·生化温床'],
+    );
+});
+
+test('death departure sleep and wake transitions stop or resume scheduling without reviving the dead', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 8,
+        actors: [
+            actor('ADA', { name: '艾达', nextActionTurn: 8 }),
+            actor('BELLA', { name: '贝拉', nextActionTurn: 8 }),
+            actor('CARLO', { name: '卡洛', nextActionTurn: 8 }),
+        ],
+    });
+    const terminal = reconcileActorLifecycleFromAcceptedContent(ledger, {
+        content: '<content>艾达已经死亡。贝拉已经离开港区。卡洛陷入昏迷。</content>',
+        sourceRef: sourceRef(11),
+    });
+    assert.equal(terminal.actors.find((item) => item.id === 'ADA').status, 'deceased');
+    assert.equal(terminal.actors.find((item) => item.id === 'BELLA').status, 'departed');
+    assert.equal(terminal.actors.find((item) => item.id === 'CARLO').status, 'dormant');
+    assert.equal(scheduleActorTurns(terminal, { turn: 8, maxActors: 3 }).selected.length, 0);
+
+    const woke = reconcileActorLifecycleFromAcceptedContent(terminal, {
+        content: '<content>卡洛苏醒并重新回到岗位。艾达的尸体被搬走。</content>',
+        sourceRef: sourceRef(12),
+    });
+    assert.equal(woke.actors.find((item) => item.id === 'CARLO').status, 'active');
+    assert.equal(woke.actors.find((item) => item.id === 'ADA').status, 'deceased');
+    assert.deepEqual(
+        scheduleActorTurns(woke, { turn: 9, maxActors: 3 }).selected.map((item) => item.actorId),
+        ['CARLO'],
+    );
 });
 
 test('scheduler prioritizes due/deadline/commitment and reserves a bounded low-attention exploration slot', () => {
@@ -297,6 +462,47 @@ test('injection settlement marks observable consequences consumed and keeps unre
     assert.equal(next.actionReceipts.find((item) => item.receiptId === 'R1').status, 'consumed');
     assert.equal(next.actionReceipts.find((item) => item.receiptId === 'R2').stage, 'world_settled');
     assert.equal(actorLedgerView(next).privateThoughtsExposed, false);
+});
+
+test('actor injection receipts are settled only by the exact generation branch and swipe', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        actionReceipts: [{
+            receiptId: 'R-BRANCH',
+            actionId: 'A-BRANCH',
+            actorId: 'ADA',
+            stage: 'injected',
+            status: 'pending',
+            observableConsequence: '布告栏出现告示',
+            createdTurn: 5,
+            target: {
+                chatId: 'chat-actor-ledger',
+                messageId: 'message-20',
+                swipeId: 1,
+                generation: 4,
+                branchId: 'branch-main',
+                hash: 'hash-20',
+            },
+        }],
+    });
+    const stale = settleActorInjectionReceipts(ledger, {
+        content: '<content>布告栏出现告示。</content>',
+        sourceRef: {
+            ...sourceRef(20),
+            swipeId: 0,
+            generation: 3,
+        },
+    });
+    assert.equal(stale.actionReceipts[0].status, 'pending');
+    const exact = settleActorInjectionReceipts(stale, {
+        content: '<content>布告栏出现告示。</content>',
+        sourceRef: {
+            ...sourceRef(20),
+            swipeId: 1,
+            generation: 4,
+        },
+    });
+    assert.equal(exact.actionReceipts[0].status, 'consumed');
 });
 
 test('80-turn low-attention exploration prevents starvation while receipts stay bounded', () => {

@@ -339,10 +339,14 @@ window.StoryOracleAPI = {
           actorName: actor.actorName,
           time: '第三日午夜',
           location: actor.possibleLocations[0] || 'unknown',
+          travelTurns: 0,
           knowledgeBasis: [actor.limitedKnowledgeBasis[0]],
           currentGoal: actor.currentGoalHints[0] || '继续既定目标',
           candidateAction: '沿已知传播链继续调查',
           interactionTargets: [],
+          resourceCosts: [],
+          capabilityUsed: '',
+          waitCondition: '',
           sourceThreads: [actor.sourceThreads[0]],
           evidence: [actor.evidence[0]],
           causalChain: [actor.causalChain[0]],
@@ -814,7 +818,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.4');
+    assert.equal(continuity.version, '2.0.0-rc.5');
     assert.equal(
         continuity.worldInterfaceLimit,
         '2',
@@ -2471,7 +2475,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.4');
+    assert.equal(lifecycle.version, '2.0.0-rc.5');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -5194,6 +5198,21 @@ try {
         const workers = document.querySelector('.mvuad-actor-shard-workers');
         workers.value = '2';
         workers.dispatchEvent(new Event('change', { bubbles: true }));
+        const factionSlots = document.querySelector('.mvuad-world-faction-slots');
+        factionSlots.value = '2';
+        factionSlots.dispatchEvent(new Event('change', { bubbles: true }));
+        const environmentSlots = document.querySelector('.mvuad-world-environment-slots');
+        environmentSlots.value = '1';
+        environmentSlots.dispatchEvent(new Event('change', { bubbles: true }));
+        const recovery = document.querySelector('.mvuad-world-recovery-cadence');
+        recovery.value = 'gentle';
+        recovery.dispatchEvent(new Event('change', { bubbles: true }));
+        const pressure = document.querySelector('.mvuad-world-pressure-cap');
+        pressure.value = '4';
+        pressure.dispatchEvent(new Event('change', { bubbles: true }));
+        const injections = document.querySelector('.mvuad-continuity-max-visible');
+        injections.value = '3';
+        injections.dispatchEvent(new Event('change', { bubbles: true }));
         document.querySelector('.mvuad-continuity-prompt-addon').value =
             'PHASE9-CONTINUITY-CANARY：保留倒叙节奏。';
         document.querySelector('.mvuad-actor-shard-prompt-addon').value =
@@ -5299,6 +5318,12 @@ try {
             workers: document.querySelector('.mvuad-actor-shard-workers').value,
             exploration: document.querySelector('.mvuad-actor-exploration-slots').value,
             collision: document.querySelector('.mvuad-actor-collision-intensity').value,
+            factionSlots: document.querySelector('.mvuad-world-faction-slots').value,
+            environmentSlots: document.querySelector('.mvuad-world-environment-slots').value,
+            recovery: document.querySelector('.mvuad-world-recovery-cadence').value,
+            pressure: document.querySelector('.mvuad-world-pressure-cap').value,
+            bossCap: document.querySelector('.mvuad-world-boss-cap').value,
+            injections: document.querySelector('.mvuad-continuity-max-visible').value,
             continuityPrompt: document.querySelector('.mvuad-continuity-prompt-addon').value,
             actorPrompt: document.querySelector('.mvuad-actor-shard-prompt-addon').value,
             hint: document.querySelector('.mvuad-actor-prompt-save-hint').textContent,
@@ -5325,6 +5350,12 @@ try {
         workers: '2',
         exploration: '1',
         collision: '2',
+        factionSlots: '2',
+        environmentSlots: '1',
+        recovery: 'gentle',
+        pressure: '4',
+        bossCap: '1',
+        injections: '3',
         continuityPrompt: 'PHASE9-CONTINUITY-CANARY：保留倒叙节奏。',
         actorPrompt: 'PHASE9-ACTOR-CANARY：候选行动使用短句。',
         hint: '已保存；诊断仅记录长度、哈希与启用状态',

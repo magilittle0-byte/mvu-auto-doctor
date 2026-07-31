@@ -68,10 +68,19 @@ import {
     mergeActorWorldEventsIntoContinuity,
     migrateActorLedgerFromContinuity,
     normalizeActorLedger,
+    reconcileActorIdentityRevealsFromAcceptedContent,
+    reconcileActorLifecycleFromAcceptedContent,
+    reconcileActorMutationLineageFromAcceptedContent,
     scheduleActorTurns,
     settleActorActionCandidates,
     settleActorInjectionReceipts,
 } from './actor-ledger-core.mjs';
+import {
+    admitDoctorWorldCandidates,
+    emptyWorldPressureState,
+    normalizeWorldPressureState,
+    observeAcceptedContentPressure,
+} from './world-pressure-core.mjs';
 import {
     applyForumUpdate,
     emptyForumState,
@@ -114,9 +123,9 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.4';
+const VERSION = '2.0.0-rc.5';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 9;
+const CHAT_NAMESPACE_VERSION = 10;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
@@ -125,6 +134,7 @@ const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
 const ACTOR_ACTION_ERROR_LABELS = Object.freeze({
     'actor-identity-mismatch': '人物身份与当前账本不一致',
+    'actor-not-actionable': '人物已死亡、离场或暂时无法行动',
     'intent-invalid': '没有给出执行、改计划或具体等待',
     'action-missing': '行动内容为空',
     'player-sovereignty': '行动替玩家接受、服从、支付或决定',
@@ -185,9 +195,14 @@ const DEFAULTS = Object.freeze({
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
     floatingOrbEnabled: true,
-    continuitySettingsVersion: 6,
+    continuitySettingsVersion: 7,
     continuityMaxThreads: 12,
     continuityMaxVisible: 2,
+    worldFactionSlots: 1,
+    worldEnvironmentSlots: 1,
+    worldPressureCap: 3,
+    worldRecoveryCadence: 'balanced',
+    worldSameSceneBossCap: 1,
     continuityInjectionBudgetChars: 6000,
     continuityContextMessages: 12,
     continuityMaxTokens: 12288,
@@ -201,7 +216,7 @@ const DEFAULTS = Object.freeze({
     actorLedgerMaxActorsPerTurn: 2,
     actorLedgerExplorationSlots: 1,
     actorLedgerCollisionIntensity: 2,
-    actorLedgerSettingsVersion: 1,
+    actorLedgerSettingsVersion: 2,
     builtInForumEnabled: true,
     forumAutoRefresh: false,
     forumRefreshMode: 'manual',
@@ -377,14 +392,14 @@ function getSettings() {
         settings.continuityAutonomy = 'living';
         changed = true;
     }
+    const requestedContinuityMaxVisible = Number(settings.continuityMaxVisible);
     const normalizedContinuityMaxVisible = Math.min(
         4,
         Math.max(
-            1,
-            Math.round(
-                Number(settings.continuityMaxVisible)
-                || DEFAULTS.continuityMaxVisible,
-            ),
+            0,
+            Number.isFinite(requestedContinuityMaxVisible)
+                ? Math.round(requestedContinuityMaxVisible)
+                : DEFAULTS.continuityMaxVisible,
         ),
     );
     if (settings.continuityMaxVisible !== normalizedContinuityMaxVisible) {
@@ -399,6 +414,35 @@ function getSettings() {
                 || DEFAULTS.continuityInjectionBudgetChars,
         ),
     );
+    for (const key of ['worldFactionSlots', 'worldEnvironmentSlots']) {
+        const requested = Number(settings[key]);
+        const normalized = Math.min(
+            3,
+            Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : DEFAULTS[key]),
+        );
+        if (settings[key] !== normalized) {
+            settings[key] = normalized;
+            changed = true;
+        }
+    }
+    for (const [key, maximum] of [
+        ['worldPressureCap', 6],
+        ['worldSameSceneBossCap', 3],
+    ]) {
+        const requested = Number(settings[key]);
+        const normalized = Math.min(
+            maximum,
+            Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : DEFAULTS[key]),
+        );
+        if (settings[key] !== normalized) {
+            settings[key] = normalized;
+            changed = true;
+        }
+    }
+    if (!['gentle', 'balanced', 'fast'].includes(settings.worldRecoveryCadence)) {
+        settings.worldRecoveryCadence = DEFAULTS.worldRecoveryCadence;
+        changed = true;
+    }
     if (!['off', 'auto', 'on'].includes(settings.actorShardMode)) {
         settings.actorShardMode = 'off';
         changed = true;
@@ -461,6 +505,10 @@ function getSettings() {
         settings.actorLedgerExplorationSlots = 1;
         settings.actorLedgerCollisionIntensity = 2;
         settings.actorLedgerSettingsVersion = 1;
+        changed = true;
+    }
+    if (previousActorLedgerSettingsVersion < 2) {
+        settings.actorLedgerSettingsVersion = 2;
         changed = true;
     }
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
@@ -671,6 +719,18 @@ function getSettings() {
             settings.continuityMaxVisible = DEFAULTS.continuityMaxVisible;
         }
         settings.continuitySettingsVersion = 6;
+        changed = true;
+    }
+    if (previousContinuitySettingsVersion < 7) {
+        settings.worldFactionSlots = Number(settings.worldFactionSlots);
+        settings.worldEnvironmentSlots = Number(settings.worldEnvironmentSlots);
+        settings.worldPressureCap = Number(settings.worldPressureCap);
+        settings.worldRecoveryCadence = ['gentle', 'balanced', 'fast']
+            .includes(settings.worldRecoveryCadence)
+            ? settings.worldRecoveryCadence
+            : DEFAULTS.worldRecoveryCadence;
+        settings.worldSameSceneBossCap = Number(settings.worldSameSceneBossCap);
+        settings.continuitySettingsVersion = 7;
         changed = true;
     }
     if (changed) context.saveSettingsDebounced?.();
@@ -1694,6 +1754,7 @@ function diagnosticPayload() {
                     receiptCount: actors.receipts.length,
                     privateThoughtsExposed: false,
                 },
+                worldPressure: normalizeWorldPressureState(namespace.worldPressure),
                 forum: {
                     postCount: forum.posts.length,
                     totalComments: forum.posts.reduce(
@@ -1904,6 +1965,7 @@ function readChatNamespace(context = getContext()) {
             continuityCheckpoint: null,
             actorLedger: emptyActorLedger(context?.chatId || ''),
             actorLedgerCheckpoint: null,
+            worldPressure: emptyWorldPressureState(),
             forum: emptyForumState(context?.chatId || ''),
             forumCheckpoint: null,
             phase6Runtime: {
@@ -3046,6 +3108,8 @@ function sourceRefOf(captured) {
         messageId: captured.messageId,
         index: captured.index,
         swipeId: captured.swipeId,
+        generation: captured.generationSerial,
+        branchId: captured.branchId,
         hash: captured.fingerprint,
     };
 }
@@ -6803,10 +6867,74 @@ function continuityInjectionCandidates(state) {
         ));
 }
 
+function worldPressurePhase(state, pressureState) {
+    if (Number(pressureState?.recoveryDebt || 0) > 0) return 'recovery';
+    const phase = state?.scenarioPlan?.current?.phase;
+    if (phase === 'setup') return 'opening';
+    if (['exploration', 'escalation', 'climax'].includes(phase)) return phase;
+    if (['aftermath', 'closing', 'completed', 'failed'].includes(phase)) return 'recovery';
+    return Number(state?.turn || 0) <= 3 ? 'opening' : 'exploration';
+}
+
+function classifyDoctorPressureCandidate(candidate, {
+    id = '',
+    channel = '',
+    sameScene = null,
+} = {}) {
+    const text = [
+        candidate?.candidateAction,
+        candidate?.summary,
+        candidate?.label,
+        candidate?.dueReason,
+        candidate?.triggerCondition,
+        ...(candidate?.evidenceTerms || []),
+    ].filter(Boolean).join(' ');
+    const threatLevel = /(?:BOSS|首领|终局|灭绝|天灾级)/iu.test(text)
+        ? 'boss'
+        : /(?:精英|强敌|猎杀者|追猎者)/u.test(text)
+            ? 'elite'
+            : 'ordinary';
+    const threat = /(?:袭击|伏击|围攻|追杀|封锁|致命|敌人|怪物|BOSS|首领|精英|倒计时|爆炸|崩塌|灾害|瘟疫|危机升级|新增威胁)/iu.test(text);
+    const recovery = /(?:恢复|休整|补给|治疗|退路|撤离|安全区|缓冲|互相牵制|错开|停火|解除|冷却)/u.test(text);
+    const relationship = /(?:关系|交涉|谈判|来信|拜访|会面|承诺|误会|和解)/u.test(text);
+    const actionKind = recovery
+        ? 'recovery'
+        : threat
+            ? 'threat'
+            : relationship
+                ? 'relationship'
+                : 'information';
+    const inferredChannel = channel
+        || (String(candidate?.threadId || '').startsWith('ACTOR-')
+            ? 'actor'
+            : String(candidate?.threadId || '').startsWith('world:faction:')
+                || candidate?.laneType === 'faction'
+                ? 'faction'
+                : 'environment');
+    return {
+        id: id || candidate?.id || candidate?.threadId || candidate?.sourceId,
+        channel: inferredChannel,
+        actionKind: String(candidate?.threadId || '').startsWith('ACTOR-')
+            ? 'information'
+            : actionKind,
+        pressureCost: threatLevel === 'boss' ? 3 : threatLevel === 'elite' ? 2 : 1,
+        threatLevel,
+        sameScene: sameScene === null
+            ? (candidate?.sameScene !== false
+                && (candidate?.impactTargets || []).some((item) => (
+                    String(item).startsWith('location:')
+                    || String(item).startsWith('actor:')
+                )))
+            : sameScene,
+        source: candidate,
+    };
+}
+
 function prepareContinuityInjectionBatch(namespace, state, {
     maxVisible = 2,
     budgetChars = 6000,
     isReroll = false,
+    pressureSettings = null,
 } = {}) {
     const now = Date.now();
     const generationId = String(lastGeneration.id || '');
@@ -6834,10 +6962,28 @@ function prepareContinuityInjectionBatch(namespace, state, {
         return { generationId: '', receipts: [], budgetChars, targetTurn };
     }
     const limit = Math.min(4, Math.max(0, Number(maxVisible) || 0));
-    const selected = continuityInjectionCandidates(state).slice(0, limit);
+    const pressureBase = normalizeWorldPressureState(namespace.worldPressure);
+    const pressureDecision = admitDoctorWorldCandidates(
+        pressureBase,
+        continuityInjectionCandidates(state).map((candidate) => (
+            classifyDoctorPressureCandidate(candidate)
+        )),
+        {
+            turn: targetTurn,
+            phase: worldPressurePhase(state, pressureBase),
+            pressureCap: pressureSettings?.pressureCap,
+            sameSceneBossCap: pressureSettings?.sameSceneBossCap,
+            recoveryCadence: pressureSettings?.recoveryCadence,
+            injectionLimit: limit,
+        },
+    );
+    namespace.worldPressure = pressureDecision.state;
+    const selected = pressureDecision.admitted.map((item) => item.source);
     const receipts = selected.map((candidate, index) => ({
-        receiptId: `world-injection:${generationId}:${candidate.threadId}`,
+        receiptId: `world-injection:${generationSerial}:${generationId}:${candidate.threadId}`,
         generationId,
+        generationSerial,
+        chatId: getContext()?.chatId || '',
         targetTurn,
         threadId: candidate.threadId,
         priority: candidate.priority,
@@ -6847,10 +6993,48 @@ function prepareContinuityInjectionBatch(namespace, state, {
         expiresTurn: candidate.expiresTurn,
         evidenceTerms: candidate.evidenceTerms,
         status: 'injected',
+        stages: [
+            { stage: 'planned', status: 'settled', at: now },
+            { stage: 'executed', status: 'settled', at: now },
+            { stage: 'world_settled', status: 'settled', at: now },
+            { stage: 'injected', status: 'pending', at: now },
+        ],
         isReroll: isReroll === true,
         budgetChars,
         injectedAt: now,
     }));
+    const actorWorldEventIds = new Set(
+        selected
+            .map((candidate) => String(candidate.threadId || ''))
+            .filter((id) => id.startsWith('ACTOR-'))
+            .map((id) => id.slice('ACTOR-'.length)),
+    );
+    if (actorWorldEventIds.size) {
+        const context = getContext();
+        const latest = latestAiMessage(context);
+        const latestTarget = latest.message ? captureTarget(context, latest.index) : null;
+        const actorLedger = normalizeActorLedger(namespace.actorLedger, {
+            chatId: context?.chatId || '',
+        });
+        actorLedger.actionReceipts = actorLedger.actionReceipts.map((receipt) => (
+            receipt.stage === 'injected'
+            && receipt.status === 'pending'
+            && actorWorldEventIds.has(String(receipt.worldEventId || ''))
+                ? {
+                    ...receipt,
+                    target: {
+                        chatId: context?.chatId || '',
+                        messageId: '',
+                        swipeId: 0,
+                        generation: generationSerial,
+                        branchId: latestTarget?.branchId || '',
+                        hash: '',
+                    },
+                }
+                : receipt
+        ));
+        namespace.actorLedger = actorLedger;
+    }
     const ids = new Set(receipts.map((receipt) => receipt.receiptId));
     namespace.continuityInjectionQueue = [
         ...queue.filter((receipt) => !ids.has(receipt?.receiptId)),
@@ -6862,15 +7046,23 @@ function prepareContinuityInjectionBatch(namespace, state, {
             : []),
         {
             generationId,
+            generationSerial,
             targetTurn,
             receiptIds: receipts.map((receipt) => receipt.receiptId),
             budgetChars,
             selectedCount: receipts.length,
             status: 'registered',
+            pressureReceiptIds: pressureDecision.receipts.map((item) => item.receiptId),
             registeredAt: now,
         },
     ].slice(-30);
-    return { generationId, receipts, budgetChars, targetTurn };
+    return {
+        generationId,
+        receipts,
+        budgetChars,
+        targetTurn,
+        pressureDecision,
+    };
 }
 
 function capContinuityInjectionContent(content, budgetChars) {
@@ -6883,7 +7075,12 @@ function capContinuityInjectionContent(content, budgetChars) {
 
 function persistContinuityInjectionMetadata(namespace) {
     return writeChatNamespace(namespace, getContext()?.chatId || '', {
-        fields: ['continuityInjectionQueue', 'continuityInjectionBatches'],
+        fields: [
+            'continuityInjectionQueue',
+            'continuityInjectionBatches',
+            'worldPressure',
+            'actorLedger',
+        ],
     }).catch((error) => {
         console.warn('[MVU Auto Doctor] 世界注入收据保存失败：', error);
         return false;
@@ -6903,12 +7100,22 @@ function markContinuityInjectionLanded(landed) {
     ).map((receipt) => {
         if (
             receipt?.generationId !== generationId
+            || Number(receipt?.generationSerial || 0) !== Number(generationSerial || 0)
             || receipt.status !== 'injected'
         ) return receipt;
         changed = true;
         return {
             ...receipt,
             status: landed ? 'landed' : 'missing',
+            stages: (receipt.stages || []).map((stage) => (
+                stage.stage === 'injected'
+                    ? {
+                        ...stage,
+                        status: landed ? 'landed' : 'missing',
+                        at: now,
+                    }
+                    : stage
+            )),
             promptInspectedAt: now,
         };
     });
@@ -6918,6 +7125,7 @@ function markContinuityInjectionLanded(landed) {
             : []
     ).map((batch) => (
         batch?.generationId === generationId
+            && Number(batch?.generationSerial || 0) === Number(generationSerial || 0)
             ? {
                 ...batch,
                 status: landed ? 'landed' : 'missing',
@@ -6945,6 +7153,8 @@ async function settleContinuityInjectionReceipts(captured) {
     ).map((receipt) => {
         if (
             receipt?.generationId !== captured.generationId
+            || Number(receipt?.generationSerial || 0) !== Number(captured.generationSerial || 0)
+            || String(receipt?.chatId || '') !== String(captured.chatId || '')
             || !['injected', 'landed', 'missing'].includes(receipt.status)
         ) return receipt;
         const evidence = (receipt.evidenceTerms || []).find((term) => (
@@ -6960,6 +7170,15 @@ async function settleContinuityInjectionReceipts(captured) {
         return {
             ...receipt,
             status,
+            stages: [
+                ...(receipt.stages || []),
+                {
+                    stage: 'response_settled',
+                    status,
+                    at: now,
+                    evidence,
+                },
+            ],
             consumptionEvidence: evidence,
             settledAt: now,
             consumedBy: status === 'consumed'
@@ -6979,6 +7198,7 @@ async function settleContinuityInjectionReceipts(captured) {
             : []
     ).map((batch) => (
         batch?.generationId === captured.generationId
+            && Number(batch?.generationSerial || 0) === Number(captured.generationSerial || 0)
             ? {
                 ...batch,
                 status: 'settled',
@@ -7049,6 +7269,11 @@ function applyContinuityInjection({ isReroll = false } = {}) {
         maxVisible: settings.continuityMaxVisible,
         budgetChars: settings.continuityInjectionBudgetChars,
         isReroll,
+        pressureSettings: {
+            pressureCap: settings.worldPressureCap,
+            sameSceneBossCap: settings.worldSameSceneBossCap,
+            recoveryCadence: settings.worldRecoveryCadence,
+        },
     });
     let content = buildContinuityInjection(state, {
         director: namespace.continuityDirector || 'standalone',
@@ -7105,6 +7330,9 @@ function continuityBase(namespace, captured) {
         isReroll
         && checkpoint?.state
         && checkpoint.targetIndex === captured.index
+        && checkpoint.chatId === captured.chatId
+        && checkpoint.messageId === captured.messageId
+        && checkpoint.branchId === captured.branchId
     ) {
         return normalizeContinuityState(checkpoint.state, {
             chatId: captured.chatId,
@@ -7124,6 +7352,10 @@ function checkpointMatchesTarget(checkpoint, captured) {
         && checkpoint.targetIndex === captured.index
         && checkpoint.messageId === captured.messageId
         && Number(checkpoint.swipeId || 0) === Number(captured.swipeId || 0)
+        && Number(checkpoint.generationSerial || 0) === Number(captured.generationSerial || 0)
+        && String(checkpoint.generationId || '') === String(captured.generationId || '')
+        && String(checkpoint.branchId || '') === String(captured.branchId || '')
+        && String(checkpoint.contentFingerprint || '') === String(captured.contentFingerprint || '')
     );
 }
 
@@ -7274,6 +7506,10 @@ function buildContinuityMessages({
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 世界采用双轨调度：人物轨维护有身份、有限认知与独立行动的角色；结构世界轨独立维护势力、环境、经济、长期趋势、传播与因果余波。任何一轨都不得替代或吞并另一轨。',
         '- 势力与环境过程可以没有单一代表人物，并可在没有人物候选、人物分片失败或人物行动留在幕后时继续推进、结算或自行结束；不得为了调用人物轨而虚构一个代言NPC。',
+        '- 本地另有一个三通道共享压力闸：人物、势力、环境分别调度，但共同消耗医生自己的压力与注入预算。闸门延迟的候选保持未发生；禁止在JSON中换名复制或升级。',
+        '- <content>是本回合已发生事实，只能读取和承认，绝不改写、截断或要求重生成。若正文已经出现过量威胁，承认现状，但本轮不得再新增、聚合、复制或升级威胁；优先恢复、错开、互相牵制、信息、资源、退路或远端留存。',
+        '- 行动推进、后果推进、恢复推进都合法。安静回合、调查、补给、关系变化、误判修正、战后处理和既有成功持续生效，均是实质推进；禁止用新怪、新机关或新倒计时填满长文或世界账本。',
+        '- 同场首领碰撞、阶段总压力与精英/首领后的恢复债务由本地闸门控制。开局与探索期必须保留发育、调查、补给、关系和路线选择空间；最低可玩性不足时只能延迟、替换、互相牵制或转为远端。',
         ...(customContinuityInstruction ? [customContinuityInstruction] : []),
         '- 调用模型前，本地事件时钟已为每条未结事件掷出success/hold/setback，并更新stageProgress；这是防止世界永久停摆的基线，不等于所有事件都要在正文显现。你可按真实能力、资源、信息、距离和阻力纠正阶段、进度与stalled，但不得为了热闹强推。',
         `- 每个账本轮次可让同一因果簇内最多${changeLimit}条旧事件产生新的实质叙事变化；优先选择共享人物、势力、地点、资源、传播链或causedBy关系的稀疏事件簇。其他事件只保留本地时钟结果。`,
@@ -7305,7 +7541,7 @@ function buildContinuityMessages({
         '- causeType=player_action可引用本回合由玩家明确行动造成的main_derivative事件；必须说明玩家行动如何客观改变结构，不能把主回复自己新增的障碍冒充玩家选择。',
         '- 既有设定事实或系统规则造成变化时使用setting_fact/system_rule，仍须引用已有事件线程与可核验证据，不能借“设定如此”临时补丁。',
         '- 修改goal、completion、failure、activeApex或closure属于结构性变化，preserves必须列出此前战斗、探索、资源、承诺与阶段成果如何继续有效。已打败的原终局Boss不能被降格成“前菜”，已完成的目标不能被无痕取消。',
-        '- 世界支线可以经过多轮推进、互相影响后引入比原生终局威胁更强的敌人，也可以削弱威胁、打开捷径、取消冲突或改变通关方式；方向不限于升级，但机制和来源必须完整可追溯，并作为新版本activeApex/目标正式生效。',
+        '- 世界支线经过多轮推进后仍不得把“更强敌人”当默认方向。新敌人必须有当前原作锚点、明确普通/精英/首领唯一等级、完整因果链并通过共享压力闸；成就、图鉴与未来目标不构成当前生成许可。无合适敌人时优先推进原作势力、环境、设施与机制。',
         '- 当完成条件已满足时把closure修订为ready或completed并写closureReason，随后自然结算。scenarioPlan一旦completed/failed就永久终止；仍在发展的余波另建世界事件，禁止复开同一副本继续刷怪。',
         '',
         '【事件来源分类 origin】',
@@ -7387,7 +7623,7 @@ function buildContinuityMessages({
                 '',
                 '=== 本轮非人物结构世界轨（独立预算）===',
                 '这些候选来自势力、环境、经济、趋势、公共信号或因果余波的本地有界调度；它们不依赖人物候选，也不得被人物行动覆盖。',
-                '到期候选必须在本轮世界结算中产生合法变化、结束/冷却，或给出具体尚未满足的时间、资源、地点或因果条件。未进入该列表的世界条目继续保留，不代表删除。',
+                '只有due=true且mode=settlement的候选才需要在本轮产生合法变化、结束/冷却，或给出具体尚未满足条件；due=false的exploration候选允许安静保留，绝不能伪装成已结算。未进入该列表的世界条目继续保留，不代表删除。',
                 safeJson(worldLaneSchedule),
             ]
             : []),
@@ -7567,6 +7803,9 @@ async function collectActorShardProposals(captured, {
     latestActorShardDiagnostics = {
         status: result.status,
         ...result.diagnostics,
+        failureCodes: [...new Set(
+            (result.failures || []).map((item) => String(item.code || '')).filter(Boolean),
+        )].slice(0, 8),
     };
     if (result.status === 'stale') {
         await actorShardLeaseManager.markStale(leaseId, 'target identity changed');
@@ -7610,6 +7849,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     let guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     const settings = getSettings();
+    const isReroll = ['swipe', 'regenerate'].includes(captured.generationType);
     const context = getContext();
     const message = context.chat[captured.index];
     const messageText = String(message?.mes || '');
@@ -7695,15 +7935,55 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const tickTurn = base.turn + ticksDue;
     const worldClockChanged = continuityWorldDigest(base)
         !== continuityWorldDigest(scheduledBase);
+    const actorCheckpoint = namespace.actorLedgerCheckpoint;
+    const rerollActorBase = isReroll
+        && actorCheckpoint?.state
+        && actorCheckpoint.chatId === captured.chatId
+        && actorCheckpoint.targetIndex === captured.index
+        && actorCheckpoint.messageId === captured.messageId
+        && actorCheckpoint.branchId === captured.branchId
+        ? actorCheckpoint.state
+        : namespace.actorLedger;
     const storedActorLedger = normalizeActorLedger(
-        namespace.actorLedger,
+        rerollActorBase,
         { chatId: captured.chatId },
     );
+    const storedWorldPressure = normalizeWorldPressureState(namespace.worldPressure);
+    const knownThreatPressure = scheduledBase.threads
+        .filter((thread) => (
+            thread.kind === 'enemy'
+            && !['resolved', 'dormant'].includes(thread.stage)
+        ))
+        .reduce((total, thread) => total + Math.min(3, Math.max(1, Number(thread.level) || 1)), 0)
+        + (scheduledBase.world?.shadows?.enemies || [])
+            .filter((enemy) => !['resolved', 'dormant'].includes(enemy.status))
+            .reduce((total, enemy) => (
+                total + (/boss|首领/iu.test(`${enemy.name || ''} ${enemy.summary || ''}`) ? 3 : 1)
+            ), 0);
+    let worldPressure = observeAcceptedContentPressure(storedWorldPressure, {
+        turn: tickTurn,
+        content: acceptedNarrative,
+        sameSceneBossCap: settings.worldSameSceneBossCap,
+        pressureCap: settings.worldPressureCap,
+        knownThreatPressure,
+    });
     let actorLedger = migrateActorLedgerFromContinuity(
         storedActorLedger,
         scheduledBase,
     );
     actorLedger.turn = tickTurn;
+    actorLedger = reconcileActorIdentityRevealsFromAcceptedContent(actorLedger, {
+        content: acceptedNarrative,
+        sourceRef: sourceRefOf(captured),
+    });
+    actorLedger = reconcileActorMutationLineageFromAcceptedContent(actorLedger, {
+        content: acceptedNarrative,
+        sourceRef: sourceRefOf(captured),
+    });
+    actorLedger = reconcileActorLifecycleFromAcceptedContent(actorLedger, {
+        content: acceptedNarrative,
+        sourceRef: sourceRefOf(captured),
+    });
     const observerActorIds = inferObserverActorIds(actorLedger, acceptedNarrative);
     actorLedger = applyAcceptedContentObservations(actorLedger, {
         content: acceptedNarrative,
@@ -7744,11 +8024,36 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                     collisionIntensity: settings.actorLedgerCollisionIntensity,
                 },
             );
+            const actorPressureDecision = admitDoctorWorldCandidates(
+                worldPressure,
+                actionCandidates.map((candidate) => (
+                    classifyDoctorPressureCandidate(candidate, {
+                        id: `actor:${candidate.actorId}:${fingerprint(candidate.action)}`,
+                        channel: 'actor',
+                        sameScene: !!candidate.contact,
+                    })
+                )),
+                {
+                    turn: tickTurn,
+                    phase: worldPressurePhase(scheduledBase, worldPressure),
+                    pressureCap: settings.worldPressureCap,
+                    sameSceneBossCap: settings.worldSameSceneBossCap,
+                    recoveryCadence: settings.worldRecoveryCadence,
+                    injectionLimit: settings.actorLedgerMaxActorsPerTurn,
+                },
+            );
+            worldPressure = actorPressureDecision.state;
             actorSettlement = settleActorActionCandidates(
                 actorLedger,
-                actionCandidates,
+                actorPressureDecision.admitted.map((item) => item.source),
                 { turn: tickTurn },
             );
+            for (const delayed of actorPressureDecision.delayed) {
+                actorSettlement.rejected.push({
+                    actorId: delayed.source?.actorId || '',
+                    reasons: [`world-pressure:${delayed.decisionReason}`],
+                });
+            }
             actorLedger = actorSettlement.ledger;
             scheduledBase = normalizeContinuityState(
                 mergeActorWorldEventsIntoContinuity(
@@ -7802,10 +8107,62 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
     }
 
-    const worldLaneSchedule = scheduleWorldLanes(scheduledBase, {
+    let worldLaneSchedule = scheduleWorldLanes(scheduledBase, {
         turn: tickTurn,
-        maxLanes: settings.continuityMaxVisible,
+        maxLanes: settings.worldFactionSlots + settings.worldEnvironmentSlots,
+        factionSlots: settings.worldFactionSlots,
+        environmentSlots: settings.worldEnvironmentSlots,
+        receiptScope: [
+            captured.chatId,
+            captured.messageId,
+            `swipe-${captured.swipeId}`,
+            `generation-${captured.generationSerial}`,
+            captured.branchId,
+        ].join(':'),
     });
+    const worldLanePressureDecision = admitDoctorWorldCandidates(
+        worldPressure,
+        worldLaneSchedule.selected.map((candidate) => (
+            classifyDoctorPressureCandidate(candidate, {
+                id: `lane:${candidate.laneType}:${candidate.sourceId}`,
+                channel: candidate.channel,
+                sameScene: false,
+            })
+        )),
+        {
+            turn: tickTurn,
+            phase: worldPressurePhase(scheduledBase, worldPressure),
+            pressureCap: settings.worldPressureCap,
+            sameSceneBossCap: settings.worldSameSceneBossCap,
+            recoveryCadence: settings.worldRecoveryCadence,
+            injectionLimit: settings.worldFactionSlots + settings.worldEnvironmentSlots,
+        },
+    );
+    const allowedWorldLaneIds = new Set(
+        worldLanePressureDecision.admitted.map((item) => item.id),
+    );
+    const delayedWorldLaneReasons = new Map(
+        worldLanePressureDecision.delayed.map((item) => [item.id, item.decisionReason]),
+    );
+    worldLaneSchedule = {
+        ...worldLaneSchedule,
+        selected: worldLaneSchedule.selected.filter((candidate) => (
+            allowedWorldLaneIds.has(`lane:${candidate.laneType}:${candidate.sourceId}`)
+        )),
+        receipts: worldLaneSchedule.receipts.map((receipt) => {
+            const reason = delayedWorldLaneReasons.get(
+                `lane:${receipt.laneType}:${receipt.sourceId}`,
+            );
+            return reason
+                ? { ...receipt, status: 'delayed', pressureReason: reason }
+                : receipt;
+        }),
+        pressureDecision: {
+            admitted: worldLanePressureDecision.admitted.length,
+            delayed: worldLanePressureDecision.delayed.length,
+            retained: worldLanePressureDecision.retained.length,
+        },
+    };
     latestWorldLaneDiagnostics = {
         turn: worldLaneSchedule.turn,
         maxLanes: worldLaneSchedule.maxLanes,
@@ -7818,6 +8175,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         })),
     };
     const actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
+    const worldPressureChanged = JSON.stringify(storedWorldPressure) !== JSON.stringify(worldPressure);
     const localProgressed = (
         clockPlan.changedThreadIds.length > 0
         || worldClockChanged
@@ -7985,10 +8343,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             : '没有新建事件，也没有产生有依据的分类世界变化';
     }
     if (!progressed) {
-        if (actorLedgerChanged) {
+        if (actorLedgerChanged || worldPressureChanged) {
             namespace.actorLedger = actorLedger;
+            namespace.worldPressure = worldPressure;
             await writeChatNamespace(namespace, captured.chatId, {
-                fields: ['actorLedger'],
+                fields: ['actorLedger', 'worldPressure'],
             });
         }
         setContinuityStatus('世界连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
@@ -8048,18 +8407,22 @@ async function runContinuityTarget(captured, { force = false } = {}) {
 
     guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
-    const isReroll = ['swipe', 'regenerate'].includes(captured.generationType);
     const oldDigest = continuityContentDigest(namespace.continuity);
     const newDigest = continuityContentDigest(next);
     namespace.continuity = next;
     namespace.actorLedger = actorLedger;
+    namespace.worldPressure = worldPressure;
     namespace.continuityWorldLaneReceipts = [
         ...(Array.isArray(namespace.continuityWorldLaneReceipts)
             ? namespace.continuityWorldLaneReceipts
             : []),
         ...worldLaneSchedule.receipts.map((receipt) => ({
             ...receipt,
-            status: modelValidated ? 'settled' : 'retained',
+            status: receipt.status === 'delayed'
+                ? 'delayed'
+                : receipt.due && modelValidated
+                    ? 'settled'
+                    : 'retained',
             settledAt: Date.now(),
         })),
     ].slice(-80);
@@ -8067,27 +8430,43 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     namespace.continuityDetected = true;
     if (!isReroll && !checkpointMatchesTarget(namespace.continuityCheckpoint, captured)) {
         namespace.continuityCheckpoint = {
+            chatId: captured.chatId,
             targetIndex: captured.index,
             messageId: captured.messageId,
             swipeId: captured.swipeId,
+            generationSerial: captured.generationSerial,
+            generationId: captured.generationId,
+            branchId: captured.branchId,
+            contentFingerprint: captured.contentFingerprint,
             state: checkpointBase,
         };
     }
     if (!isReroll && !checkpointMatchesTarget(namespace.actorLedgerCheckpoint, captured)) {
         namespace.actorLedgerCheckpoint = {
+            chatId: captured.chatId,
             targetIndex: captured.index,
             messageId: captured.messageId,
             swipeId: captured.swipeId,
+            generationSerial: captured.generationSerial,
+            generationId: captured.generationId,
+            branchId: captured.branchId,
+            contentFingerprint: captured.contentFingerprint,
             state: storedActorLedger,
         };
     }
-    if (oldDigest !== newDigest || actorLedgerChanged || isReroll) {
+    if (
+        oldDigest !== newDigest
+        || actorLedgerChanged
+        || worldPressureChanged
+        || isReroll
+    ) {
         await writeChatNamespace(namespace, captured.chatId, {
             fields: [
                 'continuity',
                 'continuityCheckpoint',
                 'actorLedger',
                 'actorLedgerCheckpoint',
+                'worldPressure',
                 'continuityWorldLaneReceipts',
                 'continuityDirector',
                 'continuityDetected',
@@ -8245,6 +8624,10 @@ async function clearContinuityState() {
     namespace.continuityCheckpoint = null;
     namespace.actorLedger = emptyActorLedger(context.chatId);
     namespace.actorLedgerCheckpoint = null;
+    namespace.worldPressure = emptyWorldPressureState();
+    namespace.continuityWorldLaneReceipts = [];
+    namespace.continuityInjectionQueue = [];
+    namespace.continuityInjectionBatches = [];
     namespace.continuityDirector = 'standalone';
     await writeChatNamespace(namespace, context.chatId, {
         force: true,
@@ -8253,6 +8636,10 @@ async function clearContinuityState() {
             'continuityCheckpoint',
             'actorLedger',
             'actorLedgerCheckpoint',
+            'worldPressure',
+            'continuityWorldLaneReceipts',
+            'continuityInjectionQueue',
+            'continuityInjectionBatches',
             'continuityDirector',
             'continuityDetected',
         ],
@@ -11119,12 +11506,12 @@ function buildSettingsPanel() {
                                 </select>
                             </label>
                             <label class="mvuad-number">
-                                <span>每回合最多进入正文的世界接口</span>
+                                <span>每回合最多注入正文的后台变化</span>
                                 <input class="text_pole mvuad-continuity-max-visible"
-                                    type="number" min="1" max="4" step="1">
+                                    type="number" min="0" max="4" step="1">
                             </label>
                             <div class="mvuad-description">
-                                默认2，可设1—4；实际仍允许采用0条。多个事件只有在各自触发条件已经成熟，
+                                默认2，可设0—4；主回复仍可采用0条。多个事件只有在各自触发条件已经成熟，
                                 或共享同一时间、地点、人物、势力、资源或因果簇时才可共同爆发，并继续受注入预算限制。
                                 人物行动与势力、环境、经济等结构世界过程分轨调度；关闭人物分片不会停止后者。
                             </div>
@@ -11137,15 +11524,23 @@ function buildSettingsPanel() {
                                 </select>
                             </label>
                             <label class="mvuad-number">
-                                <span>每回合最多独立行动人物</span>
+                                <span>后台行动人数</span>
                                 <input class="text_pole mvuad-actor-shard-workers" type="number" min="1" max="5" step="1">
                             </label>
                             <label class="mvuad-number">
-                                <span>其中低关注人物探索槽</span>
+                                <span>次要人物探索槽</span>
                                 <input class="text_pole mvuad-actor-exploration-slots" type="number" min="0" max="2" step="1">
                             </label>
+                            <label class="mvuad-number">
+                                <span>每回合势力后台槽</span>
+                                <input class="text_pole mvuad-world-faction-slots" type="number" min="0" max="3" step="1">
+                            </label>
+                            <label class="mvuad-number">
+                                <span>每回合环境后台槽</span>
+                                <input class="text_pole mvuad-world-environment-slots" type="number" min="0" max="3" step="1">
+                            </label>
                             <label class="mvuad-select">
-                                <span>人物主动碰撞节奏</span>
+                                <span>主动碰撞强度</span>
                                 <select class="text_pole mvuad-actor-collision-intensity">
                                     <option value="0">安静·只在后台行动</option>
                                     <option value="1">克制·仅直接来信/来访</option>
@@ -11153,11 +11548,29 @@ function buildSettingsPanel() {
                                     <option value="3">活跃·更多社会与环境后果</option>
                                 </select>
                             </label>
+                            <label class="mvuad-select">
+                                <span>精英或首领后的恢复节奏</span>
+                                <select class="text_pole mvuad-world-recovery-cadence">
+                                    <option value="gentle">充分休整·恢复窗口更长</option>
+                                    <option value="balanced">平衡·至少一个恢复节拍（推荐）</option>
+                                    <option value="fast">紧凑·快速恢复后继续</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-number">
+                                <span>同场医生压力上限</span>
+                                <input class="text_pole mvuad-world-pressure-cap" type="number" min="0" max="6" step="1">
+                            </label>
+                            <label class="mvuad-number">
+                                <span>同场首领上限</span>
+                                <input class="text_pole mvuad-world-boss-cap" type="number" min="0" max="3" step="1">
+                            </label>
                             <div class="mvuad-description">
                                 人物会保留身份、有限认知、目标、位置、资源、承诺、计划与隐藏内心状态。
                                 到期行动、时限和承诺优先；探索槽让次要人物不会永久饿死。每名入选人物最多增加一次轻量调用，
                                 默认行动 2 人、探索 1 人。行动必须通过知识、时间、地点、资源、能力、因果与玩家主权校验；
                                 失败只保留人物账本并显示原因，不阻断正文、数据库、变量医生或世界时钟。
+                                以上人数、槽位、碰撞、恢复、压力与注入选项只控制自动医生自己的后台模拟，
+                                不改写、截断或重生成主模型已经完成的正文，也不修改角色卡、数据库或缝合怪。
                             </div>
                             <details class="mvuad-settings-fold mvuad-continuity-prompt-settings">
                                 <summary>用户自定义叙事提示词插槽</summary>
@@ -11395,7 +11808,12 @@ function buildSettingsPanel() {
     continuityMaxVisible.addEventListener('change', () => {
         const normalized = Math.min(
             4,
-            Math.max(1, Math.round(Number(continuityMaxVisible.value) || 2)),
+            Math.max(
+                0,
+                Number.isFinite(Number(continuityMaxVisible.value))
+                    ? Math.round(Number(continuityMaxVisible.value))
+                    : 2,
+            ),
         );
         getSettings().continuityMaxVisible = normalized;
         continuityMaxVisible.value = String(normalized);
@@ -11437,6 +11855,24 @@ function buildSettingsPanel() {
         actorExplorationSlots.value = String(normalized);
         saveSettings();
     });
+    const worldFactionSlots = wrapper.querySelector('.mvuad-world-faction-slots');
+    const worldEnvironmentSlots = wrapper.querySelector('.mvuad-world-environment-slots');
+    for (const [input, key] of [
+        [worldFactionSlots, 'worldFactionSlots'],
+        [worldEnvironmentSlots, 'worldEnvironmentSlots'],
+    ]) {
+        input.value = String(getSettings()[key]);
+        input.addEventListener('change', () => {
+            const requested = Number(input.value);
+            const normalized = Math.min(
+                3,
+                Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : 1),
+            );
+            getSettings()[key] = normalized;
+            input.value = String(normalized);
+            saveSettings();
+        });
+    }
     const actorCollisionIntensity = wrapper.querySelector('.mvuad-actor-collision-intensity');
     actorCollisionIntensity.value = String(getSettings().actorLedgerCollisionIntensity);
     actorCollisionIntensity.addEventListener('change', () => {
@@ -11448,6 +11884,33 @@ function buildSettingsPanel() {
         actorCollisionIntensity.value = String(normalized);
         saveSettings();
     });
+    const worldRecoveryCadence = wrapper.querySelector('.mvuad-world-recovery-cadence');
+    worldRecoveryCadence.value = getSettings().worldRecoveryCadence;
+    worldRecoveryCadence.addEventListener('change', () => {
+        getSettings().worldRecoveryCadence = ['gentle', 'balanced', 'fast']
+            .includes(worldRecoveryCadence.value)
+            ? worldRecoveryCadence.value
+            : 'balanced';
+        worldRecoveryCadence.value = getSettings().worldRecoveryCadence;
+        saveSettings();
+    });
+    for (const [selector, key, maximum, fallback] of [
+        ['.mvuad-world-pressure-cap', 'worldPressureCap', 6, 3],
+        ['.mvuad-world-boss-cap', 'worldSameSceneBossCap', 3, 1],
+    ]) {
+        const input = wrapper.querySelector(selector);
+        input.value = String(getSettings()[key]);
+        input.addEventListener('change', () => {
+            const requested = Number(input.value);
+            const normalized = Math.min(
+                maximum,
+                Math.max(0, Number.isFinite(requested) ? Math.floor(requested) : fallback),
+            );
+            getSettings()[key] = normalized;
+            input.value = String(normalized);
+            saveSettings();
+        });
+    }
     const continuityPromptAddon = wrapper.querySelector('.mvuad-continuity-prompt-addon');
     const actorShardPromptAddon = wrapper.querySelector('.mvuad-actor-shard-prompt-addon');
     const actorPromptSaveHint = wrapper.querySelector('.mvuad-actor-prompt-save-hint');
@@ -12106,6 +12569,9 @@ function initialize() {
         getActorLedgerView: () => deepClone(actorLedgerView(readChatNamespace().actorLedger)),
         getActorActionReceipts: () => deepClone(
             normalizeActorLedger(readChatNamespace().actorLedger).actionReceipts,
+        ),
+        getWorldPressure: () => deepClone(
+            normalizeWorldPressureState(readChatNamespace().worldPressure),
         ),
         getContinuityInjectionReceipts: () => ({
             queue: deepClone(readChatNamespace().continuityInjectionQueue || []),

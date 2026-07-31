@@ -596,17 +596,20 @@ Actor Shard 只能在当前完整目标已有持久 `settled` 屏障后启动。
 
 ## 23. Actor Ledger 与人物行动结算协议
 
-rc.4 在聊天 namespace v9 新增 `actorLedger` 和 `actorLedgerCheckpoint`。账本版本1
+rc.5 在聊天 namespace v10 使用 `actorLedger`、`actorLedgerCheckpoint` 与
+`worldPressure`。人物账本版本2
 必须包含稳定人物ID、重要度、休眠状态、身份/性格/欲望/底线、长期/当前目标、
 KnowledgeEntry、位置、资源、能力、关系、承诺、hidden私有状态、当前计划、上次行动、
-下一行动/时限、主动性、机会、沉默轮数、证据和人物版本。旧 continuity v5 的惰性
+下一行动/时限、主动性、机会、沉默轮数、证据、身份别名、异变谱系、生命周期状态和
+人物版本。旧 continuity v5 的惰性
 迁移只允许复制可归属的非hidden摘要、目标、地点和来源；hidden线程可建立人物壳，
 但不得把幕后摘要写入人物知识。
 
 接受正文的观察回写必须满足：
 
 1. 来源是当前完整目标的已接受 `<content>`，并绑定 SourceRef；
-2. 观察者由本地在场判定提供，不能因为人物在账本中就广播给所有人；
+2. 只回写该人物实际感知、收到传播或亲历的观察，不能因为人物在账本中或本轮被
+   调度就把整段正文广播给所有人；
 3. 玩家内心、私密叙述和明确不在场人物不进入观察知识；
 4. 相同来源/claim幂等，最多保留48条人物知识和120条观察收据；
 5. hidden人物状态只进入该人物隔离worker，公开视图、宏观提示和诊断均删除该字段。
@@ -632,18 +635,22 @@ continuity policy、1—4接口、时效、优先级和字符预算。正文只�
 
 人物模拟是附加非关键路径。worker失败、超时、解析失败、本地拒绝、收据保存失败或
 界面错误不得阻塞正文、数据库、变量医生、社交零写入门或 continuity 本地时钟。
-regenerate/swipe恢复人物与continuity的同楼前置checkpoint；旧generation/branch的
-迟到worker结果必须保持零写入。
+regenerate/swipe恢复人物与continuity的同楼前置checkpoint；checkpoint、worker、
+世界结算和正文消费都必须逐项匹配 chat/message/swipe/generation/branch；旧目标的
+迟到结果必须保持零写入。明确的未知身份揭示合并到原稳定ID；改名或异变写入同一
+谱系；死亡、离场、休眠人物停止调度，只有合法唤醒能恢复休眠人物，死者不得唤醒。
 
 ## 24. 非人物结构世界轨协议
 
 `scheduleWorldLanes` 只读取 normalization 后的 continuity world，不读取 Actor
-Ledger，也不把势力或环境转换成人物。候选类型限定为 `faction`、`environment`、
-`trend`、`public_signal` 与 `causal`，每轮本地上限0—4。评分只使用到期窗口、
+Ledger，也不把势力或环境转换成人物。候选分为 `faction` 与 `environment` 两个
+独立通道；environment可承载环境、设施、机制、趋势、公共信号、经济和因果余波，
+但不得把所有环境事件误标为economy。每轮分别受势力槽和环境槽限制。评分只使用到期窗口、
 状态压力、剩余时限和沉默轮数；选择时先保证类型多样，再按分数补足剩余位置。
 
-每个入选项生成 `world-lane:<turn>:<laneType>:<sourceId>` 收据，并显式记录
-`independentOfActors=true`。模型通过世界连续性事务结算后标为 `settled`；模型失败
+每个入选项生成包含 chat/message/swipe/generation/branch 的唯一收据，并显式记录
+`independentOfActors=true`。`due=false` 只能探索或保留，不得标为 settled；到期项
+通过世界连续性事务结算后才标为 `settled`；模型失败
 但本地事件/传播时钟仍有效时标为 `retained`。这些收据不赋予模型直接写权限，也不
 绕过 `applyWorldUpdate`、`enforceContinuityPolicy`、知识分层、玩家主权、分支身份、
 1—4正文接口和字符预算。
@@ -652,3 +659,22 @@ Ledger，也不把势力或环境转换成人物。候选类型限定为 `factio
 删除该轨；结构世界轨自身失败也不得阻塞正文、数据库、变量医生或本地世界时钟。
 公开 API 可返回完整本地收据供玩家审计；脱敏诊断只允许 laneType、due 与
 independentOfActors，不得包含势力名、环境摘要、sourceId、剧情证据或 hidden 内容。
+
+## 25. 三通道共享压力与注入预算
+
+人物、势力、环境可以各自产生候选，但必须在同一个世界压力闸汇合。闸门只管理医生
+新增和注入的内容，不拥有 `<content>` 的改写权。每批候选按开局、探索、升级、高潮、
+恢复阶段应用总压力上限、同场首领上限、精英/首领后的恢复债务、最低可玩性和共享
+注入数量；恢复债务至少跨一个批次，不能在同批先消费一句恢复再接纳新威胁。
+
+正文中已经存在的压力作为只读外部事实计入观察值。若外部压力已经超限，医生不得
+截断或重生成正文，也不得继续聚合、复制或升级威胁；新威胁候选必须延迟或远端保留，
+并优先接纳恢复、信息、关系、选择、退路、互相牵制等低压候选。安静回合的行动推进、
+后果推进和恢复推进均为合法推进。
+
+完整收据链为：
+
+`planned → executed → world_settled → injected → response_settled`
+
+每一阶段都必须绑定完整目标身份。旧 swipe、错误分支、重生成目标或迟到worker不能
+结算新分支收据；未进入正文的候选必须标为 retained/delayed，不能伪装为 consumed。

@@ -997,6 +997,9 @@ export function advanceContinuityClocks(value, {
 export function scheduleWorldLanes(value, {
     turn,
     maxLanes = 2,
+    factionSlots = null,
+    environmentSlots = null,
+    receiptScope = '',
 } = {}) {
     const state = normalizeContinuityState(value, { maxThreads: 12 });
     const scheduledTurn = boundedInteger(
@@ -1005,7 +1008,13 @@ export function scheduleWorldLanes(value, {
         Number.MAX_SAFE_INTEGER,
         state.turn,
     );
-    const limit = boundedInteger(maxLanes, 0, 4, 2);
+    const limit = boundedInteger(maxLanes, 0, 8, 2);
+    const factionLimit = factionSlots === null || factionSlots === undefined
+        ? limit
+        : boundedInteger(factionSlots, 0, 4, limit);
+    const environmentLimit = environmentSlots === null || environmentSlots === undefined
+        ? limit
+        : boundedInteger(environmentSlots, 0, 4, limit);
     const candidates = [];
     const addCandidate = ({
         laneType,
@@ -1021,6 +1030,7 @@ export function scheduleWorldLanes(value, {
         const silenceTurns = Math.max(0, scheduledTurn - Number(updatedTurn || 0));
         candidates.push({
             laneType,
+            channel: laneType === 'faction' ? 'faction' : 'environment',
             sourceId,
             label: cleanText(label, 180),
             score: baseScore + dueScore + Math.min(18, silenceTurns * 2),
@@ -1054,19 +1064,28 @@ export function scheduleWorldLanes(value, {
             sourceThreads: item.sourceThreads,
         });
     }
-    if (
-        state.world.environment.summary
-        || state.world.environment.economy !== 'stable'
-    ) {
+    if (state.world.environment.summary) {
+        addCandidate({
+            laneType: 'environment',
+            sourceId: 'environment:ambient',
+            label: `环境变化：${state.world.environment.summary}`,
+            updatedTurn: state.world.environment.updatedTurn,
+            baseScore: 48,
+            dueScore: 0,
+            dueReason: state.world.environment.summary,
+            knowledge: 'observed',
+        });
+    }
+    if (state.world.environment.economy !== 'stable') {
         addCandidate({
             laneType: 'environment',
             sourceId: 'environment:economy',
-            label: `环境与经济：${state.world.environment.economy}`,
+            label: `经济状态：${state.world.environment.economy}`,
             updatedTurn: state.world.environment.updatedTurn,
-            baseScore: state.world.environment.economy === 'stable' ? 40 : 58,
+            baseScore: 58,
             dueScore: 0,
-            dueReason: state.world.environment.summary
-                || state.world.environment.basis,
+            dueReason: state.world.environment.basis
+                || state.world.environment.summary,
             knowledge: 'observed',
         });
     }
@@ -1146,32 +1165,35 @@ export function scheduleWorldLanes(value, {
         || left.sourceId.localeCompare(right.sourceId)
     ));
     const selected = [];
-    const seenTypes = new Set();
+    const selectedByChannel = { faction: 0, environment: 0 };
+    const channelLimit = { faction: factionLimit, environment: environmentLimit };
     for (const candidate of sorted) {
         if (selected.length >= limit) break;
-        if (seenTypes.has(candidate.laneType)) continue;
+        if (selectedByChannel[candidate.channel] >= channelLimit[candidate.channel]) continue;
         selected.push(candidate);
-        seenTypes.add(candidate.laneType);
+        selectedByChannel[candidate.channel] += 1;
     }
-    for (const candidate of sorted) {
-        if (selected.length >= limit) break;
-        if (selected.includes(candidate)) continue;
-        selected.push(candidate);
-    }
+    const scope = cleanText(receiptScope, 260)
+        .replace(/[^\p{L}\p{N}_.:-]+/gu, '-')
+        .replace(/^-+|-+$/gu, '');
     const receipts = selected.map((candidate, index) => ({
-        receiptId: `world-lane:${scheduledTurn}:${candidate.laneType}:${candidate.sourceId}`,
+        receiptId: `world-lane:${scope ? `${scope}:` : ''}${scheduledTurn}:${candidate.laneType}:${candidate.sourceId}`,
         turn: scheduledTurn,
         rank: index + 1,
         laneType: candidate.laneType,
+        channel: candidate.channel,
         sourceId: candidate.sourceId,
-        status: 'scheduled',
+        status: candidate.due ? 'scheduled' : 'retained',
         due: candidate.due,
+        mode: candidate.due ? 'settlement' : 'exploration',
         dueReason: candidate.dueReason,
         independentOfActors: true,
     }));
     return {
         turn: scheduledTurn,
         maxLanes: limit,
+        factionSlots: factionLimit,
+        environmentSlots: environmentLimit,
         selected,
         receipts,
     };

@@ -8,15 +8,20 @@ const PROPOSAL_KEYS = Object.freeze([
     'actorName',
     'time',
     'location',
+    'travelTurns',
     'knowledgeBasis',
     'currentGoal',
     'candidateAction',
     'interactionTargets',
+    'resourceCosts',
+    'capabilityUsed',
+    'waitCondition',
     'sourceThreads',
     'evidence',
     'causalChain',
 ]);
 const INTERACTION_KEYS = Object.freeze(['actorId', 'actorName']);
+const RESOURCE_COST_KEYS = Object.freeze(['resourceId', 'amount']);
 const GROUP_NAME = /(?:队|军|协会|组织|公司|家族|势力|居民|商户|人群|群众|议会|公会)$/u;
 
 function clone(value) {
@@ -146,7 +151,8 @@ export function selectActorShardCandidates({
             !id
             || !name
             || (scheduledIds.size && !scheduledIds.has(id))
-            || actor?.status === 'resolved'
+            || !['active', 'dormant'].includes(actor?.status)
+            || (actor?.status === 'dormant' && actor?.inactiveReason === 'sleep')
         ) continue;
         const knowledge = (Array.isArray(actor?.knowledge) ? actor.knowledge : [])
             .map((item) => ({
@@ -290,6 +296,8 @@ export function buildActorShardMessages(candidate, {
         '只能使用提供的有限认知依据。未知就保持未知；不得读取玩家私密信息，不得替玩家行动、说话、移动、消费或授权。',
         '角色拥有持久状态与到期行动窗口。必须提出可执行行动、具体改计划，或说明一个可核验且尚未满足的时间/地点/资源/能力条件；禁止空泛等待。',
         '角色可以主动寻找、来访、寄信、悬赏、跟踪、求助、袭击、取走其有权取得的物品，或制造交通、价格、舆论、势力与环境后果；仍不得替玩家接受、服从、支付或决定。',
+        'resourceCosts只能逐项引用persistentActorState.resources中的现有资源ID；没有消耗或资源列表为空时必须输出[]。capabilityUsed只能逐字引用persistentActorState.capabilities中的现有能力ID或名称；不需要能力或能力列表为空时必须输出空字符串，禁止用自然语言自造能力。',
+        'interactionTargets中的每一项只能包含actorId与actorName，且两者都必须来自输入中明确给出的同一个已知人物；输入没有提供可核验目标ID时必须输出[]，不要把地点、组织、职位、陌生人或玩家写成人物目标。',
         'hidden人物内心只用于维持行为连续性。不得把内心旁白当成公开事实，不得让其他人物凭空得知。',
         '提案尚未发生，也不是事实。它之后仍须经过确定性汇合、宏观连续性策略、完整目标身份复核和原有写入流程。',
         instruction,
@@ -327,10 +335,14 @@ export function buildActorShardMessages(candidate, {
             actorName: candidate?.name,
             time: 'unknown',
             location: candidate?.locations?.[0] || 'unknown',
+            travelTurns: 0,
             knowledgeBasis: candidate?.knowledgeBasis || [],
             currentGoal: candidate?.goals?.[0] || '继续既定目标',
             candidateAction: `围绕“${candidate?.goals?.[0] || '既定目标'}”继续行动（候选，尚未发生）`,
             interactionTargets: [],
+            resourceCosts: [],
+            capabilityUsed: '',
+            waitCondition: '',
             sourceThreads: candidate?.sourceThreads || [],
             evidence: candidate?.evidence || [],
             causalChain: candidate?.causalChain || [],
@@ -378,11 +390,60 @@ export function parseActorShardProposal(output, { candidate } = {}) {
     ) {
         return { error: 'actor_shard.interaction_targets_invalid' };
     }
+    const resourceCosts = Array.isArray(value.resourceCosts)
+        ? value.resourceCosts
+        : null;
+    if (
+        !resourceCosts
+        || resourceCosts.length > 12
+        || resourceCosts.some((item) => (
+            !exactKeys(item, RESOURCE_COST_KEYS)
+            || !cleanText(item.resourceId, 100)
+            || !Number.isFinite(Number(item.amount))
+            || Number(item.amount) <= 0
+        ))
+    ) {
+        return { error: 'actor_shard.resource_invalid' };
+    }
+    const availableResources = new Map(
+        (candidate?.actorState?.resources || []).map((item) => [
+            cleanText(item?.id, 100),
+            Number(item?.amount) || 0,
+        ]),
+    );
+    if (resourceCosts.some((item) => (
+        !availableResources.has(cleanText(item.resourceId, 100))
+        || Number(item.amount) > availableResources.get(cleanText(item.resourceId, 100))
+    ))) {
+        return { error: 'actor_shard.resource_invalid' };
+    }
+    const capabilityUsed = cleanText(value.capabilityUsed, 160);
+    if (
+        capabilityUsed
+        && !(candidate?.actorState?.capabilities || []).includes(capabilityUsed)
+    ) {
+        return { error: 'actor_shard.capability_invalid' };
+    }
+    const location = cleanText(value.location, 160);
+    const travelTurns = Math.floor(Number(value.travelTurns));
+    const currentLocation = cleanText(
+        candidate?.actorState?.location?.name || candidate?.locations?.[0],
+        160,
+    );
+    if (
+        !Number.isFinite(travelTurns)
+        || travelTurns < 0
+        || travelTurns > 10_000
+        || (currentLocation && location !== currentLocation && travelTurns <= 0)
+    ) {
+        return { error: 'actor_shard.travel_invalid' };
+    }
     const proposal = {
         actorId: candidate.id,
         actorName: candidate.name,
         time: cleanText(value.time, 160),
-        location: cleanText(value.location, 160),
+        location,
+        travelTurns,
         knowledgeBasis: cleanList(value.knowledgeBasis, 8, 400),
         currentGoal: cleanText(value.currentGoal, 500),
         candidateAction: cleanText(value.candidateAction, 700),
@@ -390,6 +451,12 @@ export function parseActorShardProposal(output, { candidate } = {}) {
             actorId: cleanText(item.actorId, 180),
             actorName: cleanText(item.actorName, 120),
         })),
+        resourceCosts: resourceCosts.map((item) => ({
+            resourceId: cleanText(item.resourceId, 100),
+            amount: Number(item.amount),
+        })),
+        capabilityUsed,
+        waitCondition: cleanText(value.waitCondition, 500),
         sourceThreads: cleanList(value.sourceThreads, 8, 90),
         evidence: cleanList(value.evidence, 8, 300),
         causalChain: cleanList(value.causalChain, 8, 120),
