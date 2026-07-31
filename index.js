@@ -82,6 +82,14 @@ import {
     observeAcceptedContentPressure,
 } from './world-pressure-core.mjs';
 import {
+    bindAndSettleSerendipityLicense,
+    drawSerendipityLicense,
+    emptySerendipityLedger,
+    normalizeSerendipityLedger,
+    normalizeSerendipitySettings,
+    serendipityLicensePrompt,
+} from './serendipity-core.mjs';
+import {
     applyForumUpdate,
     emptyForumState,
     extractForumUpdate,
@@ -114,22 +122,19 @@ import {
     NarrativeBarrierCoordinator,
     PersistentIdempotencyStore,
     PersistentRecoveryStore,
-    monthlyCostKey,
-    monthlyCostSpend,
-    normalizeMonthlyCostLedger,
-    recordMonthlyCostReceipt,
-    seedMonthlyCostLedgerFromAudits,
     TaskLeaseManager,
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.5';
+const VERSION = '2.0.0-rc.6';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 10;
+const CHAT_NAMESPACE_VERSION = 11;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
 const SOCIAL_INJECTION_SENTINEL = '【MVU医生·人物动机与自主性合同】';
+const SERENDIPITY_INJECTION_NAME = 'mvu-auto-doctor-serendipity-license';
+const SERENDIPITY_INJECTION_SENTINEL = '【MVU医生·偶发许可证】';
 const IN_CHAT_POSITION = 1;
 const IN_CHAT_DEPTH = 1;
 const ACTOR_ACTION_ERROR_LABELS = Object.freeze({
@@ -188,9 +193,12 @@ const DEFAULTS = Object.freeze({
     socialAuditMode: 'balanced',
     socialAuditMaxTokens: 1024,
     socialAuditContextMessages: 5,
-    socialMonthlySoftCny: 5,
-    socialMonthlyHardCny: 10,
-    socialAuditSettingsVersion: 2,
+    socialAuditSettingsVersion: 3,
+    serendipityFrequency: 'standard',
+    serendipityMaxAmplitude: 'extreme',
+    serendipityBias: 'balanced-lucky',
+    serendipityExplanationSpeed: 'natural',
+    serendipitySettingsVersion: 1,
     continuityMode: 'auto',
     continuityAutonomy: 'living',
     hideContinuitySpoilers: true,
@@ -328,10 +336,16 @@ let lastInjectionInspection = {
     landed: false,
     socialRegistered: false,
     socialLanded: false,
+    serendipityRegistered: false,
+    serendipityLanded: false,
     apiType: '',
 };
 let lastRegisteredContinuityContent = '';
 let lastRegisteredSocialContent = '';
+let lastRegisteredSerendipityContent = '';
+let pendingSerendipityDraft = null;
+let pendingSerendipityBaseline = null;
+const pendingSerendipityOpportunities = new Map();
 let lastSocialPromptSanitization = {
     checkedAt: 0,
     assistantMessagesSanitized: 0,
@@ -527,37 +541,37 @@ function getSettings() {
         5,
         Math.max(3, Number(settings.socialAuditContextMessages) || DEFAULTS.socialAuditContextMessages),
     );
-    settings.socialMonthlySoftCny = Math.max(
-        0,
-        Number(settings.socialMonthlySoftCny) || DEFAULTS.socialMonthlySoftCny,
-    );
-    settings.socialMonthlyHardCny = Math.max(
-        settings.socialMonthlySoftCny,
-        Number(settings.socialMonthlyHardCny) || DEFAULTS.socialMonthlyHardCny,
-    );
     if (previousSocialAuditSettingsVersion < 1) {
         settings.socialNarrativeGuardEnabled = settings.socialNarrativeGuardEnabled !== false;
         settings.socialAuditMode = 'balanced';
         settings.socialAuditMaxTokens = DEFAULTS.socialAuditMaxTokens;
         settings.socialAuditContextMessages = DEFAULTS.socialAuditContextMessages;
-        settings.socialMonthlySoftCny = DEFAULTS.socialMonthlySoftCny;
-        settings.socialMonthlyHardCny = DEFAULTS.socialMonthlyHardCny;
-        settings.socialAuditSettingsVersion = 1;
+        settings.socialAuditSettingsVersion = DEFAULTS.socialAuditSettingsVersion;
         changed = true;
     }
-    const normalizedCostLedger = normalizeMonthlyCostLedger(settings.socialMonthlyCostLedger);
-    if (previousSocialAuditSettingsVersion < 2) {
-        settings.socialMonthlyCostLedger = seedMonthlyCostLedgerFromAudits(
-            normalizedCostLedger,
-            readChatNamespace(context).socialAudits,
-        );
-        settings.socialAuditSettingsVersion = 2;
+    if (settings.socialAuditSettingsVersion !== DEFAULTS.socialAuditSettingsVersion) {
+        settings.socialAuditSettingsVersion = DEFAULTS.socialAuditSettingsVersion;
         changed = true;
-    } else if (
-        JSON.stringify(settings.socialMonthlyCostLedger)
-        !== JSON.stringify(normalizedCostLedger)
-    ) {
-        settings.socialMonthlyCostLedger = normalizedCostLedger;
+    }
+    const serendipity = normalizeSerendipitySettings({
+        frequency: settings.serendipityFrequency,
+        maxAmplitude: settings.serendipityMaxAmplitude,
+        bias: settings.serendipityBias,
+        explanationSpeed: settings.serendipityExplanationSpeed,
+    });
+    for (const [key, value] of [
+        ['serendipityFrequency', serendipity.frequency],
+        ['serendipityMaxAmplitude', serendipity.maxAmplitude],
+        ['serendipityBias', serendipity.bias],
+        ['serendipityExplanationSpeed', serendipity.explanationSpeed],
+    ]) {
+        if (settings[key] !== value) {
+            settings[key] = value;
+            changed = true;
+        }
+    }
+    if (settings.serendipitySettingsVersion !== 1) {
+        settings.serendipitySettingsVersion = 1;
         changed = true;
     }
     if (!['tavern', 'direct', 'story-oracle'].includes(settings.strictModelProvider)) {
@@ -834,6 +848,11 @@ function normalizedModelDiagnostics(value) {
             durationMs: Math.max(0, Math.floor(Number(entry.durationMs) || 0)),
             queueWaitMs: Math.max(0, Math.floor(Number(entry.queueWaitMs) || 0)),
             outputChars: Math.max(0, Math.floor(Number(entry.outputChars) || 0)),
+            httpStatus: Math.max(0, Math.floor(Number(entry.httpStatus) || 0)),
+            inputTokens: Math.max(0, Math.floor(Number(entry.inputTokens) || 0)),
+            outputTokens: Math.max(0, Math.floor(Number(entry.outputTokens) || 0)),
+            cacheHitTokens: Math.max(0, Math.floor(Number(entry.cacheHitTokens) || 0)),
+            cacheMissTokens: Math.max(0, Math.floor(Number(entry.cacheMissTokens) || 0)),
             attempt: Math.max(0, Math.floor(Number(entry.attempt) || 0)),
             targetIndex: Number.isInteger(Number(entry.targetIndex))
                 ? Number(entry.targetIndex)
@@ -1382,6 +1401,7 @@ function promptPayloadContainsSentinel(eventData) {
             apiType: 'text',
             landed: eventData.prompt.includes(CONTINUITY_INJECTION_SENTINEL),
             socialLanded: eventData.prompt.includes(SOCIAL_INJECTION_SENTINEL),
+            serendipityLanded: eventData.prompt.includes(SERENDIPITY_INJECTION_SENTINEL),
         };
     }
     if (Array.isArray(eventData.chat)) {
@@ -1392,6 +1412,9 @@ function promptPayloadContainsSentinel(eventData) {
             )),
             socialLanded: eventData.chat.some((message) => (
                 String(message?.content || '').includes(SOCIAL_INJECTION_SENTINEL)
+            )),
+            serendipityLanded: eventData.chat.some((message) => (
+                String(message?.content || '').includes(SERENDIPITY_INJECTION_SENTINEL)
             )),
         };
     }
@@ -1410,6 +1433,8 @@ function inspectContinuityInjectionEvent(eventData) {
             landed: payload.landed,
             socialRegistered: !!lastRegisteredSocialContent,
             socialLanded: payload.socialLanded,
+            serendipityRegistered: !!lastRegisteredSerendipityContent,
+            serendipityLanded: payload.serendipityLanded,
             apiType: payload.apiType,
         };
         markContinuityInjectionLanded(payload.landed);
@@ -1742,6 +1767,14 @@ function diagnosticPayload() {
                 socialAuditCount: Array.isArray(namespace.socialAudits)
                     ? namespace.socialAudits.length
                     : 0,
+                serendipity: {
+                    receiptCount: normalizeSerendipityLedger(namespace.serendipity, {
+                        chatId: context?.chatId || '',
+                    }).receipts.length,
+                    triggeredCount: normalizeSerendipityLedger(namespace.serendipity, {
+                        chatId: context?.chatId || '',
+                    }).receipts.filter((receipt) => receipt.triggered).length,
+                },
                 continuity: {
                     activeCount: continuity.activeCount,
                     resolvedCount: continuity.resolvedCount,
@@ -1966,6 +1999,7 @@ function readChatNamespace(context = getContext()) {
             actorLedger: emptyActorLedger(context?.chatId || ''),
             actorLedgerCheckpoint: null,
             worldPressure: emptyWorldPressureState(),
+            serendipity: emptySerendipityLedger(context?.chatId || ''),
             forum: emptyForumState(context?.chatId || ''),
             forumCheckpoint: null,
             phase6Runtime: {
@@ -4347,6 +4381,9 @@ async function callModel(messages, options = {}) {
                     durationMs: Date.now() - callStartedAt,
                     queueWaitMs: callStartedAt - queuedAt,
                     outputChars: String(output || '').length,
+                    httpStatus: profile.provider === 'direct' && profile.viaBackend !== true ? 200 : 0,
+                    attempt: Math.max(1, Number(options.attempt) || 1),
+                    ...normalizedProviderUsage(providerUsage),
                 });
                 return output;
             };
@@ -4433,6 +4470,8 @@ async function callModel(messages, options = {}) {
                     targetIndex: diagnosticTargetIndex,
                     durationMs: Date.now() - callStartedAt,
                     queueWaitMs: callStartedAt - queuedAt,
+                    httpStatus: Math.max(0, Number(error?.status) || 0),
+                    attempt: Math.max(1, Number(options.attempt) || 1),
                     failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
                     reason: error?.message || error,
                 });
@@ -4450,46 +4489,6 @@ async function callModel(messages, options = {}) {
     }
 }
 
-function estimateSocialUsageCost(usage, promptChars = 0, outputChars = 0) {
-    const normalized = normalizedProviderUsage(usage);
-    const hasProviderUsage = normalized.inputTokens > 0 || normalized.outputTokens > 0;
-    const inputTokens = hasProviderUsage
-        ? normalized.inputTokens
-        : Math.ceil(Math.max(0, Number(promptChars) || 0) / 2);
-    const outputTokens = hasProviderUsage
-        ? normalized.outputTokens
-        : Math.ceil(Math.max(0, Number(outputChars) || 0) / 2);
-    const cacheHitTokens = Math.min(inputTokens, normalized.cacheHitTokens);
-    const cacheMissTokens = normalized.cacheMissTokens > 0
-        ? Math.min(inputTokens, normalized.cacheMissTokens)
-        : Math.max(0, inputTokens - cacheHitTokens);
-    const cny = (
-        cacheHitTokens * 0.02
-        + cacheMissTokens * 1
-        + outputTokens * 2
-    ) / 1_000_000;
-    return {
-        inputTokens,
-        outputTokens,
-        cacheHitTokens,
-        cacheMissTokens,
-        cny: Number(cny.toFixed(6)),
-        estimated: !hasProviderUsage,
-    };
-}
-
-function socialMonthSpend(namespace = readChatNamespace(), now = Date.now()) {
-    void namespace;
-    const key = monthlyCostKey(now);
-    const spend = monthlyCostSpend(getSettings().socialMonthlyCostLedger, key);
-    return {
-        key,
-        cny: spend.cny,
-        receiptCount: spend.receiptCount,
-        baselineIncomplete: spend.baselineIncomplete,
-    };
-}
-
 function combineSocialUsage(entries) {
     const list = Array.isArray(entries) ? entries : [];
     return {
@@ -4497,37 +4496,6 @@ function combineSocialUsage(entries) {
         outputTokens: list.reduce((sum, item) => sum + (Number(item?.outputTokens) || 0), 0),
         cacheHitTokens: list.reduce((sum, item) => sum + (Number(item?.cacheHitTokens) || 0), 0),
         cacheMissTokens: list.reduce((sum, item) => sum + (Number(item?.cacheMissTokens) || 0), 0),
-        cny: Number(list.reduce((sum, item) => sum + (Number(item?.cny) || 0), 0).toFixed(6)),
-        estimated: list.some((item) => item?.estimated === true),
-    };
-}
-
-function persistSocialCostReceipt(record) {
-    if (!record?.id || !record?.modelCall?.completed) {
-        return socialMonthSpend(readChatNamespace(), record?.createdAt);
-    }
-    const settings = getSettings();
-    const result = recordMonthlyCostReceipt(settings.socialMonthlyCostLedger, {
-        receiptId: record.id,
-        cny: record.usage?.cny,
-        month: record.month,
-        at: record.createdAt,
-    });
-    if (result.ok || result.status === 'duplicate') {
-        settings.socialMonthlyCostLedger = result.ledger;
-        saveSettings();
-    }
-    record.costReceipt = {
-        id: record.id,
-        status: result.status,
-        month: record.month,
-        cny: Math.max(0, Number(record.usage?.cny) || 0),
-    };
-    return {
-        key: record.month,
-        cny: result.spend?.cny ?? socialMonthSpend().cny,
-        receiptCount: result.spend?.receiptCount ?? 0,
-        baselineIncomplete: result.spend?.baselineIncomplete === true,
     };
 }
 
@@ -4630,13 +4598,6 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         return { status: 'nochange', changes: relationship.changes };
     }
 
-    const namespace = readChatNamespace(context);
-    const monthly = socialMonthSpend(namespace);
-    // A migrated 30-entry audit window cannot prove how much was spent before
-    // its oldest retained receipt. Treat that month as closed instead of
-    // silently under-counting and exceeding the configured hard boundary.
-    const overHardCap = monthly.baselineIncomplete
-        || monthly.cny >= settings.socialMonthlyHardCny;
     let output = '';
     let parsed = null;
     const usageAttempts = [];
@@ -4654,79 +4615,64 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         changes: relationship.changes,
         reasons: routed.reasons,
     });
-    setSocialStatus(
-        overHardCap
-            ? monthly.baselineIncomplete
-                ? '人物关系：旧审计窗口无法证明本月完整费用，已安全停止自动二审，关系变化转为待确认'
-                : `人物关系：本月二审已达硬上限 ¥${settings.socialMonthlyHardCny}，关系变化转为待确认`
-            : '人物关系：正在进行语义二审',
-        overHardCap ? 'error' : 'busy',
-    );
-    if (!overHardCap) {
-        try {
-            let attemptUsage = null;
-            output = await callModel(messages, {
-                maxTokens: settings.socialAuditMaxTokens,
+    setSocialStatus('人物关系：正在进行语义二审', 'busy');
+    try {
+        let attemptUsage = null;
+        output = await callModel(messages, {
+            maxTokens: settings.socialAuditMaxTokens,
+            task: '人物关系二审',
+            channel: 'fast',
+            targetIndex: target.index,
+            jsonMode: true,
+            attempt: 1,
+            onUsage: (value) => {
+                attemptUsage = value;
+            },
+        });
+        modelAttempts += 1;
+        modelCallCompleted = true;
+        usageAttempts.push(normalizedProviderUsage(attemptUsage));
+        parsed = parseSocialAuditOutput(output, relationship.changes);
+        localStructureRepairAttempted = parsed.localRepairAttempted === true;
+        if (parsed.error) {
+            failureReason = parsed.error;
+            failureCode = 'social.invalid_structure';
+            recordModelDiagnostic({
+                phase: 'validation',
                 task: '人物关系二审',
                 channel: 'fast',
+                status: 'failed',
+                attempt: 1,
                 targetIndex: target.index,
-                jsonMode: true,
-                onUsage: (value) => {
-                    attemptUsage = value;
-                },
+                failureKind: 'social-invalid-structure',
+                reason: parsed.error,
+                outputChars: output.length,
+                ...structuredOutputShape(output),
             });
-            modelAttempts += 1;
-            modelCallCompleted = true;
-            usageAttempts.push(estimateSocialUsageCost(
-                attemptUsage,
-                messages.reduce((sum, message) => sum + message.content.length, 0),
-                output.length,
-            ));
-            parsed = parseSocialAuditOutput(output, relationship.changes);
-            localStructureRepairAttempted = parsed.localRepairAttempted === true;
-            if (parsed.error) {
-                failureReason = parsed.error;
-                failureCode = 'social.invalid_structure';
-                recordModelDiagnostic({
-                    phase: 'validation',
-                    task: '人物关系二审',
-                    channel: 'fast',
-                    status: 'failed',
-                    attempt: 1,
-                    targetIndex: target.index,
-                    failureKind: 'social-invalid-structure',
-                    reason: parsed.error,
-                    outputChars: output.length,
-                    ...structuredOutputShape(output),
-                });
-            } else if (parsed.repaired) {
-                recordModelDiagnostic({
-                    phase: 'validation',
-                    task: '人物关系二审',
-                    channel: 'fast',
-                    status: 'recovered',
-                    attempt: 1,
-                    targetIndex: target.index,
-                    failureKind: 'social-structure-repaired-locally',
-                    outputChars: output.length,
-                    ...structuredOutputShape(output),
-                    recovered: true,
-                    recoveryReason: parsed.repairKinds.join(','),
-                });
-            }
-        } catch (error) {
-            failureReason = `二审调用失败：${error.message || error}`;
-            failureCode = 'social.transport_failure';
+        } else if (parsed.repaired) {
+            recordModelDiagnostic({
+                phase: 'validation',
+                task: '人物关系二审',
+                channel: 'fast',
+                status: 'recovered',
+                attempt: 1,
+                targetIndex: target.index,
+                failureKind: 'social-structure-repaired-locally',
+                outputChars: output.length,
+                ...structuredOutputShape(output),
+                recovered: true,
+                recoveryReason: parsed.repairKinds.join(','),
+            });
         }
-    } else {
-        failureReason = '达到月度费用硬上限';
-        failureCode = 'social.monthly_hard_cap';
+    } catch (error) {
+        failureReason = `二审调用失败：${error.message || error}`;
+        failureCode = 'social.transport_failure';
     }
     guard = targetIsCurrent(target, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
 
-    const reviewFailed = !overHardCap && (!parsed || parsed.error);
-    const reviewUnavailable = overHardCap || reviewFailed;
+    const reviewFailed = !parsed || parsed.error;
+    const reviewUnavailable = reviewFailed;
     if (reviewUnavailable) {
         parsed = {
             verdict: relationship.changes.length ? 'warning' : 'violation',
@@ -4758,8 +4704,6 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         outputTokens: 0,
         cacheHitTokens: 0,
         cacheMissTokens: 0,
-        cny: 0,
-        estimated: false,
     };
     const usageSummary = modelCallCompleted
         ? combineSocialUsage(usageAttempts)
@@ -4767,7 +4711,6 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
     const record = {
         id: auditId,
         createdAt: Date.now(),
-        month: monthly.key,
         mode: settings.socialAuditMode,
         sourceRef: sourceRefOf(target),
         reasons: routed.reasons,
@@ -4775,23 +4718,21 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         summary: parsed.summary,
         findings: parsed.findings,
         decisions: parsed.decisions,
-        usage: overHardCap ? zeroUsage : usageSummary,
+        usage: usageSummary,
         modelCall: {
-            attempted: !overHardCap,
+            attempted: true,
             completed: modelCallCompleted,
             attempts: modelAttempts,
             structureRepairAttempted,
             localStructureRepairAttempted,
-            fallback: overHardCap || reviewFailed,
+            fallback: reviewFailed,
             failureReason: reviewFailed ? failureReason : '',
-            failureCode: reviewFailed || overHardCap ? failureCode : '',
+            failureCode: reviewFailed ? failureCode : '',
         },
         relationshipChangeCount: relationship.changes.length,
         omittedRelationshipChanges: relationship.omitted,
         promptProposalSanitization: deepClone(lastSocialPromptSanitization),
     };
-    const ledgerAfter = persistSocialCostReceipt(record);
-
     const rollbackOps = reviewUnavailable
         ? []
         : buildSocialRollbackOps(relationship.changes, parsed.decisions);
@@ -4839,7 +4780,6 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
         reason: correction.reason || '',
     };
     await persistSocialAudit(record, target.chatId);
-    const monthAfter = ledgerAfter.cny;
     if (correction.status === 'failed') {
         setSocialStatus(`人物关系：二审或安全回退失败：${correction.reason}`, 'error');
     } else if (reviewFailed) {
@@ -4848,26 +4788,19 @@ async function runSocialAuditTarget(captured, { manual = false } = {}) {
             : '；关系状态保持不变';
         setSocialStatus(
             modelCallCompleted
-                ? `人物关系：二审结果无效${safetyOutcome}；本次调用按实际用量记录，本月约 ¥${monthAfter}`
-                : `人物关系：二审调用失败${safetyOutcome}；本次未计费`,
+                ? `人物关系：二审结果无效${safetyOutcome}；本次仅记录上游实际返回的 token 用量`
+                : `人物关系：二审调用失败${safetyOutcome}；未写入关系修正`,
             'error',
         );
     } else if (correction.status === 'applied') {
         setSocialStatus(
-            `人物关系：已撤回 ${rollbackOps.length} 个无充分证据的持久关系变化；本月约 ¥${monthAfter}`,
+            `人物关系：已撤回 ${rollbackOps.length} 个无充分证据的持久关系变化`,
             'ok',
         );
     } else {
         setSocialStatus(
-            `人物关系：${parsed.verdict === 'pass' ? '审核通过' : '已记录提醒'}；本月约 ¥${monthAfter}`,
+            `人物关系：${parsed.verdict === 'pass' ? '审核通过' : '已记录提醒'}`,
             parsed.verdict === 'violation' ? 'error' : 'ok',
-        );
-    }
-    if (monthAfter >= settings.socialMonthlySoftCny) {
-        recordOperation(
-            '人物关系',
-            `本月二审费用约 ¥${monthAfter}，已达到软提醒 ¥${settings.socialMonthlySoftCny}；不会自动降级`,
-            'busy',
         );
     }
     return {
@@ -6694,6 +6627,275 @@ function applySocialInjection() {
             ? buildSocialNarrativeContract()
             : '',
     );
+}
+
+function registerSerendipityInjection(content) {
+    const context = getContext();
+    const registeredContent = String(content || '').trim()
+        ? `${SERENDIPITY_INJECTION_SENTINEL}\n${String(content).trim()}`
+        : '';
+    try {
+        if (typeof context?.setExtensionPrompt === 'function') {
+            context.setExtensionPrompt(
+                SERENDIPITY_INJECTION_NAME,
+                registeredContent,
+                IN_CHAT_POSITION,
+                IN_CHAT_DEPTH,
+                false,
+                0,
+            );
+        } else if (typeof context?.registerInjection === 'function') {
+            context.unregisterInjection?.(SERENDIPITY_INJECTION_NAME);
+            if (registeredContent) {
+                context.registerInjection(SERENDIPITY_INJECTION_NAME, registeredContent, {
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                    role: 'system',
+                });
+            }
+        } else if (Array.isArray(context?.extensionPrompts)) {
+            context.extensionPrompts = context.extensionPrompts
+                .filter((item) => item?.name !== SERENDIPITY_INJECTION_NAME);
+            if (registeredContent) {
+                context.extensionPrompts.push({
+                    name: SERENDIPITY_INJECTION_NAME,
+                    content: registeredContent,
+                    role: 'system',
+                    position: IN_CHAT_POSITION,
+                    depth: IN_CHAT_DEPTH,
+                });
+            }
+        } else {
+            lastRegisteredSerendipityContent = '';
+            lastInjectionInspection.serendipityRegistered = false;
+            return false;
+        }
+        lastRegisteredSerendipityContent = registeredContent;
+        lastInjectionInspection.serendipityRegistered = !!registeredContent;
+        return true;
+    } catch (error) {
+        console.warn('[MVU Auto Doctor] 偶发许可证注入失败：', error);
+        lastRegisteredSerendipityContent = '';
+        lastInjectionInspection.serendipityRegistered = false;
+        return false;
+    }
+}
+
+function latestUserGenerationText(context = getContext()) {
+    const chat = Array.isArray(context?.chat) ? context.chat : [];
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+        const message = chat[index];
+        if (message?.is_user && typeof message.mes === 'string' && message.mes.trim()) {
+            return message.mes.trim();
+        }
+    }
+    return '';
+}
+
+function serendipityGenerationBaseline(context = getContext()) {
+    const latest = latestAiMessage(context);
+    if (!latest.message) return null;
+    return {
+        chatId: String(context?.chatId || ''),
+        index: latest.index,
+        messageId: ensureMessageStableId(context, latest.message, latest.index),
+        swipeId: Number(latest.message.swipe_id) || 0,
+        fingerprint: fingerprint(latest.message.mes || ''),
+        contentFingerprint: acceptedContentFingerprint(latest.message.mes || ''),
+    };
+}
+
+function serendipityTargetAdvancedFromBaseline(captured, baseline) {
+    if (!baseline || !['swipe', 'regenerate'].includes(baseline.generationType)) return true;
+    return !(
+        captured.chatId === baseline.chatId
+        && captured.index === baseline.index
+        && captured.messageId === baseline.messageId
+        && captured.swipeId === baseline.swipeId
+        && captured.fingerprint === baseline.fingerprint
+        && captured.contentFingerprint === baseline.contentFingerprint
+    );
+}
+
+function serendipityEntropy() {
+    try {
+        const bytes = new Uint32Array(4);
+        globalThis.crypto?.getRandomValues?.(bytes);
+        if (bytes.some((value) => value !== 0)) return [...bytes].join('-');
+    } catch {
+        // Browser entropy is best-effort; this fallback remains doctor-private
+        // and never reads a character-card dice pool.
+    }
+    return `${Date.now()}-${Math.random()}-${Math.random()}`;
+}
+
+function serendipitySourceState(text) {
+    const source = String(text || '');
+    if (/来源(?:与此)?无关|无需解释来源|不重要的来源/iu.test(source)) return 'irrelevant';
+    if (/来源(?:已经)?(?:揭示|确认|查明)|已知来源/iu.test(source)) return 'revealed';
+    if (/来源可能|也许来自|疑似来自|或许来自/iu.test(source)) return 'possible';
+    return 'unknown';
+}
+
+function serendipityContradictionFlags(text) {
+    const source = String(text || '');
+    return {
+        explicitEmpty: /(?:明确|已经确认|确定|证实)(?:这里|其中|内部|它)?(?:是空的|为空|什么都没有|没有任何东西)|空无一物/iu.test(source),
+        explicitContradiction: /(?:明确事实|角色卡|原作)(?:已经)?(?:禁止|确认不可能|明确不存在)/iu.test(source),
+        minimumPlayability: !/(?:唯一选择是死|无法响应|立即不可逆失败)/iu.test(source),
+    };
+}
+
+function pendingSerendipityLedger(namespace, chatId) {
+    const ledger = normalizeSerendipityLedger(namespace?.serendipity, { chatId });
+    return {
+        ...ledger,
+        receipts: [
+            ...ledger.receipts,
+            ...pendingSerendipityOpportunities.values(),
+        ],
+    };
+}
+
+function prepareSerendipityGeneration(generationType = 'normal') {
+    const context = getContext();
+    const settings = getSettings();
+    pendingSerendipityDraft = null;
+    pendingSerendipityBaseline = null;
+    if (
+        !context?.chatId
+        || generationType === 'continue'
+        || settings.serendipityFrequency === 'off'
+    ) {
+        registerSerendipityInjection('');
+        return { status: 'disabled' };
+    }
+    const namespace = readChatNamespace(context);
+    pendingSerendipityBaseline = {
+        ...serendipityGenerationBaseline(context),
+        generationType,
+    };
+    const userText = latestUserGenerationText(context);
+    const latest = latestAiMessage(context);
+    const previousContent = latest.message?.mes || '';
+    const worldStateDigest = fingerprint([
+        continuityWorldDigest(continuityStateForInjection(namespace, {
+            isReroll: ['swipe', 'regenerate'].includes(generationType),
+        })),
+        continuityScenarioDigest(namespace.continuity),
+    ].join('|'));
+    const target = {
+        chatId: context.chatId,
+        generation: generationSerial,
+        generationId: lastGeneration.id,
+    };
+    const draw = drawSerendipityLicense({
+        ledger: pendingSerendipityLedger(namespace, context.chatId),
+        settings: {
+            frequency: settings.serendipityFrequency,
+            maxAmplitude: settings.serendipityMaxAmplitude,
+            bias: settings.serendipityBias,
+            explanationSpeed: settings.serendipityExplanationSpeed,
+        },
+        chatId: context.chatId,
+        objectKey: userText || `turn-${normalizeContinuityState(namespace.continuity).turn + 1}`,
+        worldStateDigest,
+        sourceState: serendipitySourceState(`${previousContent}\n${userText}`),
+        constraints: serendipityContradictionFlags(`${previousContent}\n${userText}`),
+        pressure: {
+            cap: settings.worldPressureCap,
+            used: normalizeWorldPressureState(namespace.worldPressure).doctorPressure,
+            recoveryDebt: normalizeWorldPressureState(namespace.worldPressure).recoveryDebt,
+        },
+        target,
+        entropy: serendipityEntropy(),
+    });
+    if (draw.status === 'disabled') {
+        registerSerendipityInjection('');
+        return draw;
+    }
+    if (draw.status === 'duplicate') {
+        const pending = [...pendingSerendipityOpportunities.values()].find(
+            (license) => license.licenseId === draw.license?.licenseId,
+        );
+        if (!pending) {
+            registerSerendipityInjection('');
+            return draw;
+        }
+        pendingSerendipityDraft = {
+            ...pending,
+            target: { ...pending.target, ...target },
+        };
+    } else {
+        pendingSerendipityDraft = draw.license;
+        pendingSerendipityOpportunities.set(draw.license.opportunityKey, draw.license);
+    }
+    registerSerendipityInjection(serendipityLicensePrompt(pendingSerendipityDraft));
+    return { ...draw, license: deepClone(pendingSerendipityDraft) };
+}
+
+async function settlePendingSerendipity(captured) {
+    const draft = pendingSerendipityDraft;
+    if (!draft) return { status: 'none' };
+    const guard = targetIsCurrent(captured);
+    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (!serendipityTargetAdvancedFromBaseline(captured, pendingSerendipityBaseline)) {
+        return {
+            status: 'stale',
+            reason: '重生成或 swipe 的新回复尚未替换旧目标',
+        };
+    }
+    const context = getContext();
+    const namespace = readChatNamespace(context);
+    const settled = bindAndSettleSerendipityLicense(
+        namespace.serendipity,
+        draft,
+        {
+            chatId: captured.chatId,
+            messageId: captured.messageId,
+            swipeId: captured.swipeId,
+            generation: captured.generationSerial,
+            generationId: captured.generationId,
+            branchId: captured.branchId,
+            contentFingerprint: captured.contentFingerprint,
+        },
+    );
+    if (!settled.ok || settled.status !== 'settled') return settled;
+    namespace.serendipity = settled.ledger;
+    const fields = ['serendipity'];
+    if (settled.license.triggered && settled.license.direction === 'adverse') {
+        const pressure = normalizeWorldPressureState(namespace.worldPressure);
+        pressure.doctorPressure += settled.license.pressureCost;
+        pressure.receipts = [...pressure.receipts, {
+            receiptId: `serendipity-pressure:${settled.license.licenseId}`,
+            turn: normalizeContinuityState(namespace.continuity).turn + 1,
+            candidateId: settled.license.licenseId,
+            channel: settled.license.channel,
+            decision: 'admitted',
+            reason: 'serendipity-adverse-within-budget',
+            status: 'planned',
+        }].slice(-160);
+        namespace.worldPressure = pressure;
+        fields.push('worldPressure');
+    }
+    const saved = await writeChatNamespace(namespace, captured.chatId, { fields });
+    if (!saved || !targetIsCurrent(captured).ok) return { status: 'stale' };
+    for (const [key, value] of pendingSerendipityOpportunities.entries()) {
+        if (value.licenseId === settled.license.licenseId) {
+            pendingSerendipityOpportunities.delete(key);
+        }
+    }
+    pendingSerendipityDraft = null;
+    pendingSerendipityBaseline = null;
+    registerSerendipityInjection('');
+    recordOperation(
+        '偶发许可证',
+        settled.license.triggered
+            ? `已结算 ${settled.license.direction}/${settled.license.magnitude} 许可证；正文由主模型自然实现`
+            : `本轮${settled.license.decision === 'rejected-explicit-contradiction' ? '因明确事实拒绝偶发' : '未触发偶发'}`,
+        settled.license.triggered ? 'ok' : '',
+    );
+    return settled;
 }
 
 function registerContinuityInjection(content) {
@@ -11456,8 +11658,8 @@ function buildSettingsPanel() {
                                 </select>
                             </label>
                             <div class="mvuad-description">
-                                默认月度软提醒 ¥5、硬上限 ¥10。软提醒不会降级；达到硬上限后不再调用API，
-                                有争议的持久关系保持本轮前状态并标记待确认。
+                                这里只显示调用是否成功、HTTP状态、重试、耗时和服务商实际返回的 token。
+                                不估算费用，也不会因为费用或旧账本停止调用；费用请在你选择的服务商处管理。
                             </div>
                             <div class="mvuad-actions">
                                 <button class="menu_button mvuad-social-run" type="button">二审最新回复</button>
@@ -11467,6 +11669,55 @@ function buildSettingsPanel() {
                                 <summary>查看最近二审追溯</summary>
                                 <ul class="mvuad-social-audit-list"></ul>
                             </details>
+                        </div>
+                    </details>
+                    <details class="mvuad-settings-fold mvuad-settings-section mvuad-serendipity-section">
+                        <summary>世界惊喜与偶发事件</summary>
+                        <div class="mvuad-settings-fold-body">
+                            <div class="mvuad-description">
+                                医生在后台给主模型签发一次性“偶发许可证”。它允许没有前兆但不矛盾的惊喜，
+                                不碰角色卡骰池、不改正文、不替玩家行动；重复搜索同一对象不会重复开奖。
+                            </div>
+                            <label class="mvuad-select">
+                                <span>世界惊喜频率</span>
+                                <select class="text_pole mvuad-serendipity-frequency">
+                                    <option value="off">关闭</option>
+                                    <option value="sparse">稀少</option>
+                                    <option value="standard">标准（推荐）</option>
+                                    <option value="frequent">活跃</option>
+                                    <option value="extreme">极高</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>最大惊喜幅度</span>
+                                <select class="text_pole mvuad-serendipity-amplitude">
+                                    <option value="small">细小</option>
+                                    <option value="useful">有用</option>
+                                    <option value="rare">稀有</option>
+                                    <option value="extreme">极端（允许极低概率大奖）</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>好运坏运倾向</span>
+                                <select class="text_pole mvuad-serendipity-bias">
+                                    <option value="harsh">偏坏运</option>
+                                    <option value="balanced">均衡</option>
+                                    <option value="balanced-lucky">均衡略偏好运（推荐）</option>
+                                    <option value="lucky">偏好运</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>谜团解释速度</span>
+                                <select class="text_pole mvuad-serendipity-explanation">
+                                    <option value="never">保持神秘</option>
+                                    <option value="slow">慢慢揭示</option>
+                                    <option value="natural">自然揭示（推荐）</option>
+                                    <option value="fast">较快解释</option>
+                                </select>
+                            </label>
+                            <div class="mvuad-description">
+                                这些选项只控制医生后台模拟，不会改角色卡、数据库、预设骰池或外部 scene/act/then。
+                            </div>
                         </div>
                     </details>
                     <details class="mvuad-settings-fold mvuad-settings-section mvuad-surface-section">
@@ -11696,6 +11947,24 @@ function buildSettingsPanel() {
         const captured = captureTarget(context, latest.index);
         if (captured) runSocialAuditTarget(captured, { manual: true });
     });
+    for (const [selector, key] of [
+        ['.mvuad-serendipity-frequency', 'serendipityFrequency'],
+        ['.mvuad-serendipity-amplitude', 'serendipityMaxAmplitude'],
+        ['.mvuad-serendipity-bias', 'serendipityBias'],
+        ['.mvuad-serendipity-explanation', 'serendipityExplanationSpeed'],
+    ]) {
+        const control = wrapper.querySelector(selector);
+        control.value = getSettings()[key];
+        control.addEventListener('change', () => {
+            getSettings()[key] = control.value;
+            saveSettings();
+            if (key === 'serendipityFrequency' && control.value === 'off') {
+                pendingSerendipityDraft = null;
+                pendingSerendipityBaseline = null;
+                registerSerendipityInjection('');
+            }
+        });
+    }
     const variableMaxTokens = wrapper.querySelector('.mvuad-variable-max-tokens');
     variableMaxTokens.value = String(getSettings().maxTokens);
     variableMaxTokens.addEventListener('change', () => {
@@ -12150,6 +12419,7 @@ function bindEvents() {
             invalidateOperations(`开始新的${lastGeneration.type}生成`);
             await restoreBranchCheckpointsForSwipe(undefined);
             applySocialInjection();
+            prepareSerendipityGeneration(generationType);
             applyContinuityInjection({
                 isReroll: ['swipe', 'regenerate'].includes(lastGeneration.type),
             });
@@ -12191,6 +12461,10 @@ function bindEvents() {
             });
             const stateCommitting = settled.then(async (result) => {
                 if (result.status !== 'settled') return result;
+                // A license is audit-only and may settle only after this exact
+                // generation/branch/message/swipe identity becomes current.
+                // A late task therefore cannot write against an older swipe.
+                await settlePendingSerendipity(result.captured);
                 await transitionTargetSettlement(barrierRecord, 'repairing');
                 await transitionTargetSettlement(barrierRecord, 'state-committing');
                 return result;
@@ -12311,6 +12585,9 @@ function bindEvents() {
             forumPendingKeys.clear();
             forumCompletedKeys.clear();
             targetSettlementRecords.clear();
+            pendingSerendipityDraft = null;
+            pendingSerendipityBaseline = null;
+            pendingSerendipityOpportunities.clear();
             downstreamBarrierProtocol = null;
             downstreamBarrierProtocolChatId = '';
             lastGeneration = {
@@ -12328,6 +12605,8 @@ function bindEvents() {
                 landed: false,
                 socialRegistered: false,
                 socialLanded: false,
+                serendipityRegistered: false,
+                serendipityLanded: false,
                 apiType: '',
             };
             setStatus('等待新的 AI 回复', '', { record: false });
@@ -12339,6 +12618,7 @@ function bindEvents() {
             loadOperationLogFromChat();
             applySocialInjection();
             applyContinuityInjection();
+            registerSerendipityInjection('');
             renderForum();
             disableStoryOracleAutoIfNeeded();
             scheduleOpeningResourceSync();
@@ -12532,6 +12812,7 @@ function initialize() {
     lastUndo = latestUndoRecord(readChatNamespace());
     applySocialInjection();
     applyContinuityInjection();
+    registerSerendipityInjection('');
     scheduleOpeningResourceSync();
     scheduleLatestHardContractAudit();
     inspectEnvironment({ waitForMvu: true });
@@ -12559,6 +12840,11 @@ function initialize() {
         },
         getSocialAudits: () => deepClone(readChatNamespace().socialAudits || []),
         getSocialPromptSanitization: () => deepClone(lastSocialPromptSanitization),
+        getSerendipityLedger: () => deepClone(normalizeSerendipityLedger(
+            readChatNamespace().serendipity,
+            { chatId: getContext()?.chatId || '' },
+        )),
+        getPendingSerendipityLicense: () => deepClone(pendingSerendipityDraft),
         syncOpeningResources: () => enqueueOpeningResourceSync(null, { manual: true }),
         runContinuity: () => enqueueContinuity(null, { force: true }),
         getContinuityState: () => deepClone(readChatNamespace().continuity),

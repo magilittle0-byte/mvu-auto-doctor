@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     GLOBAL_FAIR_DIRECTOR_GATE,
+    SERENDIPITY_DOUBLE_GATE,
     transformFairDirectorPreset,
+    transformSerendipityFairDirectorPreset,
 } from '../fair-director-preset-core.mjs';
 
 const ids = [
@@ -43,6 +45,25 @@ test('global gate preserves long-form agency while adding aggregate pressure and
     assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /D4\/D40改成D2\/D5/u);
     assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /成就、图鉴、未来目标/u);
     assert.match(GLOBAL_FAIR_DIRECTOR_GATE, /组队、接受、回答、移动、消费/u);
+});
+
+test('serendipity copy adds no-premonition classification and two independent safeguards', () => {
+    const source = fixture();
+    const before = structuredClone(source);
+    const { preset, audit } = transformSerendipityFairDirectorPreset(source);
+    assert.deepEqual(source, before, 'source preset must not be overwritten');
+    assert.match(preset.name, /偶发性双保险版$/u);
+    assert.equal(audit.serendipityDoubleGate, true);
+    const gate = preset.prompts.find((item) => (
+        item.identifier === 'c27a5e1b-5acc-43a7-8e71-9c4441490df9'
+    ));
+    assert.match(gate.content, /“没有前兆”不等于禁止发生/u);
+    assert.match(gate.content, /第一保险：许可证与预算/u);
+    assert.match(gate.content, /第二保险：最终正文复核/u);
+    assert.match(gate.content, /3000～4000字/u);
+    assert.match(gate.content, /NPC自主性/u);
+    assert.match(gate.content, /风味调侃无机械惩罚/u);
+    assert.match(SERENDIPITY_DOUBLE_GATE, /高权限身份卡/u);
 });
 
 test('transform keeps prompt order and enabled chain synchronized while deduplicating authority', () => {

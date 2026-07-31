@@ -167,6 +167,8 @@ function copyDoctorRuntime(targetRoot) {
         'model-queue.mjs',
         'protocol-core.mjs',
         'README.md',
+        'serendipity-core.d.mts',
+        'serendipity-core.mjs',
         'social-core.mjs',
         'style.css',
         'world-pressure-core.d.mts',

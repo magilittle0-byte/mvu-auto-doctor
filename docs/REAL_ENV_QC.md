@@ -54,7 +54,8 @@ loaded.
    `actor-shard-core.d.mts`, `actor-shard-core.mjs`, `continuity-core.mjs`,
    `core.mjs`, `forum-core.mjs`, `index.js`,
    `LICENSE`, `manifest.json`, `model-queue.mjs`, `protocol-core.mjs`, `social-core.mjs`, `README.md`,
-   `style.css`, `world-pressure-core.d.mts`, and `world-pressure-core.mjs`.
+   `serendipity-core.d.mts`, `serendipity-core.mjs`, `style.css`,
+   `world-pressure-core.d.mts`, and `world-pressure-core.mjs`.
 4. Confirm the served manifest and the in-app version badge match the release.
 
 ## 2. Start the real host
@@ -209,12 +210,39 @@ model routing changes.
    rule-supported consequence. Require `allow`, no relationship rollback caused by
    the reviewer's warm tone, and no narrative rewriting by the reviewer.
 7. Confirm balanced mode makes no semantic call on an ordinary turn without a
-   relationship change or suspicious motive attribution. Confirm usage/cost fields,
-   per-chat monthly accumulation, the ¥5 soft warning behavior, and the configurable
-   ¥10 hard-cap fallback without persisting a credential or raw model payload.
+   relationship change or suspicious motive attribution. Confirm diagnostics retain
+   call counts, success/failure, HTTP status, attempts, duration, and only the upstream's
+   real input/output/cache token usage. A provider that omits usage must remain zero;
+   no character estimate, currency conversion, monthly ledger, warning, hard cap, or
+   cost-based call stop may remain. Provider billing is managed by the user upstream.
 8. The automated suite must also replay fixed hostile outputs. This separates local
    enforcement from provider personality and is mandatory even when the live A/B
    sample appears improved.
+
+## 5B-2. Serendipity license checks
+
+Run this section whenever the serendipity core, its settings, generation hooks,
+world-pressure integration, or fair-director double gate changes.
+
+1. Inspect the real final chat-completion payload and require a triggered license to
+   contain direction, magnitude, channel, landing, source state and constraints only.
+   It must not contain or consume character-card dice values and must not ask the doctor
+   to rewrite, truncate or regenerate `<content>`.
+2. Cover an unexplained junk pile that is not explicitly empty and an explicitly empty
+   container. The first may receive a rare opportunity; the second must reject it.
+3. Repeat the same search with changed wording, regenerate, and swipe. Require one
+   opportunity draw for the same object/world state and zero writes from old targets.
+   `continue` must not draw.
+4. For favorable output, require a real persistent benefit and no automatic fake,
+   lure, curse, immediate pursuer, sudden breakage or stronger boss. Require the model
+   to stop before player pickup, equipment, acceptance or use.
+5. For adverse output, require doctor pressure consumption, minimum playability and a
+   response window for major harm. At the cap, require delay, downgrade or a non-harm
+   anomaly. Favorable and neutral licenses must add zero threat pressure.
+6. Keep unknown/possible sources unconfirmed. Exercise actor, faction and environment
+   placements without making the system actor-centric.
+7. Run a long-session sample to confirm clustered easter eggs are throttled, then turn
+   the feature off and confirm legacy behavior, zero injection and zero license writes.
 
 ## 5C. Phase-6 stable-barrier and downstream checks
 

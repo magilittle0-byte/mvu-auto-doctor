@@ -14,6 +14,7 @@ const IDS = Object.freeze({
 });
 
 export const FAIR_DIRECTOR_PRESET_VERSION = '2.0-global-pressure';
+export const SERENDIPITY_FAIR_DIRECTOR_PRESET_VERSION = '2.0-serendipity-double-gate';
 
 function sha256(value) {
     return createHash('sha256').update(value).digest('hex').toUpperCase();
@@ -97,6 +98,19 @@ export const GLOBAL_FAIR_DIRECTOR_GATE = `<Fair_Director_Global_Pressure_Gate_V2
 【10. 最终审计顺序】
 先审事实/授权与scene候选；再审NPC认知和硬行动；再审所有合法威胁合计、阶段预算、首领碰撞、恢复债务和最低可玩性；再审成功持续、原作锚点/唯一等级与骰池短收据；最后审正文长度来源、S1一致性和数据库/医生边界。任一失败，回到S0与骰前锁内部重建；不得靠删短正文、关闭NPC自主性、关闭缝合怪或替玩家行动来过闸。
 </Fair_Director_Global_Pressure_Gate_V2>`;
+
+export const SERENDIPITY_DOUBLE_GATE = `<Fair_Director_Serendipity_Double_Gate_V1>
+【偶发性合法分类】
+先把候选分成三类：A. 与明确事实、角色卡硬约束、原作锚点或玩家主权矛盾，必须拒绝；B. 尚未说明、来源未知或没有前兆，但没有矛盾，可以进入偶发审核；C. 低概率但世界内可能，可以进入偶发审核。“没有前兆”不等于禁止发生，“原因未知”不等于没有原因。偶发性只能突破可预测性，不能突破事实与授权。
+
+【第一保险：许可证与预算】
+只有当前完整chat/message/swipe/generation/branch绑定的医生偶发许可证可以提高B/C类候选的采用概率；旧swipe、重生成旧目标、错误分支和迟到许可证一律无效。许可证不读取角色卡骰池，不改变骰子语义。人物、势力、环境三通道同权；有利/中性不计威胁压力，不利必须消耗医生压力预算并服从最低可玩性，重大坏事先给响应窗口，超额则延迟、降级或改为非伤害异常。
+
+【第二保险：最终正文复核】
+最终<content>必须再次确认：未知/possible来源没有被提前写成revealed；外部scene/act/then仍只是候选；没有替玩家拾取、装备、接受、使用、移动、回答或选择；好运先真实且持续生效，没有自动变成假货、诱饵、诅咒、立即追兵、突然损坏或更强首领来找平衡。极端幅度允许极低概率出现顶级武器、高权限身份卡等结果，但仍须通过A类矛盾审查。任一保险失败则放弃该偶发候选，不得靠改写医生、数据库、角色卡、骰池或已接受正文补救。
+
+本条只增加“无前兆但不矛盾”的合法入口与双保险，不削弱3000～4000字、NPC自主性、软行动开放、硬行动审核、有限认知、重大成功持续生效、风味调侃无机械惩罚、玩家行动权和全局压力层。
+</Fair_Director_Serendipity_Double_Gate_V1>`;
 
 const DICE_REFERENCE = `{{setvar::骰子审计::
 严格调用 <Fair_Director_Global_Pressure_Gate_V2> 第7节。每回合先读取当前角色卡声明的骰种、池长、重置和编号；不得跨回合保留游标，不得超过池长，不得把D4/D40改成D2/D5，不得取前N、截位、取模、跳号或挑结果。顺序固定为：骰前行动/属性/技能/修正/DC依据 → 唯一骰源、回合与池内序号 → 原始骰面 → 完整算式 → 本轮锁定结果。缺任一项就停在判定前。
@@ -271,6 +285,50 @@ export function transformFairDirectorPreset(input) {
                 (entry) => entry.identifier === IDS.fairGate,
             ),
             modifications,
+        },
+    };
+}
+
+export function transformSerendipityFairDirectorPreset(input) {
+    const base = transformFairDirectorPreset(input);
+    const preset = structuredClone(base.preset);
+    const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+    const fair = requirePrompt(byId, IDS.fairGate);
+    const before = String(fair.content || '');
+    fair.name = '🎬公平导演权威总闸V2（全局压力·偶发性双保险）';
+    fair.content = before.includes('<Fair_Director_Serendipity_Double_Gate_V1>')
+        ? before.replace(
+            /<Fair_Director_Serendipity_Double_Gate_V1>[\s\S]*?<\/Fair_Director_Serendipity_Double_Gate_V1>/u,
+            SERENDIPITY_DOUBLE_GATE,
+        )
+        : `${before}\n\n${SERENDIPITY_DOUBLE_GATE}`;
+    preset.name = `${String(preset.name || '主预设')
+        .replace(/_全局节奏闭环版$/u, '')
+        .replace(/_偶发性双保险版$/u, '')}_偶发性双保险版`;
+    return {
+        preset,
+        audit: {
+            ...base.audit,
+            transformVersion: SERENDIPITY_FAIR_DIRECTOR_PRESET_VERSION,
+            outputName: preset.name,
+            serendipityGateIdentifier: IDS.fairGate,
+            serendipityDoubleGate: true,
+            modifications: [
+                ...base.audit.modifications.filter((entry) => entry.identifier !== IDS.fairGate),
+                {
+                    identifier: IDS.fairGate,
+                    beforeName: input.prompts.find((prompt) => prompt.identifier === IDS.fairGate)?.name || '',
+                    afterName: fair.name,
+                    beforeLength: String(input.prompts.find(
+                        (prompt) => prompt.identifier === IDS.fairGate,
+                    )?.content || '').length,
+                    afterLength: fair.content.length,
+                    beforeSha256: sha256(String(input.prompts.find(
+                        (prompt) => prompt.identifier === IDS.fairGate,
+                    )?.content || '')),
+                    afterSha256: sha256(fair.content),
+                },
+            ],
         },
     };
 }

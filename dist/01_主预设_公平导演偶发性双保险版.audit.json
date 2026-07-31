@@ -1,0 +1,40 @@
+{
+  "transformVersion": "2.0-serendipity-double-gate",
+  "sourceName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_全局节奏闭环版",
+  "outputName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_偶发性双保险版",
+  "promptCount": 213,
+  "orderCount": 181,
+  "enabledCount": 73,
+  "globalGateIdentifier": "c27a5e1b-5acc-43a7-8e71-9c4441490df9",
+  "globalGateOrderIndex": 119,
+  "modifications": [
+    {
+      "identifier": "dad86601-1688-471b-96d9-e252d1624bbb",
+      "beforeName": "⚡️平行事件生命周期·主线接轨·数据库只读召回",
+      "afterName": "⚡️平行事件生命周期·主线接轨·数据库只读召回",
+      "beforeLength": 1111,
+      "afterLength": 1221,
+      "beforeSha256": "5949EDBD0E208C2FE845131CBBF90050769BE762ADE98ADD2227D80E530E4698",
+      "afterSha256": "93D04EA3EDC4985392A5E729ABE213EF90B4E99843F29CCE842CC5BBC723461E"
+    },
+    {
+      "identifier": "c27a5e1b-5acc-43a7-8e71-9c4441490df9",
+      "beforeName": "🎬公平导演权威总闸V2（全局压力·恢复债务·原作与骰池）",
+      "afterName": "🎬公平导演权威总闸V2（全局压力·偶发性双保险）",
+      "beforeLength": 3054,
+      "afterLength": 3840,
+      "beforeSha256": "7C7F56098F8FF8FB68A0BEB1FAB3F20E51814F636F651C89EF4E82FE7E89B86D",
+      "afterSha256": "7B9E6FA431B9B20178525EC9F9674B612A4644A4DB22C86180116D25CFF37ED5"
+    }
+  ],
+  "serendipityGateIdentifier": "c27a5e1b-5acc-43a7-8e71-9c4441490df9",
+  "serendipityDoubleGate": true,
+  "sourceFile": "01_主预设_公平导演全局节奏闭环版.json",
+  "outputFile": "01_主预设_公平导演偶发性双保险版.json",
+  "sourceBytes": 521821,
+  "outputBytes": 524016,
+  "sourceSha256": "F515E94DE8B02F4C0D07C671E4C529A0D663BD607F9C44DBF25BAE225D291D2E",
+  "outputSha256": "5C469BEA5E68E087E4D9874E8F2AD6579B030796056CFC961D093C0C90F714E9",
+  "sourceUnchanged": true,
+  "createdAt": "2026-07-31T11:29:53.816Z"
+}

@@ -35,17 +35,28 @@ assert.equal(
     'rc.3 发行源码不得保留数据库最终正文桥导入条目',
 );
 assert.ok(readme.includes(repositoryUrl), 'README 必须提供在线安装仓库地址');
-assert.ok(readme.includes('点击这一行自己的“更新”'), 'README 必须提供从main直接在线更新步骤');
-assert.ok(rcUserGuide.includes('不需要加载分支列表'), 'RC说明必须支持无法加载分支列表的在线更新');
+assert.ok(
+    readme.includes('默认 `main` 仍是上一版')
+        && readme.includes('rc.6 离线候选包'),
+    'README 必须准确区分独立候选分支和尚未晋升的main',
+);
+assert.ok(
+    readme.includes('只有线上 `manifest.json` 已是 rc.6 时'),
+    'README 必须把默认main在线更新写成晋升后的条件步骤',
+);
+assert.ok(
+    rcUserGuide.includes('只有获得单独发布授权并重新通过发布门后'),
+    'RC说明不得把候选分支误写成已经晋升main',
+);
 assert.ok(rcUserGuide.includes('分支或标签：留空（默认 main）'), 'RC说明必须提供默认main全新安装步骤');
 assert.ok(
     rcUserGuide.includes('codex/backup-main-pre-v2.0.0-rc.1-20260727'),
     'RC说明必须记录可审阅的更新前回退分支',
 );
-assert.equal(
-    rcUserGuide.includes('测试 RC 时请使用候选分支里的离线 ZIP'),
-    false,
-    'RC说明不得把本地ZIP作为酒馆唯一安装路径',
+assert.match(
+    rcUserGuide,
+    /候选阶段请\s+使用本仓库生成的 rc\.6 离线包/u,
+    'RC说明必须提供未晋升候选的诚实安装路径',
 );
 
 console.log('version consistency test passed');

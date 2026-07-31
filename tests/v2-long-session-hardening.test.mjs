@@ -5,9 +5,6 @@ import {
     buildContinuitySourcePlan,
     DownstreamBarrierProtocol,
     MemoryVersionedAdapter,
-    monthlyCostSpend,
-    recordMonthlyCostReceipt,
-    seedMonthlyCostLedgerFromAudits,
 } from '../v2/runtime/index.mjs';
 import {
     diagnosticPrivacyCanaryFindings,
@@ -17,61 +14,6 @@ import {
     prepareLegacyUpgradeDrill,
     rollbackLegacyUpgrade,
 } from '../v2/release/index.mjs';
-
-test('monthly social cost ledger is monotonic and idempotent at 31, 100 and 1000 receipts', () => {
-    let ledger = null;
-    const checkpoints = new Map();
-    for (let index = 1; index <= 1000; index += 1) {
-        const result = recordMonthlyCostReceipt(ledger, {
-            receiptId: `receipt-${index}`,
-            cny: 0.01,
-            month: '2026-07',
-            at: index,
-        });
-        assert.equal(result.ok, true);
-        ledger = result.ledger;
-        if ([31, 100, 1000].includes(index)) {
-            checkpoints.set(index, monthlyCostSpend(ledger, '2026-07'));
-        }
-    }
-    assert.equal(checkpoints.get(31).cny, 0.31);
-    assert.equal(checkpoints.get(100).cny, 1);
-    assert.equal(checkpoints.get(1000).cny, 10);
-    assert.equal(checkpoints.get(1000).receiptCount, 1000);
-    assert.equal(checkpoints.get(1000).cny >= 5, true, 'soft reminder threshold');
-    assert.equal(checkpoints.get(1000).cny >= 10, true, 'hard stop threshold');
-
-    const duplicate = recordMonthlyCostReceipt(structuredClone(ledger), {
-        receiptId: 'receipt-1000',
-        cny: 0.01,
-        month: '2026-07',
-        at: 2000,
-    });
-    assert.equal(duplicate.status, 'duplicate');
-    assert.equal(monthlyCostSpend(duplicate.ledger, '2026-07').cny, 10);
-    assert.equal(
-        monthlyCostSpend(structuredClone(duplicate.ledger), '2026-07').receiptCount,
-        1000,
-        'ledger survives reload without recomputing from bounded audits',
-    );
-
-    const migrated = seedMonthlyCostLedgerFromAudits(
-        null,
-        Array.from({ length: 30 }, (_, index) => ({
-            id: `legacy-${index}`,
-            month: '2026-07',
-            createdAt: index,
-            usage: { cny: 0.01 },
-            modelCall: { completed: true },
-        })),
-        new Date(2026, 6, 27).getTime(),
-    );
-    assert.equal(
-        monthlyCostSpend(migrated, '2026-07').baselineIncomplete,
-        true,
-        'a bounded legacy window cannot claim a complete monthly baseline',
-    );
-});
 
 test('optional cooperative clients get receipts whose failed/stale states permanently reject writes', async () => {
     const adapter = new MemoryVersionedAdapter();
@@ -222,7 +164,7 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
     const canary = 'PRIVATE-STORY-CANARY-7f9d';
     const diagnostic = createPrivacySafeDiagnosticProjection({
         userAgent: 'Mozilla/5.0 (Linux; Android 15; PrivateDevice) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile',
-        plugin: { id: 'mvu_auto_doctor', version: '2.0.0-rc.5' },
+        plugin: { id: 'mvu_auto_doctor', version: '2.0.0-rc.6' },
         environment: {
             status: 'error',
             checks: [{ kind: 'error', message: canary }],

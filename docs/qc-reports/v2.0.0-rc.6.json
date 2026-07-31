@@ -1,0 +1,425 @@
+{
+  "schemaVersion": 2,
+  "version": "2.0.0-rc.6",
+  "testedAt": "2026-07-31T12:03:45.187Z",
+  "result": "blocked",
+  "codeFingerprint": "cdbd8bbdb95d9165f1786df83b7ca07cc85da8ec78c2425ac13d2eabb334987b",
+  "environment": {
+    "sillyTavernVersion": "1.18.0",
+    "sillyTavernCommit": "8172dcd",
+    "url": "http://127.0.0.1:8011",
+    "browser": "Playwright headless only",
+    "viewport": { "width": 390, "height": 844 },
+    "viewports": [
+      { "width": 1280, "height": 720, "role": "desktop-headless" },
+      { "width": 390, "height": 844, "role": "mobile-touch-headless" }
+    ],
+    "foregroundDesktopAutomationUsed": false
+  },
+  "checks": {
+    "testSuite": {
+      "total": 205,
+      "passed": 205,
+      "failed": 0,
+      "todo": 0,
+      "skipped": 0,
+      "durationMs": 151009.7899
+    },
+    "actorLedger": {
+      "version": 2,
+      "persistentAuditLedger": true,
+      "continuousMigration": true,
+      "privateThoughtsHidden": true,
+      "acceptedContentObservationOnly": true,
+      "boundedActorLimit": 5,
+      "boundedExplorationSlots": 2,
+      "lowAttentionTurnsTested": 80,
+      "starvationPrevented": true,
+      "dueActionResolutionRequired": true,
+      "playerSovereigntyProtected": true,
+      "receiptStages": [
+        "plan",
+        "execution",
+        "world-settlement",
+        "injection",
+        "narrative-consumption"
+      ],
+      "injectionBudgetPreserved": true,
+      "realRuntimeApiVisible": true,
+      "publicViewExcludesPrivateState": true,
+      "realUiControlsVerified": true,
+      "optionalFailureNonBlocking": true,
+      "currentRc6ModelDecisionSettlementVerified": false,
+      "currentRc6Blocker": "local-profile returned HTTP 401"
+    },
+    "worldPressure": {
+      "doctorOwnedOnly": true,
+      "contentRewriteCount": 0,
+      "channels": ["actor", "faction", "environment"],
+      "sharedInjectionBudget": true,
+      "phaseBudgetVerified": true,
+      "aggregateBudgetVerified": true,
+      "sameSceneBossCapVerified": true,
+      "recoveryDebtVerified": true,
+      "minimumPlayabilityVerified": true,
+      "quietProgressAccepted": true,
+      "externalThreatsObservedOnly": true,
+      "dueFalseSettlementRejected": true,
+      "receiptStages": [
+        "plan",
+        "execution",
+        "world-settlement",
+        "injection",
+        "narrative-consumption"
+      ],
+      "branchAndGenerationIdentityVerified": true,
+      "oldSwipeWrites": 0,
+      "wrongBranchWrites": 0,
+      "staleGenerationWrites": 0,
+      "nonTechnicalControlsVerified": true
+    },
+    "serendipity": {
+      "independentEntropyVerified": true,
+      "cardDiceReads": 0,
+      "cardDiceWrites": 0,
+      "fullTargetIdentityVerified": true,
+      "oldSwipeWrites": 0,
+      "wrongBranchWrites": 0,
+      "staleGenerationWrites": 0,
+      "repeatOpportunityDraws": 0,
+      "explicitContradictionRejected": true,
+      "unexplainedPossibilityAllowed": true,
+      "favorablePressureCost": 0,
+      "favorableAutoPunishmentCount": 0,
+      "adversePressureCapVerified": true,
+      "majorAdverseResponseWindowVerified": true,
+      "unknownSourcePrematureRevealCount": 0,
+      "playerActionWrites": 0,
+      "contentRewriteCount": 0,
+      "disabledBehaviorUnchanged": true,
+      "longSessionThrottleVerified": true,
+      "nonTechnicalControlsVerified": true,
+      "regenerateLateEventWrites": 0,
+      "swipeLateEventWrites": 0,
+      "newTargetSettlementsAfterLateEvent": 2,
+      "evidenceRole": "rc6-current-automated-and-real-host-ui"
+    },
+    "billingRemoval": {
+      "currencyEstimates": 0,
+      "priceTables": 0,
+      "monthlyAmountLedgersUsed": 0,
+      "costWarnings": 0,
+      "costStopGates": 0,
+      "characterTokenEstimates": 0,
+      "providerUsageOnly": true,
+      "legacyBillingSettingsPreservedUnused": true
+    },
+    "longSessionHardening": {
+      "syntheticMessages": 65,
+      "syntheticSwipes": 48,
+      "syntheticBytes": 3670016,
+      "unknownFieldsPreserved": true,
+      "tavernDbFieldsPreserved": true,
+      "rerollHelperFieldsPreserved": true,
+      "currentSwipeIdentityPreserved": true,
+      "structureRepairRetryVerified": false,
+      "localStructureRepairVerified": true,
+      "modelStructureRepairRetryRemoved": true,
+      "sanitizedLatestRunModelCalls": 17,
+      "sanitizedLatestRunProjectedCalls": 14,
+      "failedStaleContinuitySkipped": true,
+      "fullIdentityBarrierHistoryVerified": true,
+      "restartExactlyOnceVerified": true
+    },
+    "realLongSession": {
+      "evidenceRole": "historical-compatibility-baseline-not-rc6-model-proof",
+      "fixture": "black-box-English-schema",
+      "turns": 24,
+      "messages": 49,
+      "settledTargets": 24,
+      "distinctTargetIdentities": 24,
+      "failedTargets": 0,
+      "staleTargets": 0,
+      "modelCalls": 24,
+      "modelCallsSucceeded": 24,
+      "swipeInfoAligned": true,
+      "reloadStructureRecovered": true,
+      "reloadSettledRecords": 24,
+      "databaseApiVisible": true,
+      "databaseRefreshStable": true,
+      "structureSha256": "c9272c89994e2eb23af9b670cde27995d5fce14fa680ccdceb85fe91e9dc4069",
+      "databaseSha256": "7f38504f7a61c32ee4d65f97476d243df70c847a82531edaef74bffbb7611147"
+    },
+    "realDatabaseCompatibility": {
+      "current": {
+        "version": "spv8.4",
+        "production": false,
+        "evidenceRole": "historical-baseline",
+        "apiName": "AutoCardUpdaterAPI",
+        "apiMethods": 114,
+        "crudRoundTrip": true,
+        "refreshVerified": true,
+        "callbacksVerified": true,
+        "uiVerified": true,
+        "chatSwitchRecovered": true,
+        "reloadRecovered": true,
+        "cleanupVerified": true
+      },
+      "legacy": {
+        "version": "spv5.5.6",
+        "production": false,
+        "evidenceRole": "historical-baseline",
+        "apiMethods": 88,
+        "crudRoundTrip": true,
+        "reloadRecovered": true
+      },
+      "latest": {
+        "version": "spv8.7.4",
+        "production": true,
+        "evidenceRole": "rc6-current-headless-probe",
+        "cleanAuthorLoader": true,
+        "legacySourceRewriteExcludedFromSterileRoot": true,
+        "legacySourceRewriteDetectedByDoctor": true,
+        "authorImportSha256": "01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65",
+        "officialBundleSha256": "bb27c0936cbb719184b83890d4f2e6738895e04ec027ebc5618ed01ad29f1efb",
+        "bundleRequestCount": 6,
+        "bundleResponseCount": 6,
+        "bundleSuccessResponseCount": 2,
+        "responseVersion": "spv8.7.4",
+        "apiVisible": true,
+        "apiMethods": 116,
+        "publicUpdateReturnedTruthyObject": true,
+        "independentBridgeInstalled": false,
+        "independentBridgeAbsent": true,
+        "reloadIndependentBridgeAbsent": true,
+        "uiSurfaceCountBeforeReload": 7,
+        "reloadApiMethods": 116,
+        "reloadUiSurfaceCount": 3,
+        "result": "pass",
+        "doctorRuntimeErrorCount": 0,
+        "databaseRuntimeErrorCount": 0,
+        "tavernHelperRuntimeErrorCount": 0,
+        "sterileDataRoot": true,
+        "privateSettingsCopied": false,
+        "privateChatsCopied": false,
+        "privateCharactersCopied": false,
+        "credentialsCopied": false,
+        "originalUserDataModified": false,
+        "temporaryDataRemoved": true,
+        "isolatedHostPortClosed": true,
+        "doctorVersionVisible": "2.0.0-rc.6"
+      },
+      "tableNamesHardcoded": false,
+      "columnNamesHardcoded": false,
+      "doctorDatabaseApiCalls": 0,
+      "doctorRequiresDatabaseProtocol": false,
+      "externalMode": "unmanaged",
+      "externalConsistency": "unknown"
+    },
+    "eventStormDeduplication": {
+      "sameTargetDeliveries": 5,
+      "maximumCallsPerTask": 1,
+      "settledRecords": 1,
+      "wrongTargetWrites": 0,
+      "databaseApiVisible": true
+    },
+    "actorShard": {
+      "evidenceRole": "historical-baseline-plus-rc6-deterministic-regression",
+      "realWorkerCounts": [1, 3, 5],
+      "selected": [1, 3, 5],
+      "succeeded": [1, 3, 5],
+      "failed": [0, 0, 0],
+      "staleRegenerateWrites": 0,
+      "staleSwipeWrites": 0,
+      "staleChatSwitchWrites": 0,
+      "strictWhitelistExampleVerified": true,
+      "currentRc6RealWorkerSuccessClaimed": false
+    },
+    "universalCompatibility": {
+      "coreUsesDynamicJsonPointers": true,
+      "unknownSchemaReadOnlyAuditPassed": true,
+      "unknownSchemaReshaped": false,
+      "databaseTablesInspectedByDoctor": false,
+      "frontendFunctionsInvokedByDoctor": false,
+      "legacyDialectAdaptersConservative": true,
+      "currentCardIsFixtureOnly": true
+    },
+    "regressionMatrix": {
+      "evidenceSource": "sanitized-real-records",
+      "items": [
+        {
+          "id": "RC6-SERENDIPITY-01",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Regenerate and swipe late events leave the license ledger unchanged until a replacement target identity lands."
+        },
+        {
+          "id": "RC6-BILLING-02",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "Runtime, settings, diagnostics and gates contain no monetary estimate or cost stop; provider usage only remains."
+        },
+        {
+          "id": "RC6-PRESET-03",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "The serendipity double-gate preset is a separate copy and its audit contains hashes and portable file names only."
+        },
+        {
+          "id": "RC6-DB-04",
+          "severity": "environment",
+          "disposition": "fixed",
+          "evidence": "Current rc6 headless probe loaded spv8.7.4 twice with HTTP 200, 116 API methods, truthy update and zero owned runtime errors."
+        },
+        {
+          "id": "RC6-MODEL-05",
+          "severity": "environment",
+          "disposition": "blocked",
+          "evidence": "The authorized local-profile credential produced three HTTP 401 responses and zero relationship or MVU writes."
+        },
+        {
+          "id": "RC6-TAURI-06",
+          "severity": "environment",
+          "disposition": "blocked",
+          "evidence": "The dedicated TauriTavern sandbox has no proven headless HTTP or WebDriver entry; its v1.8.10 doctor baseline remains restored."
+        },
+        {
+          "id": "RC6-MOBILE-07",
+          "severity": "high",
+          "disposition": "fixed",
+          "evidence": "Current rc6 headless real host probe passed 390x844 and desktop panel containment with zero horizontal overflow."
+        },
+        {
+          "id": "RC6-PRIVACY-08",
+          "severity": "critical",
+          "disposition": "fixed",
+          "evidence": "No credential, raw payload, private chat, user-data path or local absolute path entered the report or new preset audit."
+        }
+      ]
+    },
+    "realEnvironment": {
+      "deployedRuntime": true,
+      "servedSourceMatchesFingerprint": true,
+      "separateHeadlessProfile": true,
+      "originalChatModified": false,
+      "originalCardModified": false,
+      "companionScriptsModified": false,
+      "externalDatabaseProtocolOptional": true,
+      "tavernDbRegistrationRequired": false,
+      "externalDatabaseMode": "unmanaged",
+      "unmanagedProbeMode": "unmanaged",
+      "externalDatabaseWriteConsistency": "unknown",
+      "doctorManagedWritesSettledOnly": true,
+      "failedStaleLateDoctorWrites": 0,
+      "runtimeMvuApiAvailable": false,
+      "environmentStatus": "error",
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "panelWithinViewport": true,
+        "minimumVisibleControlHeight": 42,
+        "horizontalOverflow": false
+      },
+      "desktop": {
+        "width": 1280,
+        "height": 720,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false
+      },
+      "hostConsoleErrorCount": 11,
+      "doctorConsoleErrorCount": 0,
+      "hostConsoleCleanClaimed": false,
+      "headlessOnly": true,
+      "isolatedHostPortClosed": true
+    },
+    "realModel": {
+      "result": "blocked",
+      "attempts": 3,
+      "succeeded": 0,
+      "failed": 3,
+      "proxyStatuses": [401, 401, 401],
+      "inputBytes": [2775, 4562, 27502],
+      "externalCredentialRejected": true,
+      "doctorModelCallDelta": 3,
+      "doctorRetryCount": 0,
+      "doctorFallbackUsed": true,
+      "doctorModelCompleted": false,
+      "socialFailureZeroWrite": true,
+      "stateWriterCalls": 0,
+      "databaseRuntimeLoadedDuringModelProbe": false,
+      "syntheticFixtureUsed": true,
+      "privateChatModelEgress": false,
+      "credentialPersisted": false,
+      "rawPayloadPersisted": false,
+      "credentialClearedFromBrowserMemory": true,
+      "credentialClearedFromProxy": true,
+      "proxyStopped": true,
+      "hostPortClosed": true,
+      "proxyPortClosed": true,
+      "oldSuccessfulRunReusedAsCurrentEvidence": false,
+      "model": "gpt-5.4-mini",
+      "credentialSource": "local-profile"
+    },
+    "tauriTavern": {
+      "result": "blocked-headless-entry-unavailable",
+      "foregroundAutomationUsed": false,
+      "sandboxDoctorVersionAfterProbe": "1.8.10",
+      "sandboxBaselineRestored": true,
+      "userRunningTauriTavernTouched": false
+    },
+    "cardCompatibility": {
+      "evidenceRole": "historical-fixture-baseline-not-rc6-private-data-read",
+      "sourceFormat": "png-v3",
+      "originalModified": false,
+      "worldbookEntries": 77,
+      "tavernHelperScripts": 3,
+      "regexScripts": 8,
+      "standardAndLegacyContainersSupported": true,
+      "cardSideChangesRequired": false
+    }
+  },
+  "releaseArtifact": {
+    "name": "05_MVU自动医生_v2.0.0-rc.6_离线候选.zip",
+    "files": 72,
+    "bytes": 1657893,
+    "sha256": "3014e345dd262cfcab1163dc3139ee7ffad25fecd1d43b73594d5880aefb49f7",
+    "containsSerendipityCore": true,
+    "containsDatabaseFinalReplyBridge": false,
+    "allowlistVerified": true
+  },
+  "blocker": {
+    "code": "real_model_test_credential_rejected",
+    "message": "rc.6 cannot claim a real-model pass because the only safely recoverable authorized local-profile credential returned HTTP 401; the dedicated TauriTavern sandbox also has no proven background/headless control entry.",
+    "releasePromotionBlocked": true,
+    "reasons": [
+      "Three current-source model requests returned HTTP 401 with zero successful response.",
+      "No running approved in-memory credential broker was available on the previously authorized local ports.",
+      "TauriTavern foreground automation is prohibited and no background/headless host entry was proven."
+    ]
+  },
+  "publication": {
+    "scope": "independent-branch-only",
+    "mainAllowed": false,
+    "releaseCandidateAllowed": false,
+    "forcePushAllowed": false,
+    "allowedRemoteRefs": [
+      "refs/heads/codex/serendipity-engine-no-billing"
+    ],
+    "tagAllowed": false,
+    "githubReleaseAllowed": false
+  },
+  "privacy": {
+    "apiKeyIncluded": false,
+    "privateChatIncluded": false,
+    "userDataIncluded": false,
+    "rawModelPayloadIncluded": false,
+    "derivedNarrativeFindings": 0,
+    "fullPromptFindings": 0,
+    "privateCanaryFindings": 0,
+    "fullUserAgentIncluded": false,
+    "privateChatModelEgress": false,
+    "syntheticFixtureUsedForModelProbe": true,
+    "credentialDeletedFromProxy": true,
+    "localAbsolutePathIncluded": false
+  }
+}

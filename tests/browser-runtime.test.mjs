@@ -704,6 +704,61 @@ try {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => !!window.MvuAutoDoctorAPI);
 
+    for (const generationType of ['regenerate', 'swipe']) {
+        const stalePage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+        await stalePage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+        await stalePage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+        const staleResult = await stalePage.evaluate(async (type) => {
+            const t = window.__TEST__;
+            Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+                enabled: false,
+                hardContractAuditEnabled: false,
+                socialAuditMode: 'off',
+                continuityMode: 'off',
+                builtInContinuityEnabled: false,
+                builtInForumEnabled: false,
+                serendipityFrequency: 'extreme',
+                delayMs: 300,
+            });
+            const before = window.MvuAutoDoctorAPI.getSerendipityLedger().receipts.length;
+            await t.context.eventSource.emit('generation_started', type, {}, false);
+            const pendingBeforeLate = window.MvuAutoDoctorAPI.getPendingSerendipityLicense();
+            await t.context.eventSource.emit('message_received', 2);
+            await new Promise((resolve) => setTimeout(resolve, 900));
+            const afterUnchangedLate = window.MvuAutoDoctorAPI
+                .getSerendipityLedger().receipts.length;
+            const current = t.context.chat[2];
+            current.swipe_id = Number(current.swipe_id || 0) + 1;
+            current.extra = {};
+            current.send_date = `replacement-${type}`;
+            current.mes = current.mes.replace('巡逻队开始核对异常货单', '巡逻队已经换上新的核验名单');
+            await t.context.eventSource.emit('message_received', 2);
+            for (let index = 0; index < 80; index += 1) {
+                if (window.MvuAutoDoctorAPI.getSerendipityLedger().receipts.length > before) break;
+                await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+            const ledger = window.MvuAutoDoctorAPI.getSerendipityLedger();
+            return {
+                before,
+                pendingBeforeLate: !!pendingBeforeLate,
+                afterUnchangedLate,
+                afterCurrent: ledger.receipts.length,
+                settledSwipeId: ledger.receipts.at(-1)?.target?.swipeId,
+                pendingAfterCurrent: window.MvuAutoDoctorAPI.getPendingSerendipityLicense(),
+            };
+        }, generationType);
+        assert.equal(staleResult.pendingBeforeLate, true);
+        assert.equal(
+            staleResult.afterUnchangedLate,
+            staleResult.before,
+            `${generationType} 旧回复迟到事件不得结算偶发许可证`,
+        );
+        assert.equal(staleResult.afterCurrent, staleResult.before + 1);
+        assert.equal(staleResult.settledSwipeId, 1);
+        assert.equal(staleResult.pendingAfterCurrent, null);
+        await stalePage.close();
+    }
+
     await page.evaluate(async () => {
         const t = window.__TEST__;
         await t.context.eventSource.emit('generation_started', 'normal', {}, true);
@@ -810,6 +865,13 @@ try {
         hardAudit: window.MvuAutoDoctorAPI.getHardContractAudit(),
         hardStatus: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-status')?.textContent || '',
         hardDetails: document.querySelector('#mvu-auto-doctor-settings .mvuad-protocol-details')?.textContent || '',
+        serendipity: window.MvuAutoDoctorAPI.getSerendipityLedger(),
+        serendipityControls: {
+            frequency: document.querySelector('.mvuad-serendipity-frequency')?.value,
+            amplitude: document.querySelector('.mvuad-serendipity-amplitude')?.value,
+            bias: document.querySelector('.mvuad-serendipity-bias')?.value,
+            explanation: document.querySelector('.mvuad-serendipity-explanation')?.value,
+        },
         hasSettingsLedger: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-ledger'),
         hasWorldPanelButton: !!document.querySelector('#mvu-auto-doctor-settings .mvuad-continuity-open'),
         worldInterfaceLimit: document.querySelector(
@@ -818,7 +880,21 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.5');
+    assert.equal(continuity.version, '2.0.0-rc.6');
+    assert.deepEqual(continuity.serendipityControls, {
+        frequency: 'standard',
+        amplitude: 'extreme',
+        bias: 'balanced-lucky',
+        explanation: 'natural',
+    });
+    assert.ok(continuity.serendipity.receipts.length >= 1);
+    assert.ok(continuity.serendipity.receipts.every((receipt) => (
+        receipt.target.chatId
+        && receipt.target.messageId
+        && receipt.target.generationId
+        && receipt.target.branchId
+        && receipt.target.contentFingerprint
+    )), 'settled serendipity receipts must bind full target identity');
     assert.equal(
         continuity.worldInterfaceLimit,
         '2',
@@ -1253,8 +1329,6 @@ try {
             enabled: true,
             socialNarrativeGuardEnabled: true,
             socialAuditMode: 'balanced',
-            socialMonthlySoftCny: 5,
-            socialMonthlyHardCny: 10,
         });
         t.context.chat.splice(0, t.context.chat.length,
             { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
@@ -1509,22 +1583,11 @@ try {
     const socialFailure = await socialFailurePage.evaluate(async () => {
         const t = window.__TEST__;
         t.setMode('transport-error');
-        const now = new Date();
-        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         const namespace = t.context.chatMetadata.mvu_auto_doctor ||= {};
         namespace.socialAudits = [{
             id: 'legacy_failed_audit',
-            month,
             summary: '二审调用失败：独立 API HTTP 502；持久关系保持本轮前状态并待确认',
             findings: [],
-            usage: {
-                inputTokens: 3100,
-                outputTokens: 20,
-                cacheHitTokens: 0,
-                cacheMissTokens: 3100,
-                cny: 0.003443,
-                estimated: true,
-            },
         }];
         Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
             socialNarrativeGuardEnabled: true,
@@ -1532,8 +1595,6 @@ try {
             fastModelProvider: 'story-oracle',
             modelRoutingSettingsVersion: 2,
             socialAuditSettingsVersion: 1,
-            socialMonthlySoftCny: 0.001,
-            socialMonthlyHardCny: 0.002,
         });
         t.context.chat.splice(0, t.context.chat.length,
             { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
@@ -1580,8 +1641,12 @@ try {
     );
     assert.equal(socialFailure.state.stat_data.characters.Mia.trust, 40);
     assert.equal(socialFailure.state.stat_data.characters.Mia.relationship, 'fanatic');
-    assert.equal(socialFailure.audits[0].usage.cny, 0);
-    assert.equal(socialFailure.audits[0].usage.estimated, false);
+    assert.deepEqual(socialFailure.audits[0].usage, {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+    });
     assert.deepEqual(socialFailure.audits[0].modelCall, {
         attempted: true,
         completed: false,
@@ -1612,9 +1677,7 @@ try {
             fastModelProvider: 'story-oracle',
             modelRoutingSettingsVersion: 2,
             socialAuditSettingsVersion: 2,
-            socialMonthlySoftCny: 5,
-            socialMonthlyHardCny: 10,
-            socialMonthlyCostLedger: { version: 1, months: {} },
+            socialMonthlyCostLedger: { version: 1, months: { legacy: { cny: 7 } } },
         });
         t.context.chat.splice(0, t.context.chat.length,
             { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
@@ -1642,6 +1705,9 @@ try {
             result,
             audits: window.MvuAutoDoctorAPI.getSocialAudits(),
             calls: structuredClone(t.calls),
+            legacyLedger: structuredClone(
+                t.context.extensionSettings.mvu_auto_doctor.socialMonthlyCostLedger,
+            ),
         };
     });
     assert.equal(socialRepair.result.status, 'audited');
@@ -1650,7 +1716,17 @@ try {
     assert.equal(socialRepair.audits[0].modelCall.structureRepairAttempted, false);
     assert.equal(socialRepair.audits[0].modelCall.localStructureRepairAttempted, true);
     assert.equal(socialRepair.audits[0].modelCall.failureCode, '');
-    assert.ok(socialRepair.audits[0].usage.cny > 0);
+    assert.deepEqual(socialRepair.audits[0].usage, {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+    });
+    assert.deepEqual(
+        socialRepair.legacyLedger,
+        { version: 1, months: { legacy: { cny: 7 } } },
+        'legacy billing fields stay untouched but are not consumed or migrated',
+    );
     await socialRepairPage.close();
 
     const socialMalformedPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -1665,9 +1741,6 @@ try {
             fastModelProvider: 'story-oracle',
             modelRoutingSettingsVersion: 2,
             socialAuditSettingsVersion: 2,
-            socialMonthlySoftCny: 5,
-            socialMonthlyHardCny: 10,
-            socialMonthlyCostLedger: { version: 1, months: {} },
         });
         t.context.chat.splice(0, t.context.chat.length,
             { is_user: false, is_system: false, mes: 'Opening', swipe_id: 0, extra: {} },
@@ -2475,7 +2548,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.5');
+    assert.equal(lifecycle.version, '2.0.0-rc.6');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);

@@ -248,33 +248,6 @@ export class DownstreamBarrierProtocol {
     readReceipt(receiptId: string): Promise<Record<string, unknown> | null>;
 }
 
-export interface MonthlyCostLedger {
-    version: 1;
-    months: Record<string, {
-        cny: number;
-        receiptCount: number;
-        receipts: Record<string, { cny: number; recordedAt: number }>;
-        updatedAt: number;
-        baselineIncomplete: boolean;
-    }>;
-}
-
-export function monthlyCostKey(now?: number): string;
-export function normalizeMonthlyCostLedger(value: unknown): MonthlyCostLedger;
-export function monthlyCostSpend(
-    ledger: unknown,
-    month?: string,
-): MonthlyCostLedger['months'][string];
-export function recordMonthlyCostReceipt(
-    ledger: unknown,
-    receipt: { receiptId: string; cny: number; month?: string; at?: number },
-): Record<string, unknown> & { ledger: MonthlyCostLedger };
-export function seedMonthlyCostLedgerFromAudits(
-    ledger: unknown,
-    audits: Array<Record<string, unknown>>,
-    now?: number,
-): MonthlyCostLedger;
-
 export function buildContinuitySourcePlan(input: {
     messages: Array<Record<string, unknown>>;
     fromIndex?: number;

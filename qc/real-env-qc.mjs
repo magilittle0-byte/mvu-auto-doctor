@@ -41,6 +41,8 @@ const runtimeFiles = [
     'package-lock.json',
     'package.json',
     'protocol-core.mjs',
+    'serendipity-core.d.mts',
+    'serendipity-core.mjs',
     'social-core.mjs',
     'style.css',
     'world-pressure-core.d.mts',
@@ -130,6 +132,33 @@ function validateWorldPressureEvidence(report) {
     ) fail('world-pressure closed-loop evidence is incomplete');
 }
 
+function validateSerendipityEvidence(report) {
+    const serendipity = report.checks?.serendipity;
+    if (
+        !serendipity
+        || serendipity.independentEntropyVerified !== true
+        || serendipity.cardDiceReads !== 0
+        || serendipity.cardDiceWrites !== 0
+        || serendipity.fullTargetIdentityVerified !== true
+        || serendipity.oldSwipeWrites !== 0
+        || serendipity.wrongBranchWrites !== 0
+        || serendipity.staleGenerationWrites !== 0
+        || serendipity.repeatOpportunityDraws !== 0
+        || serendipity.explicitContradictionRejected !== true
+        || serendipity.unexplainedPossibilityAllowed !== true
+        || serendipity.favorablePressureCost !== 0
+        || serendipity.favorableAutoPunishmentCount !== 0
+        || serendipity.adversePressureCapVerified !== true
+        || serendipity.majorAdverseResponseWindowVerified !== true
+        || serendipity.unknownSourcePrematureRevealCount !== 0
+        || serendipity.playerActionWrites !== 0
+        || serendipity.contentRewriteCount !== 0
+        || serendipity.disabledBehaviorUnchanged !== true
+        || serendipity.longSessionThrottleVerified !== true
+        || serendipity.nonTechnicalControlsVerified !== true
+    ) fail('serendipity closed-loop evidence is incomplete');
+}
+
 function validateBlockedReport(report) {
     const blocker = report.blocker;
     if (
@@ -154,8 +183,6 @@ function validateBlockedReport(report) {
         || targeted.tavernDbFieldsPreserved !== true
         || targeted.rerollHelperFieldsPreserved !== true
         || targeted.currentSwipeIdentityPreserved !== true
-        || targeted.monthlyReceiptCases !== 1000
-        || targeted.monthlyLedgerIdempotent !== true
         || targeted.structureRepairRetryVerified !== false
         || targeted.localStructureRepairVerified !== true
         || targeted.modelStructureRepairRetryRemoved !== true
@@ -486,6 +513,7 @@ function loadAndValidateReport() {
     }
     validateActorLedgerEvidence(report);
     validateWorldPressureEvidence(report);
+    validateSerendipityEvidence(report);
     if (report.result === 'blocked') {
         validateBlockedReport(report);
         const testedAt = Date.parse(report.testedAt);
@@ -696,7 +724,7 @@ function loadAndValidateReport() {
         || socialGuard.deepSeekToneDidNotRollbackValidDarkState !== true
         || socialGuard.reviewerDidNotRewriteNarrative !== true
         || socialGuard.noRiskTurnSkippedSemanticCall !== true
-        || socialGuard.usageAndCostRecorded !== true
+        || socialGuard.providerUsageOnly !== true
         || socialGuard.fixedHostileReplayPassed !== true
     ) fail('social-motive ablation evidence is incomplete');
 

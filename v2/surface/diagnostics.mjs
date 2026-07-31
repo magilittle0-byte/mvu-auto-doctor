@@ -97,6 +97,10 @@ export function createPrivacySafeDiagnosticProjection({
             messageCount: Math.max(0, Number(chat?.messageCount) || 0),
             repairJournalCount: Math.max(0, Number(chat?.repairJournalCount) || 0),
             socialAuditCount: Math.max(0, Number(chat?.socialAuditCount) || 0),
+            serendipity: {
+                receiptCount: Math.max(0, Number(chat?.serendipity?.receiptCount) || 0),
+                triggeredCount: Math.max(0, Number(chat?.serendipity?.triggeredCount) || 0),
+            },
             continuity: {
                 activeCount: Math.max(0, Number(chat?.continuity?.activeCount) || 0),
                 resolvedCount: Math.max(0, Number(chat?.continuity?.resolvedCount) || 0),
@@ -186,7 +190,8 @@ export function createPrivacySafeDiagnosticProjection({
                 usage: {
                     inputTokens: Math.max(0, Number(socialAudit.usage?.inputTokens) || 0),
                     outputTokens: Math.max(0, Number(socialAudit.usage?.outputTokens) || 0),
-                    cny: Math.max(0, Number(socialAudit.usage?.cny) || 0),
+                    cacheHitTokens: Math.max(0, Number(socialAudit.usage?.cacheHitTokens) || 0),
+                    cacheMissTokens: Math.max(0, Number(socialAudit.usage?.cacheMissTokens) || 0),
                 },
                 correction: {
                     status: String(socialAudit.correction?.status || ''),
@@ -216,6 +221,11 @@ export function createPrivacySafeDiagnosticProjection({
                 durationMs: Math.max(0, Number(entry?.durationMs) || 0),
                 queueWaitMs: Math.max(0, Number(entry?.queueWaitMs) || 0),
                 outputChars: Math.max(0, Number(entry?.outputChars) || 0),
+                httpStatus: Math.max(0, Number(entry?.httpStatus) || 0),
+                inputTokens: Math.max(0, Number(entry?.inputTokens) || 0),
+                outputTokens: Math.max(0, Number(entry?.outputTokens) || 0),
+                cacheHitTokens: Math.max(0, Number(entry?.cacheHitTokens) || 0),
+                cacheMissTokens: Math.max(0, Number(entry?.cacheMissTokens) || 0),
                 attempt: Math.max(0, Number(entry?.attempt) || 0),
                 targetIndex: Number.isInteger(Number(entry?.targetIndex))
                     ? Number(entry.targetIndex)

@@ -561,10 +561,14 @@ barrier持久键不得再按聊天+楼层覆盖；每个完整目标身份保留
 跳过并记录来源收据。刷新或重启后，同一完整身份直接恢复终态，不重复启动模型或
 事务；执行中重roll产生新branch，旧目标只能终止为stale。
 
-### 21.3 长期费用与诊断隐私
+### 21.3 调用诊断与隐私
 
-人物二审费用使用独立月度账本；每次实际模型尝试以稳定收据ID累加，重复收据幂等，
-列表裁剪和重载不得降低累计。HTTP成功但结构无效只允许一次严格结构修复重试。
+人物二审不维护币种估算、价格表、月度金额、提醒或费用停止门。旧费用字段只作为
+未知用户数据原样保留，不读取、不迁移、不阻塞、不主动删除。费用由用户在所选
+服务商处自行管理。HTTP成功但结构无效按零关系写入处理。
+
+诊断只允许调用计数、成功/失败、HTTP状态、尝试、耗时，以及上游实际返回的
+input/output/cache token；上游不返回 usage 时记录0，不按字符估算。
 
 默认诊断只输出 verdict、数量、错误码、哈希与必要运行计数；User-Agent仅保留平台
 和浏览器内核大版本。剧情摘要、finding/decision理由、完整提示词、原始payload、
@@ -678,3 +682,23 @@ independentOfActors，不得包含势力名、环境摘要、sourceId、剧情�
 
 每一阶段都必须绑定完整目标身份。旧 swipe、错误分支、重生成目标或迟到worker不能
 结算新分支收据；未进入正文的候选必须标为 retained/delayed，不能伪装为 consumed。
+
+## 26. 偶发许可证协议
+
+许可证草稿在 `generation_started` 同步生成，仅存在医生进程内存并通过独立系统注入
+交给主模型。`continue`、dry-run 和关闭状态不得抽取。草稿只有在新回复可捕获完整
+chat/message/swipe/generation/branch/content fingerprint 后才可写入聊天 namespace；
+任一身份不符返回 stale 且账本零写入。
+
+防刷作用域为 `(chatId, normalizedObjectKey, worldStateDigest)`，不包含措辞、swipe、
+generation 或 branch。未结草稿也参加幂等判断，因此重生成不能重新开奖；已结算对象
+再次搜索只返回 duplicate，不再次注入。
+
+许可证字段固定为 trigger、direction、magnitude、channel、landing、sourceState、
+explanationSpeed、pressureCost、responseWindowRequired、约束、drawHash 与完整目标。
+不得保存角色卡骰值，不得包含正文改写或变量补丁。sourceState 只能是
+unknown/possible/revealed/irrelevant；unknown/possible 不得由许可证升级为 revealed。
+
+favorable/neutral 的 `pressureCost` 必须为0。adverse 在签发前复核医生压力上限、恢复
+债务和最低可玩性；超额改为非伤害异常或不签发。成功结算的不利许可证才增加医生压力，
+旧目标不得预扣。重大不利量级必须 `responseWindowRequired=true`。
