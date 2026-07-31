@@ -612,10 +612,10 @@
       "realAndSimulationAgree": true,
       "releaseStatus": "ready-for-maintainer-review",
       "automaticMainMerge": false,
-      "packageSha256": "de26d5a9d441ff4fa9387d923274bab1626b24046d1be15e7ff6075ac099f4a4",
+      "packageSha256": "5eb751828ba46424e4975afe271741ea3d0b8aebb94e834b3f67de8da350baa0",
       "packageAllowlistVerified": true,
       "deterministicPackageVerified": true,
-      "packageBytes": 1622516,
+      "packageBytes": 1622487,
       "packageName": "05_MVU自动医生_v2.0.0-rc.5_离线候选.zip"
     },
     "deepSeek": {

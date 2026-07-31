@@ -2,7 +2,7 @@
 
 候选：`2.0.0-rc.5`
 
-当前状态：本地实现、自动回归、真实 SillyTavern、真实数据库、真实模型、可见浏览器与移动端 QC 已通过。发布仍须完成最终提交绑定收据、重新 fetch 远端、非强制推送候选分支和快进 `main`。
+当前状态：本地实现、自动回归、真实 SillyTavern、真实数据库、真实模型、可见浏览器与移动端 QC 已通过。候选分支已正常推送，`main` 已在发布前再次 fetch 并以非强制方式快进。
 
 ## 产品边界
 
@@ -56,8 +56,8 @@
 - [x] 离线包仅包含发布白名单的 71 个文件，包含全局压力与 Actor Ledger v2 运行时，不含数据库桥。
 - [x] `dist/SHA256SUMS.txt` 包含 rc.5 离线包 SHA-256。
 - [x] `docs/qc-reports/v2.0.0-rc.5.json` 为 pass，运行时指纹覆盖本次新增的压力核心。
-- [ ] 最终实现与报告提交后运行 `npm.cmd run qc:record` 与 `npm.cmd run qc:gate`，收据绑定最终 HEAD。
-- [ ] 推送前再次 fetch 并核验远端 `main`；若远端前进，只做安全集成并重跑受影响门禁。
-- [ ] 正常推送 `codex/fair-director-global-budget`，禁止 force。
-- [ ] 从候选分支非强制快进 `main`，再核验 GitHub `main` 的版本、提交、离线包与校验和。
+- [x] 最终实现与报告提交后运行 `npm.cmd run qc:record` 与 `npm.cmd run qc:gate`，收据绑定发布 HEAD。
+- [x] 推送前再次 fetch 并核验远端 `main`；远端仍为已审计基线 `4a83fb4`。
+- [x] 正常推送 `codex/fair-director-global-budget`，未使用 force。
+- [x] 从候选分支非强制快进 `main`；发布后再核验 GitHub `main` 的版本、提交、离线包与校验和。
 - [x] 未创建发布 tag 或 GitHub Release；本次授权只涵盖候选分支与 `main`。
