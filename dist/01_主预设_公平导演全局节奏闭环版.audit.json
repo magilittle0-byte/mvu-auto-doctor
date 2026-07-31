@@ -1,0 +1,110 @@
+{
+  "transformVersion": "2.0-global-pressure",
+  "sourceName": "01_主预设_外置兼容终版 (6)_公平导演改良副本",
+  "outputName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_全局节奏闭环版",
+  "promptCount": 213,
+  "orderCount": 181,
+  "enabledCount": 73,
+  "globalGateIdentifier": "c27a5e1b-5acc-43a7-8e71-9c4441490df9",
+  "globalGateOrderIndex": 119,
+  "modifications": [
+    {
+      "identifier": "3ad6a624-d98f-4f18-a821-a2bd7258899b",
+      "beforeName": "🎯权威事实源·导演草稿隔离·MVU/数据库只读·骰子单源·玩家行动锁",
+      "afterName": "🎯权威事实源·导演草稿隔离·MVU/数据库只读·骰子单源·玩家行动锁",
+      "beforeLength": 3872,
+      "afterLength": 2190,
+      "beforeSha256": "7D31696C441941039E32875362055BDC621816F409A4E34DEE567A670C67F3A8",
+      "afterSha256": "B7839C0DE2683B2958B100C21D97743579189DF5D9ECFCF072EC8F72769B09D4"
+    },
+    {
+      "identifier": "c27a5e1b-5acc-43a7-8e71-9c4441490df9",
+      "beforeName": "🎬公平导演与持续因果总闸（软/硬行动·进度时钟）",
+      "afterName": "🎬公平导演权威总闸V2（全局压力·恢复债务·原作与骰池）",
+      "beforeLength": 2934,
+      "afterLength": 3054,
+      "beforeSha256": "2E6345C25DC1A410937C9BF563F604E8388CD7909C40860A8BC341EEA015AEB2",
+      "afterSha256": "7C7F56098F8FF8FB68A0BEB1FAB3F20E51814F636F651C89EF4E82FE7E89B86D"
+    },
+    {
+      "identifier": "520e0405-8a69-4e68-af98-2174d075f516",
+      "beforeName": "📏活人互动字数闭环（NPC自主·软/硬行动·玩家A锁）",
+      "afterName": "📏活人互动字数闭环（NPC自主·软/硬行动·玩家A锁）",
+      "beforeLength": 2117,
+      "afterLength": 2042,
+      "beforeSha256": "9B5D9E20E0946DF9C72E2F5F5DD9852E8D2B3FC87A83EC21EF401E4F271A89A0",
+      "afterSha256": "55B35352A36844C69CBCEAA4E5E7B2DFE9424469D0A54A83A0357888B1C564AF"
+    },
+    {
+      "identifier": "869bf19b-7764-4c01-8370-155f62ea5be4",
+      "beforeName": "⚡️推进剧情（世界推进·玩家不代行）",
+      "afterName": "⚡️推进剧情（行动·后果·恢复均合法）",
+      "beforeLength": 336,
+      "afterLength": 320,
+      "beforeSha256": "2352E63A515E51E781B7B83FEA45C57043B81DE6926CD13F02E256530FECF4AE",
+      "afterSha256": "B02500E370B53D4A032E9B7576ED207699BB2BB974C37158D17882BA76665630"
+    },
+    {
+      "identifier": "d8e4b241-be25-4009-9b37-f5a90a4c7427",
+      "beforeName": "🤖最终输出协议（长正文·公平导演·持续因果·MVU/数据库只读）",
+      "afterName": "🤖最终输出协议（长正文·公平导演·持续因果·MVU/数据库只读）",
+      "beforeLength": 3962,
+      "afterLength": 3903,
+      "beforeSha256": "BA17C276C12EF6CB8A7E328AAC28AA8063F80281E40EEEDBB0BB37061A90F6D0",
+      "afterSha256": "7CAE40F5C2894E8C55ED682FC107DA1943F50E00EE0BA8183B3581F9EA1D9AC0"
+    },
+    {
+      "identifier": "dad86601-1688-471b-96d9-e252d1624bbb",
+      "beforeName": "⚡️平行事件生命周期·主线接轨·数据库只读召回",
+      "afterName": "⚡️平行事件生命周期·主线接轨·数据库只读召回",
+      "beforeLength": 972,
+      "afterLength": 1111,
+      "beforeSha256": "F1DD33CC6F518E9E26DFCEE1819AEF47CF7D38865121F51853BD80A6CB3EA4E1",
+      "afterSha256": "5949EDBD0E208C2FE845131CBBF90050769BE762ADE98ADD2227D80E530E4698"
+    },
+    {
+      "identifier": "d6d69788-6791-4813-98db-6286e43858a3",
+      "beforeName": "🔄全链路回合事务·持续成功/进度时钟·MVU/数据库只读·骰子单源",
+      "afterName": "🔄全链路回合事务·持续成功/进度时钟·MVU/数据库只读·骰子单源",
+      "beforeLength": 3827,
+      "afterLength": 2473,
+      "beforeSha256": "9F3CA4CADAE79CC90F258F62BFED818A00A1383BE2ECF6D363E6A31128A64663",
+      "afterSha256": "3AA6FCA55070C13B652ACD59ABCFDAA3D3032FE6FE18E2F3A68801F18BD45B27"
+    },
+    {
+      "identifier": "c925621e-88b9-4a8a-b320-b3f422e3b18f",
+      "beforeName": "思维链-小此拍板·公平导演·持续因果·折叠可查",
+      "afterName": "思维链-小此拍板·公平导演·持续因果·折叠可查",
+      "beforeLength": 1023,
+      "afterLength": 1082,
+      "beforeSha256": "FAB949C20CB2880189D8CA1EDD6CFB739D55FFC7A4D25001B980E757BC077BD4",
+      "afterSha256": "AE6B0CFFECF1D6518AB45EAF7AEC486F27E4354546C37BF04DFDFB2C693E7EC2"
+    },
+    {
+      "identifier": "9c077696-71c7-4469-9fad-1f3e241497a7",
+      "beforeName": "📏最终提交闸门（公平导演·持续因果·MVU/数据库只读）",
+      "afterName": "📏最终提交闸门（公平导演·持续因果·MVU/数据库只读）",
+      "beforeLength": 1797,
+      "afterLength": 1673,
+      "beforeSha256": "C9DB14FE02C63984655CCEB5CDF8B03406F5007BC52CAA4009034391BF35B20B",
+      "afterSha256": "CCEBA1330F489E3C4B430802FFBA0D2EBFEBC68237E0EC09F04EF24A29F34743"
+    },
+    {
+      "identifier": "55c128dd-54d4-4028-ac30-96fd40452f93",
+      "beforeName": "🎲骰子判定透明锁V3（先锁输入·再取骰·后写剧情）",
+      "afterName": "🎲骰池语义与短收据V4（每回合重置·不越池）",
+      "beforeLength": 927,
+      "afterLength": 379,
+      "beforeSha256": "ED6CF6B39737F48634193128B15A677B1F372131DF89521CF4F5324B52149023",
+      "afterSha256": "4159122DDCB363648ACE4E1230599E07E9B6B32DC1FDC68DED076021F4D90FDE"
+    }
+  ],
+  "sourcePath": "D:\\软件\\微信\\xwechat_files\\wxid_gyvouq308h3l22_9499\\temp\\RWTemp\\2026-07\\9e20f478899dc29eb19741386f9343c8\\01_主预设_外置兼容终版 (6)_公平导演改良副本(1).json",
+  "outputPath": "C:\\Users\\asus\\Documents\\New project\\mvu-auto-doctor-v1.8-hotfix\\dist\\01_主预设_公平导演全局节奏闭环版.json",
+  "sourceBytes": 558849,
+  "outputBytes": 521821,
+  "sourceSha256": "C25CE3B16E893A0DD03C972C0859F1F56F370857CB469025B72DF99F93585C99",
+  "outputSha256": "F515E94DE8B02F4C0D07C671E4C529A0D663BD607F9C44DBF25BAE225D291D2E",
+  "sourceUnchanged": true,
+  "createdAt": "2026-07-31T05:41:38.864Z"
+}

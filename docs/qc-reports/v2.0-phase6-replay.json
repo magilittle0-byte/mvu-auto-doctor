@@ -1,13 +1,13 @@
 {
   "schemaVersion": "2.0",
   "phase": 6,
-  "generatedAt": "2026-07-27T09:44:29.796Z",
+  "generatedAt": "2026-07-31T06:34:29.455Z",
   "environment": "node-unit-integration-browser",
   "totals": {
     "cases": 17,
-    "pass": 16,
+    "pass": 17,
     "fail": 0,
-    "coveredByPhaseSuite": 1
+    "coveredByPhaseSuite": 0
   },
   "cases": [
     {
@@ -191,15 +191,15 @@
     {
       "id": "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION",
       "category": "release_gate",
-      "automation": "structural-only",
+      "automation": "unit-active",
       "acceptanceLayers": [
         "real-sillytavern",
         "release"
       ],
-      "status": "covered-by-phase-suite"
+      "status": "pass"
     }
   ],
-  "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
+  "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-long-session-hardening.test.mjs tests\\v2-release-core.test.mjs tests\\v2-release-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
   "testFiles": [
     "tests\\v2-director-core.test.mjs",
     "tests\\v2-director-replays.test.mjs",
@@ -207,6 +207,9 @@
     "tests\\v2-domain-replays.test.mjs",
     "tests\\v2-domain-transaction-core.test.mjs",
     "tests\\v2-domain-transaction-replays.test.mjs",
+    "tests\\v2-long-session-hardening.test.mjs",
+    "tests\\v2-release-core.test.mjs",
+    "tests\\v2-release-replays.test.mjs",
     "tests\\v2-replay-fixtures.test.mjs",
     "tests\\v2-runtime-core.test.mjs",
     "tests\\v2-runtime-replays.test.mjs",
@@ -222,7 +225,7 @@
   ],
   "releaseGate": {
     "id": "RR-RELEASE-REAL-QC-OVERRIDES-SIMULATION",
-    "status": "phase-7-todo",
+    "status": "phase-7-active",
     "defaultCiFailure": false
   },
   "privacy": {

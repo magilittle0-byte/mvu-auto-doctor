@@ -1,0 +1,97 @@
+{
+  "status": "regression-reproduced-and-guarded",
+  "generatedAt": "2026-07-31T05:45:41.676Z",
+  "inputs": {
+    "preset": {
+      "path": "C:\\Users\\asus\\Documents\\New project\\mvu-auto-doctor-v1.8-hotfix\\dist\\01_主预设_公平导演全局节奏闭环版.json",
+      "sha256": "F515E94DE8B02F4C0D07C671E4C529A0D663BD607F9C44DBF25BAE225D291D2E"
+    },
+    "log": {
+      "path": "D:\\软件\\微信\\xwechat_files\\wxid_gyvouq308h3l22_9499\\temp\\RWTemp\\2026-07\\9e20f478899dc29eb19741386f9343c8\\无限回廊5.6.1 - 2026-07-30@18h34m17s.jsonl",
+      "sha256": "E64931CD55728E2389CE36ED04ED441171FB5844D52F5E942D57C68445BE6771"
+    },
+    "diagnostic": {
+      "path": "D:\\软件\\微信\\xwechat_files\\wxid_gyvouq308h3l22_9499\\temp\\RWTemp\\2026-07\\9e20f478899dc29eb19741386f9343c8\\mvu-auto-doctor-diagnostic-2026-07-31T04-18-18-025Z.json",
+      "sha256": "C1550D85DE0F963E16E17995699D7C89D1A2B91CE0000E041A8EC729921020C6"
+    },
+    "card": {
+      "path": "C:\\Users\\asus\\Downloads\\mvu\\5.6.2.png",
+      "sha256": "1A34AD3B11539E59EB5EC753C34027A905413C375B9FF47942955621D44AD150"
+    }
+  },
+  "sourceRunRegression": {
+    "assistantMessages": 37,
+    "declaredDicePools": {
+      "D4": 10,
+      "D6": 10,
+      "D8": 10,
+      "D10": 10,
+      "D12": 10,
+      "D20": 15,
+      "D30": 10,
+      "D40": 10
+    },
+    "observedDiceTypes": [
+      "D20",
+      "D4",
+      "D40",
+      "D5",
+      "D8",
+      "D6",
+      "D10"
+    ],
+    "undeclaredDice": [
+      "D5"
+    ],
+    "overPool": {
+      "D20": {
+        "poolLength": 15,
+        "maxObservedIndex": 17
+      }
+    },
+    "bossLabels": [
+      "暴君雏形",
+      "暴君实验体",
+      "爬行者幼体",
+      "暴君",
+      "暴食者·生化温床"
+    ],
+    "actorShard": {
+      "selected": 2,
+      "succeeded": 0,
+      "failed": 2
+    },
+    "dueFalseWorldLaneSelections": 1,
+    "reproduced": {
+      "undeclaredDice": true,
+      "overPool": true,
+      "aggregateBossPressure": true,
+      "actorShardFailure": true,
+      "dueFalseWorldLaneSelection": true
+    }
+  },
+  "optimizedPreset": {
+    "name": "01_主预设_外置兼容终版 (6)_公平导演改良副本_全局节奏闭环版",
+    "promptCount": 213,
+    "orderCount": 181,
+    "enabledCount": 73,
+    "enabledMismatchCount": 0,
+    "globalGateOrderIndex": 119,
+    "coverage": {
+      "aggregatePressure": true,
+      "recoveryDebt": true,
+      "minimumPlayability": true,
+      "quietProgress": true,
+      "longFormWithoutThreatFiller": true,
+      "stitchesCandidateVeto": true,
+      "dicePoolSemantics": true,
+      "originalAnchorAndSingleLevel": true,
+      "contentDoctorBoundary": true
+    }
+  },
+  "interpretation": [
+    "The historical run is evidence of the regression, not a post-fix model pass.",
+    "The optimized preset keeps the source run facts unchanged and adds deterministic submission gates.",
+    "A separate real-model QC is still required before release."
+  ]
+}
