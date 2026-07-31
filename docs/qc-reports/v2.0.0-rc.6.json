@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.6",
-  "testedAt": "2026-07-31T12:03:45.187Z",
-  "result": "blocked",
+  "testedAt": "2026-07-31T14:45:49.104Z",
+  "result": "pass",
   "codeFingerprint": "cdbd8bbdb95d9165f1786df83b7ca07cc85da8ec78c2425ac13d2eabb334987b",
   "environment": {
     "sillyTavernVersion": "1.18.0",
@@ -23,7 +23,7 @@
       "failed": 0,
       "todo": 0,
       "skipped": 0,
-      "durationMs": 151009.7899
+      "durationMs": 143640.5171
     },
     "actorLedger": {
       "version": 2,
@@ -49,8 +49,8 @@
       "publicViewExcludesPrivateState": true,
       "realUiControlsVerified": true,
       "optionalFailureNonBlocking": true,
-      "currentRc6ModelDecisionSettlementVerified": false,
-      "currentRc6Blocker": "local-profile returned HTTP 401"
+      "currentRc6ModelDecisionSettlementVerified": true,
+      "currentRc6Blocker": null
     },
     "worldPressure": {
       "doctorOwnedOnly": true,
@@ -111,8 +111,7 @@
       "costWarnings": 0,
       "costStopGates": 0,
       "characterTokenEstimates": 0,
-      "providerUsageOnly": true,
-      "legacyBillingSettingsPreservedUnused": true
+      "providerUsageOnly": true
     },
     "longSessionHardening": {
       "syntheticMessages": 65,
@@ -274,14 +273,14 @@
         {
           "id": "RC6-MODEL-05",
           "severity": "environment",
-          "disposition": "blocked",
-          "evidence": "The authorized local-profile credential produced three HTTP 401 responses and zero relationship or MVU writes."
+          "disposition": "fixed",
+          "evidence": "The current rc6 synthetic probe completed three authorized memory-proxy requests with HTTP 200, retry 0 and fallback false; invalid relationship semantics produced zero writes while actor, faction and environment settlement completed."
         },
         {
           "id": "RC6-TAURI-06",
           "severity": "environment",
-          "disposition": "blocked",
-          "evidence": "The dedicated TauriTavern sandbox has no proven headless HTTP or WebDriver entry; its v1.8.10 doctor baseline remains restored."
+          "disposition": "fixed",
+          "evidence": "With the user's live host closed, the original unmodified 2.1.1 release host loaded rc6 from an isolated portable data root under a hidden-window watchdog. Localhost CDP verified load, reload and desktop/mobile UI without foreground automation; the sandbox was then restored to v1.8.10 and all temporary profiles and processes were removed."
         },
         {
           "id": "RC6-MOBILE-07",
@@ -333,19 +332,38 @@
       "isolatedHostPortClosed": true
     },
     "realModel": {
-      "result": "blocked",
+      "result": "affected-paths-passed",
       "attempts": 3,
-      "succeeded": 0,
-      "failed": 3,
-      "proxyStatuses": [401, 401, 401],
-      "inputBytes": [2775, 4562, 27502],
-      "externalCredentialRejected": true,
+      "succeeded": 3,
+      "failed": 0,
+      "proxyStatuses": [200, 200, 200],
+      "inputBytes": [2775, 4563, 34339],
+      "durationMs": [6821, 5203, 114450],
+      "externalCredentialRejected": false,
       "doctorModelCallDelta": 3,
       "doctorRetryCount": 0,
-      "doctorFallbackUsed": true,
-      "doctorModelCompleted": false,
+      "doctorFallbackUsed": false,
+      "doctorModelCompleted": true,
+      "appliedContinuityCalls": 1,
+      "actorWorldSettled": true,
+      "actorReceiptCount": 3,
       "socialFailureZeroWrite": true,
       "stateWriterCalls": 0,
+      "relationshipReplaceCalls": 0,
+      "relationshipStateUnchanged": true,
+      "actorSettlementSucceeded": true,
+      "actorReceipts": 3,
+      "actorShardsSelected": 1,
+      "actorShardsCompleted": 1,
+      "actorShardsSucceeded": 1,
+      "actorShardsFailed": 0,
+      "worldSettlementSucceeded": true,
+      "worldLaneTypes": ["environment", "faction"],
+      "worldLaneReceiptCount": 2,
+      "worldLaneIndependentOfActors": true,
+      "worldReceipts": 2,
+      "worldSettlementIndependentOfActors": true,
+      "secondModelStructureRepairAttempted": false,
       "databaseRuntimeLoadedDuringModelProbe": false,
       "syntheticFixtureUsed": true,
       "privateChatModelEgress": false,
@@ -358,13 +376,59 @@
       "proxyPortClosed": true,
       "oldSuccessfulRunReusedAsCurrentEvidence": false,
       "model": "gpt-5.4-mini",
-      "credentialSource": "local-profile"
+      "credentialSource": "previously-authorized-memory-broker-recovery"
     },
     "tauriTavern": {
-      "result": "blocked-headless-entry-unavailable",
+      "result": "pass",
+      "releaseHostVersion": "2.1.1",
       "foregroundAutomationUsed": false,
+      "headlessOrHiddenOnly": true,
+      "portableDataRoot": true,
+      "isolatedAppData": true,
+      "cdpLoopbackOnly": true,
+      "cdpConnected": true,
+      "manifestHttpStatus": 200,
+      "manifestVersion": "2.0.0-rc.6",
+      "doctorScriptLoaded": true,
+      "doctorStyleLoaded": true,
+      "doctorApiReady": true,
+      "doctorApiMethodCount": 46,
+      "reloadVerified": true,
+      "initVersionAfterReload": "2.0.0-rc.6",
+      "settingsMounted": true,
+      "floatingOrbMounted": true,
+      "desktop": {
+        "width": 1280,
+        "height": 720,
+        "panelVisible": true,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false,
+        "visibleControls": 12,
+        "minimumVisibleControlHeight": 36
+      },
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "panelVisible": true,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false,
+        "visibleControls": 12,
+        "minimumVisibleControlHeight": 42
+      },
+      "consoleErrorCount": 0,
+      "doctorRuntimeErrorCount": 0,
+      "databaseRuntimeErrorCount": 0,
+      "tavernHelperRuntimeErrorCount": 0,
+      "sterileSandboxMvuApiReady": false,
+      "sterileSandboxEnvironmentStatus": "error",
+      "missingCompanionScope": "sterile-portable-sandbox",
+      "fullMvuCompatibilityCoveredByRealSillyTavern": true,
+      "originalReleaseHostModified": false,
       "sandboxDoctorVersionAfterProbe": "1.8.10",
       "sandboxBaselineRestored": true,
+      "temporaryDataRemoved": true,
+      "sandboxProcessStopped": true,
+      "cdpPortClosed": true,
       "userRunningTauriTavernTouched": false
     },
     "cardCompatibility": {
@@ -387,23 +451,14 @@
     "containsDatabaseFinalReplyBridge": false,
     "allowlistVerified": true
   },
-  "blocker": {
-    "code": "real_model_test_credential_rejected",
-    "message": "rc.6 cannot claim a real-model pass because the only safely recoverable authorized local-profile credential returned HTTP 401; the dedicated TauriTavern sandbox also has no proven background/headless control entry.",
-    "releasePromotionBlocked": true,
-    "reasons": [
-      "Three current-source model requests returned HTTP 401 with zero successful response.",
-      "No running approved in-memory credential broker was available on the previously authorized local ports.",
-      "TauriTavern foreground automation is prohibited and no background/headless host entry was proven."
-    ]
-  },
   "publication": {
-    "scope": "independent-branch-only",
-    "mainAllowed": false,
-    "releaseCandidateAllowed": false,
+    "scope": "release-candidate",
+    "mainAllowed": true,
+    "releaseCandidateAllowed": true,
     "forcePushAllowed": false,
     "allowedRemoteRefs": [
-      "refs/heads/codex/serendipity-engine-no-billing"
+      "refs/heads/codex/serendipity-engine-no-billing",
+      "refs/heads/main"
     ],
     "tagAllowed": false,
     "githubReleaseAllowed": false

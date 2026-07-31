@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "phase": 7,
-  "generatedAt": "2026-07-31T11:48:58.248Z",
+  "generatedAt": "2026-07-31T14:39:47.365Z",
   "environment": "node-unit-integration-browser-release",
   "totals": {
     "cases": 17,

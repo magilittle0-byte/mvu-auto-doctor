@@ -159,6 +159,182 @@ function validateSerendipityEvidence(report) {
     ) fail('serendipity closed-loop evidence is incomplete');
 }
 
+function validateRc6PassReport(report) {
+    const billing = report.checks?.billingRemoval;
+    if (
+        !billing
+        || billing.currencyEstimates !== 0
+        || billing.priceTables !== 0
+        || billing.monthlyAmountLedgersUsed !== 0
+        || billing.costWarnings !== 0
+        || billing.costStopGates !== 0
+        || billing.characterTokenEstimates !== 0
+        || billing.providerUsageOnly !== true
+    ) fail('rc6 billing-removal evidence is incomplete');
+
+    const longSession = report.checks?.longSessionHardening;
+    if (
+        !longSession
+        || longSession.syntheticMessages !== 65
+        || longSession.syntheticSwipes !== 48
+        || longSession.syntheticBytes < 3.5 * 1024 * 1024
+        || longSession.unknownFieldsPreserved !== true
+        || longSession.tavernDbFieldsPreserved !== true
+        || longSession.rerollHelperFieldsPreserved !== true
+        || longSession.currentSwipeIdentityPreserved !== true
+        || longSession.localStructureRepairVerified !== true
+        || longSession.modelStructureRepairRetryRemoved !== true
+        || longSession.failedStaleContinuitySkipped !== true
+        || longSession.fullIdentityBarrierHistoryVerified !== true
+        || longSession.restartExactlyOnceVerified !== true
+    ) fail('rc6 long-session evidence is incomplete');
+
+    const latestDatabase = report.checks?.realDatabaseCompatibility?.latest;
+    if (
+        !latestDatabase
+        || latestDatabase.version !== 'spv8.7.4'
+        || latestDatabase.production !== true
+        || latestDatabase.cleanAuthorLoader !== true
+        || latestDatabase.apiVisible !== true
+        || latestDatabase.apiMethods < 100
+        || latestDatabase.publicUpdateReturnedTruthyObject !== true
+        || latestDatabase.independentBridgeAbsent !== true
+        || latestDatabase.reloadIndependentBridgeAbsent !== true
+        || latestDatabase.reloadApiMethods !== latestDatabase.apiMethods
+        || latestDatabase.result !== 'pass'
+        || latestDatabase.doctorRuntimeErrorCount !== 0
+        || latestDatabase.databaseRuntimeErrorCount !== 0
+        || latestDatabase.tavernHelperRuntimeErrorCount !== 0
+        || latestDatabase.sterileDataRoot !== true
+        || latestDatabase.credentialsCopied !== false
+        || latestDatabase.originalUserDataModified !== false
+        || latestDatabase.temporaryDataRemoved !== true
+        || latestDatabase.isolatedHostPortClosed !== true
+        || latestDatabase.doctorVersionVisible !== manifest.version
+    ) fail('rc6 real database evidence is incomplete');
+
+    const model = report.checks?.realModel;
+    if (
+        !model
+        || model.result !== 'affected-paths-passed'
+        || model.attempts !== 3
+        || model.succeeded !== 3
+        || model.failed !== 0
+        || model.proxyStatuses?.join(',') !== '200,200,200'
+        || model.inputBytes?.length !== 3
+        || model.inputBytes.some((bytes) => bytes < 1)
+        || model.doctorModelCallDelta !== 3
+        || model.doctorRetryCount !== 0
+        || model.doctorFallbackUsed !== false
+        || model.doctorModelCompleted !== true
+        || model.appliedContinuityCalls < 1
+        || model.actorWorldSettled !== true
+        || model.actorReceiptCount < 1
+        || model.worldLaneTypes?.join(',') !== 'environment,faction'
+        || model.worldLaneReceiptCount < 2
+        || model.worldLaneIndependentOfActors !== true
+        || model.secondModelStructureRepairAttempted !== false
+        || model.relationshipReplaceCalls !== 0
+        || model.relationshipStateUnchanged !== true
+        || model.databaseRuntimeLoadedDuringModelProbe !== false
+        || model.syntheticFixtureUsed !== true
+        || model.privateChatModelEgress !== false
+        || model.credentialPersisted !== false
+        || model.rawPayloadPersisted !== false
+        || model.credentialClearedFromBrowserMemory !== true
+        || model.credentialClearedFromProxy !== true
+        || model.proxyStopped !== true
+        || model.hostPortClosed !== true
+        || model.proxyPortClosed !== true
+    ) fail('rc6 affected real-model evidence is incomplete');
+
+    const tauri = report.checks?.tauriTavern;
+    if (
+        !tauri
+        || tauri.result !== 'pass'
+        || tauri.releaseHostVersion !== '2.1.1'
+        || tauri.foregroundAutomationUsed !== false
+        || tauri.headlessOrHiddenOnly !== true
+        || tauri.portableDataRoot !== true
+        || tauri.isolatedAppData !== true
+        || tauri.cdpLoopbackOnly !== true
+        || tauri.cdpConnected !== true
+        || tauri.manifestHttpStatus !== 200
+        || tauri.manifestVersion !== manifest.version
+        || tauri.doctorScriptLoaded !== true
+        || tauri.doctorStyleLoaded !== true
+        || tauri.doctorApiReady !== true
+        || tauri.doctorApiMethodCount < 40
+        || tauri.reloadVerified !== true
+        || tauri.initVersionAfterReload !== manifest.version
+        || tauri.settingsMounted !== true
+        || tauri.floatingOrbMounted !== true
+        || tauri.desktop?.panelVisible !== true
+        || tauri.desktop?.panelWithinViewport !== true
+        || tauri.desktop?.horizontalOverflow !== false
+        || tauri.mobile?.panelVisible !== true
+        || tauri.mobile?.panelWithinViewport !== true
+        || tauri.mobile?.horizontalOverflow !== false
+        || tauri.mobile?.minimumVisibleControlHeight < 42
+        || tauri.consoleErrorCount !== 0
+        || tauri.doctorRuntimeErrorCount !== 0
+        || tauri.databaseRuntimeErrorCount !== 0
+        || tauri.tavernHelperRuntimeErrorCount !== 0
+        || tauri.missingCompanionScope !== 'sterile-portable-sandbox'
+        || tauri.fullMvuCompatibilityCoveredByRealSillyTavern !== true
+        || tauri.originalReleaseHostModified !== false
+        || tauri.sandboxDoctorVersionAfterProbe !== '1.8.10'
+        || tauri.sandboxBaselineRestored !== true
+        || tauri.temporaryDataRemoved !== true
+        || tauri.sandboxProcessStopped !== true
+        || tauri.cdpPortClosed !== true
+        || tauri.userRunningTauriTavernTouched !== false
+    ) fail('rc6 real TauriTavern evidence is incomplete');
+
+    const artifact = report.releaseArtifact;
+    if (
+        !artifact
+        || artifact.files !== 72
+        || artifact.bytes < 1
+        || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
+        || artifact.containsSerendipityCore !== true
+        || artifact.containsDatabaseFinalReplyBridge !== false
+        || artifact.allowlistVerified !== true
+    ) fail('rc6 release artifact evidence is incomplete');
+
+    const publication = report.publication;
+    if (
+        !publication
+        || publication.scope !== 'release-candidate'
+        || publication.mainAllowed !== true
+        || publication.releaseCandidateAllowed !== true
+        || publication.forcePushAllowed !== false
+        || !publication.allowedRemoteRefs?.includes('refs/heads/main')
+        || !publication.allowedRemoteRefs?.includes(
+            'refs/heads/codex/serendipity-engine-no-billing',
+        )
+        || publication.tagAllowed !== false
+        || publication.githubReleaseAllowed !== false
+    ) fail('rc6 publication scope is incomplete');
+
+    const privacy = report.privacy;
+    if (
+        !privacy
+        || privacy.apiKeyIncluded !== false
+        || privacy.privateChatIncluded !== false
+        || privacy.userDataIncluded !== false
+        || privacy.rawModelPayloadIncluded !== false
+        || privacy.privateChatModelEgress !== false
+        || privacy.credentialDeletedFromProxy !== true
+        || privacy.localAbsolutePathIncluded !== false
+    ) fail('rc6 privacy declaration is incomplete');
+
+    if (report.blocker !== undefined) fail('passing rc6 report still contains a blocker');
+    if (report.checks?.regressionMatrix?.items?.some(
+        (item) => item.disposition !== 'fixed',
+    )) fail('rc6 regression matrix still contains an unresolved item');
+}
+
 function validateBlockedReport(report) {
     const blocker = report.blocker;
     if (
@@ -372,6 +548,8 @@ function validateBlockedReport(report) {
         === 'database_latest_bundle_unavailable';
     const realModelCredentialRejected = blocker.code
         === 'real_model_test_credential_rejected';
+    const tauriBackgroundEntryUnavailable = blocker.code
+        === 'tauritavern_background_entry_unavailable';
     const model = report.checks?.realModel;
     if (
         !model
@@ -415,6 +593,35 @@ function validateBlockedReport(report) {
                         || model.hostPortClosed !== true
                         || model.proxyPortClosed !== true
                     )
+                : tauriBackgroundEntryUnavailable
+                ? (
+                    model.result !== 'pass'
+                    || model.attempts !== 3
+                    || model.succeeded !== 3
+                    || model.failed !== 0
+                    || model.proxyStatuses.some((status) => status !== 200)
+                    || model.inputBytes?.length !== model.attempts
+                    || model.inputBytes.some((bytes) => bytes < 1)
+                    || model.externalCredentialRejected !== false
+                    || model.doctorModelCallDelta !== model.attempts
+                    || model.doctorRetryCount !== 0
+                    || model.doctorFallbackUsed !== false
+                    || model.doctorModelCompleted !== true
+                    || model.socialFailureZeroWrite !== true
+                    || model.stateWriterCalls !== 0
+                    || model.actorSettlementSucceeded !== true
+                    || model.actorReceipts < 1
+                    || model.worldSettlementSucceeded !== true
+                    || model.worldReceipts < 1
+                    || model.databaseRuntimeLoadedDuringModelProbe !== false
+                    || model.syntheticFixtureUsed !== true
+                    || model.privateChatModelEgress !== false
+                    || model.credentialClearedFromBrowserMemory !== true
+                    || model.credentialClearedFromProxy !== true
+                    || model.hostPortClosed !== true
+                    || model.proxyPortClosed !== true
+                    || model.oldSuccessfulRunReusedAsCurrentEvidence !== false
+                )
                 : corePathsPassed
                 ? (
                     model.result !== 'core-paths-passed-release-still-blocked'
@@ -443,6 +650,25 @@ function validateBlockedReport(report) {
                 )
         )
     ) fail('blocked report real-model evidence is incomplete');
+
+    if (tauriBackgroundEntryUnavailable) {
+        const tauri = report.checks?.tauriTavern;
+        if (
+            !tauri
+            || tauri.result !== 'blocked-active-single-instance-no-safe-background-entry'
+            || tauri.releaseHostVersion !== '2.1.1'
+            || tauri.foregroundAutomationUsed !== false
+            || tauri.releasePilotAvailable !== false
+            || tauri.singleInstanceCollisionObserved !== true
+            || tauri.hiddenDuplicateCdpAvailable !== false
+            || tauri.temporarySandboxHostCopyRemoved !== true
+            || tauri.temporaryIdentifierIsolationAcceptedAsEvidence !== false
+            || tauri.originalSandboxHostModified !== false
+            || tauri.sandboxDoctorVersionAfterProbe !== '1.8.10'
+            || tauri.sandboxBaselineRestored !== true
+            || tauri.userRunningTauriTavernTouched !== false
+        ) fail('blocked report TauriTavern background-entry evidence is incomplete');
+    }
 
     const card = report.checks?.cardCompatibility;
     if (
@@ -516,6 +742,12 @@ function loadAndValidateReport() {
     validateSerendipityEvidence(report);
     if (report.result === 'blocked') {
         validateBlockedReport(report);
+        const testedAt = Date.parse(report.testedAt);
+        if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
+        return report;
+    }
+    if (report.version === '2.0.0-rc.6') {
+        validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
