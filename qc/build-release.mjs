@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const candidate = '2.0.0-rc.7';
+const candidate = '2.0.0-rc.8';
 const artifactName = `05_MVU自动医生_v${candidate}_离线候选.zip`;
 const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
@@ -31,6 +31,7 @@ const rootFiles = [
     'model-queue.mjs',
     'protocol-core.mjs',
     'README.md',
+    'docs/CHARACTER_DIVERSITY_V2.md',
     'serendipity-core.d.mts',
     'serendipity-core.mjs',
     'social-core.mjs',

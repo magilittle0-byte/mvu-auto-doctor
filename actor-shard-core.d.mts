@@ -68,7 +68,12 @@ export function buildActorShardMessages(
 export function parseActorShardProposal(
     output: unknown,
     options: { candidate: ActorShardCandidate },
-): { proposal?: ActorShardProposal; error?: string };
+): {
+    proposal?: ActorShardProposal;
+    error?: string;
+    repaired?: boolean;
+    repairKinds?: string[];
+};
 export function actorShardCompatibility(
     left: ActorShardProposal,
     right: ActorShardProposal,

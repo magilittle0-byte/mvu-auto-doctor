@@ -34,6 +34,13 @@ export interface ActorLedgerActor {
         decisionStyle: string;
         speechStyle: string;
         copingStyle: string;
+        informationStyle: string;
+        typicalMisread: string;
+        relationshipDistancePattern: string;
+        selfImageGap: string;
+        learnedCounterDisposition: string;
+        pressureResponse: string;
+        recoveryPath: string;
         everydayHabits: string[];
         blindSpots: string[];
     };
@@ -88,7 +95,12 @@ export interface ActorLedger {
     actors: ActorLedgerActor[];
     actionReceipts: Array<Record<string, unknown>>;
     observationReceipts: Array<Record<string, unknown>>;
-    migrations: { continuityV5: boolean; actorLedgerV2: boolean; actorLedgerV3: boolean };
+    migrations: {
+        continuityV5: boolean;
+        actorLedgerV2: boolean;
+        actorLedgerV3: boolean;
+        actorLedgerV4: boolean;
+    };
     updatedAt: number;
 }
 

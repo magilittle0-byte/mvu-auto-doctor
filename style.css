@@ -103,6 +103,37 @@
     width: min(240px, 54vw);
 }
 
+#mvu-auto-doctor-settings .mvuad-route-heading {
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 72%, transparent);
+    font-size: 0.92em;
+    font-weight: 700;
+}
+
+#mvu-auto-doctor-settings .mvuad-route-slots {
+    display: grid;
+    gap: 7px;
+}
+
+#mvu-auto-doctor-settings .mvuad-route-slot {
+    min-height: 38px;
+    padding: 3px 0;
+}
+
+#mvu-auto-doctor-settings .mvuad-route-slot > span {
+    flex: 0 0 auto;
+    font-size: 0.86em;
+}
+
+#mvu-auto-doctor-settings .mvuad-route-slot > select {
+    min-width: 0;
+}
+
+#mvu-auto-doctor-settings .mvuad-route-actions > button:disabled {
+    opacity: 0.45;
+}
+
 #mvu-auto-doctor-settings .mvuad-provider-status {
     min-height: 1.4em;
     font-size: var(--mvuad-fs-meta);
@@ -629,6 +660,14 @@
     opacity: 1;
     filter: brightness(1.12);
     transform: scale(1.05);
+}
+
+/* The extensions drawer is the user's active workspace on mobile. Keeping the
+ * gameplay orb above it blocks selects and buttons near the pinned edge. */
+body:has(#rm_extensions_block.openDrawer) #mvuad-floating-orb {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
 }
 
 #mvuad-floating-orb.mvuad-orb-tucked {

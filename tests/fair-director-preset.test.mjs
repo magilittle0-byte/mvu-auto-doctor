@@ -109,7 +109,7 @@ test('character kaleidoscope adds an enabled diversity contract and lightweight 
     const { preset, audit } = transformCharacterDiversityPreset(source);
     assert.deepEqual(source, before, 'source preset must stay untouched');
     assert.match(preset.name, /人物万花筒版$/u);
-    assert.equal(audit.transformVersion, '2.1-character-kaleidoscope');
+    assert.equal(audit.transformVersion, '2.2-dynamic-character-evidence');
     assert.equal(audit.storyRegexIds.length, 6);
     const diversity = preset.prompts.find((item) => (
         item.identifier === audit.characterDiversityIdentifier
@@ -117,6 +117,13 @@ test('character kaleidoscope adds an enabled diversity contract and lightweight 
     assert.equal(diversity.content, CHARACTER_DIVERSITY_CONTRACT);
     assert.match(diversity.content, /强烈情绪是当前状态层，不是身份层/u);
     assert.match(diversity.content, /删掉姓名后/u);
+    assert.match(diversity.content, /不运行或输出MBTI、九型人格、Tritype、依恋类型/u);
+    assert.match(diversity.content, /信息取样偏好与典型误读/u);
+    assert.match(diversity.content, /受压反应→恢复路径/u);
+    assert.match(diversity.content, /习得的逆倾向能力/u);
+    assert.match(diversity.content, /首次有效出场只在正文显露最多三项差异/u);
+    assert.match(diversity.content, /逐人核对，不遗漏安静角色/u);
+    assert.match(diversity.content, /把职业和类型标签也删掉后/u);
     const surface = preset.prompts.find((item) => (
         item.identifier === audit.narrativeSurfaceIdentifier
     ));

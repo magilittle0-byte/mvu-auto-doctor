@@ -83,7 +83,7 @@ function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
     if (
         !actorLedger
-        || actorLedger.version !== 3
+        || actorLedger.version !== 4
         || actorLedger.persistentAuditLedger !== true
         || actorLedger.continuousMigration !== true
         || actorLedger.privateThoughtsHidden !== true
@@ -294,13 +294,13 @@ function validateRc6PassReport(report) {
     const artifact = report.releaseArtifact;
     if (
         !artifact
-        || artifact.files !== 72
+        || artifact.files !== 73
         || artifact.bytes < 1
         || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
         || artifact.containsSerendipityCore !== true
         || artifact.containsDatabaseFinalReplyBridge !== false
         || artifact.allowlistVerified !== true
-    ) fail('rc6 release artifact evidence is incomplete');
+    ) fail('release artifact evidence is incomplete');
 
     const publication = report.publication;
     if (
@@ -550,14 +550,21 @@ function validateBlockedReport(report) {
         === 'real_model_test_credential_rejected';
     const tauriBackgroundEntryUnavailable = blocker.code
         === 'tauritavern_background_entry_unavailable';
+    const fullRc8RealRuntimeRecheckRequired = blocker.code
+        === 'full_rc8_real_runtime_recheck_required';
     const model = report.checks?.realModel;
     if (
         !model
-        || !Array.isArray(model.proxyStatuses)
-        || model.proxyStatuses.length !== model.attempts
-        || model.proxyStopped !== true
-        || model.credentialPersisted !== false
-        || model.rawPayloadPersisted !== false
+        || (
+            !fullRc8RealRuntimeRecheckRequired
+            && (
+                !Array.isArray(model.proxyStatuses)
+                || model.proxyStatuses.length !== model.attempts
+                || model.proxyStopped !== true
+                || model.credentialPersisted !== false
+                || model.rawPayloadPersisted !== false
+            )
+        )
         || (
             latestDatabaseBundleBlocked
                 ? (
@@ -621,6 +628,54 @@ function validateBlockedReport(report) {
                     || model.hostPortClosed !== true
                     || model.proxyPortClosed !== true
                     || model.oldSuccessfulRunReusedAsCurrentEvidence !== false
+                )
+                : fullRc8RealRuntimeRecheckRequired
+                ? (
+                    model.result !== 'pass'
+                    || model.scope !== 'authorized-synthetic-gemini-qc'
+                    || model.model !== 'gemini-3.1-pro-preview'
+                    || model.upstream !== 'api2.gemai.cc'
+                    || model.characterAb?.v2Wins !== 3
+                    || model.characterAb?.v1Wins !== 0
+                    || model.characterAb?.ties !== 1
+                    || model.characterAb?.logicalCalls !== 12
+                    || model.characterAb?.successfulHttpResponses !== 12
+                    || model.doctorProbe?.attempts !== 3
+                    || model.doctorProbe?.succeeded !== 3
+                    || model.doctorProbe?.failed !== 0
+                    || model.doctorProbe?.actorWorldSettled !== true
+                    || model.doctorProbe?.doctorErrorCount !== 0
+                    || model.proxyStopped !== true
+                    || model.credentialPersisted !== false
+                    || model.rawPayloadPersisted !== false
+                    || model.privateChatModelEgress !== false
+                    || report.checks?.modelSlotRouting
+                        ?.authorizedRealHostRouteProbe?.scope
+                        !== 'authorized-synthetic-gemai-two-slot'
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .proxyStatuses?.length !== 2
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .proxyStatuses.some((status) => status !== 200)
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .inputBytes?.length !== 2
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .inputBytes.some((bytes) => bytes < 1)
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .distinctPerSlotDispatchObserved !== true
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .successfulModelResponseClaimed !== true
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .temporaryPresetsRemoved !== true
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .originalStrictSelectionsRestored !== true
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .proxyStopped !== true
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .credentialPersisted !== false
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .rawPayloadPersisted !== false
+                    || report.checks.modelSlotRouting.authorizedRealHostRouteProbe
+                        .privateChatModelEgress !== false
                 )
                 : corePathsPassed
                 ? (
@@ -703,10 +758,15 @@ function validateBlockedReport(report) {
         || privacy.privateChatIncluded !== false
         || privacy.userDataIncluded !== false
         || privacy.rawModelPayloadIncluded !== false
-        || privacy.derivedNarrativeFindings !== 0
+        || (
+            fullRc8RealRuntimeRecheckRequired
+                ? privacy.derivedNarrativeFindings !== 4
+                : privacy.derivedNarrativeFindings !== 0
+        )
         || privacy.fullPromptFindings !== 0
         || privacy.privateCanaryFindings !== 0
         || privacy.fullUserAgentIncluded !== false
+        || privacy.privateChatModelEgress !== false
     ) fail('blocked report privacy declaration is incomplete');
 }
 
@@ -746,7 +806,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
