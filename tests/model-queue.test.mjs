@@ -12,6 +12,14 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
+async function waitFor(predicate, message = 'condition was not met') {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (predicate()) return;
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.fail(message);
+}
+
 test('同一连接严格串行且待执行任务按优先级排序', async () => {
     const scheduler = new ConnectionTaskScheduler();
     const gate = deferred();
@@ -57,6 +65,57 @@ test('不同连接可以并行', async () => {
     firstGate.resolve();
     secondGate.resolve();
     await Promise.all([first, second]);
+});
+
+test('同一连接按可配置上限并发且空出槽位后仍按优先级启动', async () => {
+    const scheduler = new ConnectionTaskScheduler();
+    const gates = [deferred(), deferred(), deferred(), deferred(), deferred()];
+    const started = [];
+    const runs = [
+        scheduler.enqueue('shared-api', async () => {
+            started.push('first');
+            await gates[0].promise;
+        }, { maxConcurrent: 3, priority: 10, label: 'first' }),
+        scheduler.enqueue('shared-api', async () => {
+            started.push('second');
+            await gates[1].promise;
+        }, { maxConcurrent: 3, priority: 10, label: 'second' }),
+        scheduler.enqueue('shared-api', async () => {
+            started.push('third');
+            await gates[2].promise;
+        }, { maxConcurrent: 3, priority: 10, label: 'third' }),
+        scheduler.enqueue('shared-api', async () => {
+            started.push('low');
+            await gates[3].promise;
+        }, { maxConcurrent: 3, priority: 10, label: 'low' }),
+        scheduler.enqueue('shared-api', async () => {
+            started.push('high');
+            await gates[4].promise;
+        }, { maxConcurrent: 3, priority: 30, label: 'high' }),
+    ];
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(started, ['first', 'second', 'third']);
+    assert.deepEqual(scheduler.snapshot().map((state) => ({
+        activeCount: state.activeCount,
+        maxConcurrent: state.maxConcurrent,
+        pending: state.pending.map((entry) => entry.label),
+    })), [{
+        activeCount: 3,
+        maxConcurrent: 3,
+        pending: ['high', 'low'],
+    }]);
+
+    gates[0].resolve();
+    await waitFor(() => started.length >= 4, 'high-priority task did not start');
+    assert.equal(started[3], 'high');
+    gates[1].resolve();
+    await waitFor(() => started.length >= 5, 'remaining task did not start');
+    assert.equal(started[4], 'low');
+    for (const gate of gates.slice(2)) gate.resolve();
+    await Promise.all(runs);
+    assert.deepEqual(scheduler.snapshot(), []);
 });
 
 test('尚未开始的任务可通过 AbortSignal 从队列取消', async () => {

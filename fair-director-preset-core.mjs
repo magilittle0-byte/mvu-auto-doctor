@@ -11,10 +11,22 @@ const IDS = Object.freeze({
     finalGate: '9c077696-71c7-4469-9fad-1f3e241497a7',
     dice: '55c128dd-54d4-4028-ac30-96fd40452f93',
     planning: 'c925621e-88b9-4a8a-b320-b3f422e3b18f',
+    characterDiversity: 'cf9b6278-b776-4c56-b02d-d34f0f0f7d31',
+    narrativeSurface: '941c6128-f8b7-470f-b598-8351e24724cc',
 });
 
 export const FAIR_DIRECTOR_PRESET_VERSION = '2.0-global-pressure';
 export const SERENDIPITY_FAIR_DIRECTOR_PRESET_VERSION = '2.0-serendipity-double-gate';
+export const CHARACTER_DIVERSITY_PRESET_VERSION = '2.1-character-kaleidoscope';
+
+const STORY_RENDER_REGEX_IDS = Object.freeze({
+    story: 'd0a779f6-9168-499c-b12a-e65ca03e9f8c',
+    storyPrompt: '27e75ac7-2df0-47d5-a27c-fbe86e07f9fc',
+    chatRight: 'c33f4378-df39-4d2f-b74f-408a0362cf0a',
+    chatRightPrompt: '8e27bdec-c69d-4bbc-b285-c1bab8a45c42',
+    chatLeft: 'f83f5aa5-c11a-4379-9cc6-d2814ff1f930',
+    chatLeftPrompt: '680bd653-3d2d-4bf5-a774-e076a26bb2e1',
+});
 
 function sha256(value) {
     return createHash('sha256').update(value).digest('hex').toUpperCase();
@@ -112,6 +124,48 @@ export const SERENDIPITY_DOUBLE_GATE = `<Fair_Director_Serendipity_Double_Gate_V
 本条只增加“无前兆但不矛盾”的合法入口与双保险，不削弱3000～4000字、NPC自主性、软行动开放、硬行动审核、有限认知、重大成功持续生效、风味调侃无机械惩罚、玩家行动权和全局压力层。
 </Fair_Director_Serendipity_Double_Gate_V1>`;
 
+export const CHARACTER_DIVERSITY_CONTRACT = `<Character_Kaleidoscope_Contract_V1>
+【目标】人物可以黑暗、危险、软弱或偏执，但不能把职业、阵营或本轮情绪直接当成整个人格。不要把所有新角色换名后仍写成“冷酷强者、暴躁恶徒、结巴怯懦者、绝望受害者、完美职业面具”五类模板。
+
+【首次有效出场：静默建立人物DNA】
+为有名字或会持续出现的人物，在内部至少区分以下维度；不输出表格，不一次性介绍完，只让它们在选择和细节中逐步显影：
+1. 社交办法：直说、绕开、交易、观察、玩笑、礼貌疏离、照顾细节等；
+2. 决策办法：先核价、凭经验、问人、试错、留退路、服从程序、看心情等；
+3. 不围着玩家转的现实欲望与眼前小事；
+4. 边界与愿付代价；
+5. 一项能力、一处盲点、一个日常习惯；
+6. 说话密度、句长、停顿与回避方式；
+7. 情绪基线、被触发阈值与恢复路径；
+8. 一组可共存的矛盾：如谨慎但好奇、护短但不爱安慰、怕冲突却很会算账。矛盾不等于强行反转。
+
+【反模板】
+- 打手/混混不自动等于咆哮、虐待欲和死亡威胁；专业人士不自动等于毫无温度的完美面具；聪明人不自动全知或操纵；胆小不自动结巴、瘫软、失去判断；战士不自动变成“冰冷杀意的武器”。
+- 强烈情绪是当前状态层，不是身份层。写“此刻害怕/愤怒”时，仍保留此人的目标、习惯、能力、关系分寸和可选做法。除非有明确永久机制与连续证据，禁止用“不再是X，而是一件武器”“眼里只剩下……”“彻底失去全部……”这类一句封死人物的总判词。
+- 先写可观察证据，再允许有限结论。少用冷酷、暴戾、疯狂、绝望、病态、空洞、彻底等高烈度标签成串替代塑造；能用一次具体选择、没说出口的话、改掉的步骤或普通习惯表现，就不要下人格判决。
+
+【群像碰撞】
+同场有3名以上NPC时，至少让他们在第一反应、主动程度、风险偏好、权威态度、说话密度或道德边界中的三项互不相同。除非设定明确要求整齐纪律，不让全员同时沉默、发抖、冷笑、愤怒或崇拜。每个持续角色保留自己的生活线；对玩家没反应、暂时忙别的、误会后修正，都可以是有效反应。
+- 落笔前给每名同场NPC分别锁定“此刻要什么、先做哪一步、缺哪条信息、什么条件下会改主意、哪条线不肯越过”；正文里至少让其中三项通过不同的行动后果显出来。
+- 群像不是三个人依次发表立场。允许抢话、错过回应、两人临时结盟、有人先处理手边小事或在别人行动后才改口；避免等长台词、同构段落和“各自用一种形容词代表差异”的轮流展示。
+- 每名关键NPC本轮至少对信息、风险、关系或可选路径造成一种不同影响；若删除姓名后仍只是“支持/反对/犹豫”三格模板，就重排先后、决策依据与实际代价。
+
+【连续性与黑暗内容】
+已经建立的人物DNA按证据渐变，不因一轮刺激重置。黑暗、胁迫、敌意和崩溃若由设定、机制与当前因果支持，照实写，不强行温暖；但黑暗的差异来自各人的办法、利益、阈值与代价，不来自给所有人套同一组极端形容词。
+- 反脸谱不等于把所有人写得温柔、善解人意或最终互相理解。人物可以吝啬、冷淡、没耐心、自私、守死规矩、不愿帮忙，也可以让日常冲突以拒绝、欠账、暂时搁置或不愉快收场；只需让这些选择来自具体利益、边界和习惯，不把它们升级成邪恶、疯狂或隐藏创伤。禁止用统一的体贴让步、互相道歉、治愈式顿悟消解真实分歧。
+
+【写后碰撞测试】
+删掉姓名后，若两名角色的台词、动作、目标和情绪结论可以互换，就至少重写其中一人的决定方式或生活目标；若本轮只用高烈度形容词区分人物，则改成可观察行为与有代价的选择。
+</Character_Kaleidoscope_Contract_V1>`;
+
+export const NARRATIVE_SURFACE_CONTRACT = `<Narrative_Surface_Rendering_V1>
+最终唯一<content>内，只把纯正文与对白包在一组<story_body>...</story_body>中；<luntan>、current_event、progress、检定、状态栏、变量与其他功能标签必须放在story_body之外。正文内容仍是普通文字，不为排版改写事实，也不额外生成标题。
+
+只有剧情中真的出现并被查看的手机/即时通讯聊天时，才可在story_body内部把屏幕中的消息写成：
+<chat_right>我方消息正文</chat_right>
+<chat_left>发送者名｜对方消息正文</chat_left>
+可连续使用多条；它们只渲染“载体里的消息”，不能拿来包普通人物对白。没有具体载体就完全不用chat标签。标签内只放纯文本，不嵌套HTML、脚本、图片、外链或样式。
+</Narrative_Surface_Rendering_V1>`;
+
 const DICE_REFERENCE = `{{setvar::骰子审计::
 严格调用 <Fair_Director_Global_Pressure_Gate_V2> 第7节。每回合先读取当前角色卡声明的骰种、池长、重置和编号；不得跨回合保留游标，不得超过池长，不得把D4/D40改成D2/D5，不得取前N、截位、取模、跳号或挑结果。顺序固定为：骰前行动/属性/技能/修正/DC依据 → 唯一骰源、回合与池内序号 → 原始骰面 → 完整算式 → 本轮锁定结果。缺任一项就停在判定前。
 }}
@@ -131,7 +185,10 @@ export function transformFairDirectorPreset(input) {
         throw new Error('unsupported preset structure');
     }
     const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
-    for (const id of Object.values(IDS)) requirePrompt(byId, id);
+    for (const [key, id] of Object.entries(IDS)) {
+        if (['characterDiversity', 'narrativeSurface'].includes(key)) continue;
+        requirePrompt(byId, id);
+    }
     const before = new Map(
         preset.prompts.map((prompt) => [
             prompt.identifier,
@@ -328,6 +385,226 @@ export function transformSerendipityFairDirectorPreset(input) {
                     )?.content || '')),
                     afterSha256: sha256(fair.content),
                 },
+            ],
+        },
+    };
+}
+
+function enabledOrderCount(preset) {
+    return preset.prompt_order
+        .flatMap((group) => group?.order || [])
+        .filter((entry) => entry.enabled).length;
+}
+
+function insertPromptAfter(preset, prompt, anchorId) {
+    const existing = preset.prompts.find((item) => item.identifier === prompt.identifier);
+    if (existing) Object.assign(existing, prompt);
+    else {
+        const promptIndex = preset.prompts.findIndex((item) => item.identifier === anchorId);
+        preset.prompts.splice(promptIndex >= 0 ? promptIndex + 1 : preset.prompts.length, 0, prompt);
+    }
+    for (const group of preset.prompt_order) {
+        const order = Array.isArray(group?.order) ? group.order : [];
+        const oldIndex = order.findIndex((entry) => entry.identifier === prompt.identifier);
+        if (oldIndex >= 0) order.splice(oldIndex, 1);
+        const anchorIndex = order.findIndex((entry) => entry.identifier === anchorId);
+        if (anchorIndex >= 0) {
+            order.splice(anchorIndex + 1, 0, {
+                identifier: prompt.identifier,
+                enabled: true,
+            });
+        }
+    }
+}
+
+function systemPrompt(identifier, name, content) {
+    return {
+        identifier,
+        name,
+        system_prompt: false,
+        marker: false,
+        role: 'system',
+        content,
+        injection_position: 0,
+        injection_depth: 4,
+        injection_order: 100,
+        forbid_overrides: false,
+        enabled: true,
+    };
+}
+
+function storyRegexScripts() {
+    const storyCss = [
+        '<style>',
+        '.mvuad-story{box-sizing:border-box;max-width:100%;padding:.35rem .15rem .55rem;color:inherit;font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",STSong,SimSun,serif;font-size:clamp(1rem,.96rem + .22vw,1.1rem);line-height:1.95;letter-spacing:.025em;white-space:pre-wrap;overflow-wrap:anywhere;text-wrap:pretty}',
+        '.mvuad-story .mvuad-chat-row{display:flex;width:100%;box-sizing:border-box;margin:.7rem 0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;font-size:.96em;line-height:1.6;white-space:normal}',
+        '.mvuad-story .mvuad-chat-row.mvuad-right{justify-content:flex-end}',
+        '.mvuad-story .mvuad-chat-row.mvuad-left{justify-content:flex-start}',
+        '.mvuad-story .mvuad-chat-bubble{box-sizing:border-box;max-width:min(78%,36rem);padding:.72rem .9rem;border-radius:1rem;overflow-wrap:anywhere;box-shadow:0 .2rem .7rem rgba(0,0,0,.1)}',
+        '.mvuad-story .mvuad-right .mvuad-chat-bubble{background:#95ec69;color:#172112;border-bottom-right-radius:.28rem}',
+        '.mvuad-story .mvuad-left .mvuad-chat-bubble{background:color-mix(in srgb,currentColor 7%,transparent);color:inherit;border:1px solid color-mix(in srgb,currentColor 14%,transparent);border-bottom-left-radius:.28rem}',
+        '.mvuad-story .mvuad-chat-name{margin:0 0 .22rem .25rem;color:color-mix(in srgb,currentColor 58%,transparent);font-size:.78em;line-height:1.2}',
+        '@media(max-width:520px){.mvuad-story{font-size:1rem;line-height:1.88}.mvuad-story .mvuad-chat-bubble{max-width:84%;padding:.65rem .78rem}}',
+        '</style>',
+        '<div class="mvuad-story">$1</div>',
+    ].join('');
+    const base = {
+        disabled: false,
+        markdownOnly: true,
+        maxDepth: null,
+        minDepth: null,
+        placement: [2],
+        runOnEdit: true,
+        substituteRegex: 0,
+        trimStrings: [],
+    };
+    return [
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.story,
+            findRegex: '/<story_body>([\\s\\S]*?)<\\/story_body>/g',
+            promptOnly: false,
+            replaceString: storyCss,
+            scriptName: '正文·沉浸阅读排版（人物万花筒）',
+        },
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.chatRight,
+            findRegex: '/<chat_right>\\s*([\\s\\S]*?)\\s*<\\/chat_right>/g',
+            promptOnly: false,
+            replaceString: '<div class="mvuad-chat-row mvuad-right"><div class="mvuad-chat-bubble">$1</div></div>',
+            scriptName: '正文·聊天右气泡',
+        },
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.chatLeft,
+            findRegex: '/<chat_left>\\s*([^｜|\\n]{1,40})\\s*[｜|]\\s*([\\s\\S]*?)\\s*<\\/chat_left>/g',
+            promptOnly: false,
+            replaceString: '<div class="mvuad-chat-row mvuad-left"><div><div class="mvuad-chat-name">$1</div><div class="mvuad-chat-bubble">$2</div></div></div>',
+            scriptName: '正文·聊天左气泡',
+        },
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.storyPrompt,
+            findRegex: '/<story_body>([\\s\\S]*?)<\\/story_body>/g',
+            markdownOnly: false,
+            promptOnly: true,
+            replaceString: '$1',
+            scriptName: '正文·历史只发纯文本',
+        },
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.chatRightPrompt,
+            findRegex: '/<chat_right>\\s*([\\s\\S]*?)\\s*<\\/chat_right>/g',
+            markdownOnly: false,
+            promptOnly: true,
+            replaceString: '[手机聊天·我方] $1',
+            scriptName: '聊天右气泡·历史降为纯文本',
+        },
+        {
+            ...base,
+            id: STORY_RENDER_REGEX_IDS.chatLeftPrompt,
+            findRegex: '/<chat_left>\\s*([^｜|\\n]{1,40})\\s*[｜|]\\s*([\\s\\S]*?)\\s*<\\/chat_left>/g',
+            markdownOnly: false,
+            promptOnly: true,
+            replaceString: '[手机聊天·$1] $2',
+            scriptName: '聊天左气泡·历史降为纯文本',
+        },
+    ];
+}
+
+function installStoryRegexScripts(preset) {
+    preset.extensions ||= {};
+    const scripts = Array.isArray(preset.extensions.regex_scripts)
+        ? preset.extensions.regex_scripts
+        : [];
+    const incoming = storyRegexScripts();
+    const incomingIds = new Set(incoming.map((item) => item.id));
+    preset.extensions.regex_scripts = [
+        ...scripts.filter((item) => !incomingIds.has(item?.id)),
+        ...incoming,
+    ];
+    const group = preset.extensions.baibaiToolkit?.regexGroups;
+    if (group?.scripts && typeof group.scripts === 'object') {
+        const start = Object.keys(group.scripts).length;
+        incoming.forEach((item, index) => {
+            group.scripts[item.id] = { groupId: '__ungrouped', order: start + index };
+        });
+    }
+}
+
+export function transformCharacterDiversityPreset(input) {
+    const originalFair = input.prompts?.find((item) => item.identifier === IDS.fairGate);
+    const alreadySerendipity = String(originalFair?.content || '')
+        .includes('<Fair_Director_Global_Pressure_Gate_V2>')
+        && String(originalFair?.content || '')
+            .includes('<Fair_Director_Serendipity_Double_Gate_V1>');
+    const base = alreadySerendipity
+        ? {
+            preset: structuredClone(input),
+            audit: {
+                transformVersion: SERENDIPITY_FAIR_DIRECTOR_PRESET_VERSION,
+                sourceName: input.name || '',
+                outputName: input.name || '',
+                promptCount: input.prompts.length,
+                orderCount: input.prompt_order.flatMap((group) => group?.order || []).length,
+                enabledCount: enabledOrderCount(input),
+                modifications: [],
+                serendipityDoubleGate: true,
+            },
+        }
+        : transformSerendipityFairDirectorPreset(input);
+    const preset = structuredClone(base.preset);
+    insertPromptAfter(
+        preset,
+        systemPrompt(
+            IDS.characterDiversity,
+            '🎭人物万花筒V1（反脸谱·群像碰撞·情绪不覆写人格）',
+            CHARACTER_DIVERSITY_CONTRACT,
+        ),
+        IDS.lengthAgency,
+    );
+    insertPromptAfter(
+        preset,
+        systemPrompt(
+            IDS.narrativeSurface,
+            '🖼️正文沉浸排版V1（轻量·载体聊天气泡）',
+            NARRATIVE_SURFACE_CONTRACT,
+        ),
+        IDS.finalOutput,
+    );
+    installStoryRegexScripts(preset);
+    preset.name = `${String(preset.name || '主预设')
+        .replace(/_全局节奏闭环版$/u, '')
+        .replace(/_偶发性双保险版$/u, '')
+        .replace(/_人物万花筒版$/u, '')}_人物万花筒版`;
+    const added = [
+        preset.prompts.find((item) => item.identifier === IDS.characterDiversity),
+        preset.prompts.find((item) => item.identifier === IDS.narrativeSurface),
+    ];
+    return {
+        preset,
+        audit: {
+            ...base.audit,
+            transformVersion: CHARACTER_DIVERSITY_PRESET_VERSION,
+            outputName: preset.name,
+            promptCount: preset.prompts.length,
+            orderCount: preset.prompt_order.flatMap((group) => group?.order || []).length,
+            enabledCount: enabledOrderCount(preset),
+            characterDiversityIdentifier: IDS.characterDiversity,
+            narrativeSurfaceIdentifier: IDS.narrativeSurface,
+            storyRegexIds: Object.values(STORY_RENDER_REGEX_IDS),
+            modifications: [
+                ...base.audit.modifications,
+                ...added.map((prompt) => ({
+                    identifier: prompt.identifier,
+                    beforeName: '',
+                    afterName: prompt.name,
+                    beforeLength: 0,
+                    afterLength: prompt.content.length,
+                    beforeSha256: sha256(''),
+                    afterSha256: sha256(prompt.content),
+                })),
             ],
         },
     };

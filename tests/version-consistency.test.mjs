@@ -37,11 +37,11 @@ assert.equal(
 assert.ok(readme.includes(repositoryUrl), 'README 必须提供在线安装仓库地址');
 assert.ok(
     readme.includes('默认 `main` 仍是上一版')
-        && readme.includes('rc.6 离线候选包'),
+        && readme.includes('rc.7 离线候选包'),
     'README 必须准确区分独立候选分支和尚未晋升的main',
 );
 assert.ok(
-    readme.includes('只有线上 `manifest.json` 已是 rc.6 时'),
+    readme.includes('只有线上 `manifest.json` 已是 rc.7 时'),
     'README 必须把默认main在线更新写成晋升后的条件步骤',
 );
 assert.ok(
@@ -55,7 +55,7 @@ assert.ok(
 );
 assert.match(
     rcUserGuide,
-    /候选阶段请\s+使用本仓库生成的 rc\.6 离线包/u,
+    /候选阶段请\s+使用本仓库生成的 rc\.7 离线包/u,
     'RC说明必须提供未晋升候选的诚实安装路径',
 );
 

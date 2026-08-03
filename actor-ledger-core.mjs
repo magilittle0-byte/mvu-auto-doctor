@@ -1,6 +1,6 @@
 import { fingerprint } from './core.mjs';
 
-export const ACTOR_LEDGER_VERSION = 2;
+export const ACTOR_LEDGER_VERSION = 3;
 export const ACTOR_LEDGER_MAX_ACTORS = 96;
 export const ACTOR_LEDGER_MAX_RECEIPTS = 240;
 
@@ -162,6 +162,12 @@ function normalizeActor(value, index, turn) {
             traits: cleanList(identity.traits, 12, 180),
             desires: cleanList(identity.desires, 12, 240),
             boundaries: cleanList(identity.boundaries, 12, 240),
+            socialStyle: cleanText(identity.socialStyle, 240),
+            decisionStyle: cleanText(identity.decisionStyle, 240),
+            speechStyle: cleanText(identity.speechStyle, 240),
+            copingStyle: cleanText(identity.copingStyle, 240),
+            everydayHabits: cleanList(identity.everydayHabits, 8, 180),
+            blindSpots: cleanList(identity.blindSpots, 8, 220),
         },
         lineage: {
             rootActorId: cleanText(lineage.rootActorId, 120) || id,
@@ -274,7 +280,7 @@ export function emptyActorLedger(chatId = '') {
         actors: [],
         actionReceipts: [],
         observationReceipts: [],
-        migrations: { continuityV5: false, actorLedgerV2: true },
+        migrations: { continuityV5: false, actorLedgerV2: true, actorLedgerV3: true },
         updatedAt: 0,
     };
 }
@@ -311,6 +317,7 @@ export function normalizeActorLedger(value, {
         migrations: {
             continuityV5: source.migrations?.continuityV5 === true,
             actorLedgerV2: true,
+            actorLedgerV3: true,
         },
         updatedAt: integer(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -385,6 +392,201 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
         migrations: { ...ledger.migrations, continuityV5: true },
         updatedAt: Date.now(),
     }, { chatId: ledger.chatId || continuity?.chatId });
+}
+
+function mergeProfileText(current, proposed, limit = 240) {
+    const oldValue = cleanText(current, limit);
+    return oldValue || cleanText(proposed, limit);
+}
+
+const VOLATILE_PROFILE_LABEL_RE = /^(?:冷酷|冰冷|暴躁|粗暴|凶狠|残忍|疯狂|狂热|病态|绝望|恐惧|怯懦|结巴|空洞|麻木|杀意|致命武器|忠诚|服从)$/iu;
+const TOTALIZING_PROFILE_RE = /(?:不再是.{0,18}而是(?:一件|一个)|彻底(?:失去|抹去|变成|沦为)|(?:全部人格|整个人).{0,12}(?:只剩|化作|变成))/iu;
+
+function stableProfileText(value, limit = 240) {
+    const cleaned = cleanText(value, limit);
+    if (!cleaned || VOLATILE_PROFILE_LABEL_RE.test(cleaned) || TOTALIZING_PROFILE_RE.test(cleaned)) {
+        return '';
+    }
+    return cleaned;
+}
+
+function stableProfileList(value, limit = 12, itemLimit = 240) {
+    return cleanList(value, limit, itemLimit).filter((item) => (
+        !VOLATILE_PROFILE_LABEL_RE.test(item)
+        && !TOTALIZING_PROFILE_RE.test(item)
+    ));
+}
+
+function evidenceLookupText(value) {
+    return cleanText(value, 240000)
+        .toLocaleLowerCase('zh-CN')
+        .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function mergeProfileList(current, proposed, limit = 12, itemLimit = 240) {
+    return cleanList([...(current || []), ...(Array.isArray(proposed) ? proposed : [])], limit, itemLimit);
+}
+
+function actorProfileSnapshot(actor) {
+    return JSON.stringify({
+        identity: actor.identity,
+        longTermGoals: actor.longTermGoals,
+        capabilities: actor.capabilities,
+        hidden: actor.hidden,
+    });
+}
+
+export function mergeActorProfilePatches(value, patches, {
+    turn = null,
+    sourceRef = null,
+    maxPatches = 8,
+    evidenceCorpus = '',
+} = {}) {
+    const ledger = normalizeActorLedger(value);
+    const currentTurn = integer(turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
+    const ref = normalizeSourceRef(sourceRef);
+    const evidenceHaystack = evidenceLookupText(evidenceCorpus);
+    const accepted = [];
+    const rejected = [];
+    const candidates = (Array.isArray(patches) ? patches : []).slice(
+        0,
+        integer(maxPatches, 0, 24, 8),
+    );
+    for (const raw of candidates) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+            rejected.push({ actorId: '', reason: 'profile-not-object' });
+            continue;
+        }
+        const requestedId = cleanText(raw.actorId, 120);
+        const requestedName = cleanText(raw.name, 160);
+        const actorIndex = ledger.actors.findIndex((actor) => (
+            (requestedId && actor.id === requestedId)
+            || (requestedName && (
+                actor.name === requestedName
+                || actor.identity.aliases.includes(requestedName)
+            ))
+        ));
+        if (actorIndex < 0) {
+            rejected.push({
+                actorId: requestedId,
+                name: requestedName,
+                reason: 'unknown-actor',
+            });
+            continue;
+        }
+        const evidence = cleanList(raw.evidence, 8, 300);
+        if (!evidence.length) {
+            rejected.push({
+                actorId: ledger.actors[actorIndex].id,
+                name: ledger.actors[actorIndex].name,
+                reason: 'evidence-missing',
+            });
+            continue;
+        }
+        const groundedEvidence = evidence.filter((item) => {
+            const needle = evidenceLookupText(item);
+            return needle.length >= 4 && evidenceHaystack.includes(needle);
+        });
+        if (!groundedEvidence.length) {
+            rejected.push({
+                actorId: ledger.actors[actorIndex].id,
+                name: ledger.actors[actorIndex].name,
+                reason: evidenceHaystack ? 'evidence-not-grounded' : 'evidence-corpus-missing',
+            });
+            continue;
+        }
+        const actor = clone(ledger.actors[actorIndex]);
+        const before = actorProfileSnapshot(actor);
+        const identity = raw.identity && typeof raw.identity === 'object'
+            && !Array.isArray(raw.identity)
+            ? raw.identity
+            : {};
+        const hidden = raw.hidden && typeof raw.hidden === 'object'
+            && !Array.isArray(raw.hidden)
+            ? raw.hidden
+            : {};
+        actor.identity = {
+            ...actor.identity,
+            role: mergeProfileText(actor.identity.role, identity.role, 180),
+            traits: mergeProfileList(actor.identity.traits, stableProfileList(identity.traits, 12, 180), 12, 180),
+            desires: mergeProfileList(actor.identity.desires, stableProfileList(identity.desires, 12, 240), 12, 240),
+            boundaries: mergeProfileList(actor.identity.boundaries, stableProfileList(identity.boundaries, 12, 240), 12, 240),
+            socialStyle: mergeProfileText(actor.identity.socialStyle, stableProfileText(identity.socialStyle)),
+            decisionStyle: mergeProfileText(actor.identity.decisionStyle, stableProfileText(identity.decisionStyle)),
+            speechStyle: mergeProfileText(actor.identity.speechStyle, stableProfileText(identity.speechStyle)),
+            copingStyle: mergeProfileText(actor.identity.copingStyle, stableProfileText(identity.copingStyle)),
+            everydayHabits: mergeProfileList(
+                actor.identity.everydayHabits,
+                stableProfileList(identity.everydayHabits, 8, 180),
+                8,
+                180,
+            ),
+            blindSpots: mergeProfileList(actor.identity.blindSpots, stableProfileList(identity.blindSpots, 8, 220), 8, 220),
+        };
+        actor.longTermGoals = mergeProfileList(actor.longTermGoals, stableProfileList(raw.longTermGoals, 12, 400), 12, 400);
+        actor.capabilities = mergeProfileList(actor.capabilities, stableProfileList(raw.capabilities, 24, 160), 24, 160);
+        actor.hidden = {
+            emotionalInertia: mergeProfileList(
+                actor.hidden.emotionalInertia,
+                stableProfileList(hidden.emotionalInertia, 12, 240),
+                12,
+                240,
+            ),
+            innerConflicts: mergeProfileList(
+                actor.hidden.innerConflicts,
+                stableProfileList(hidden.innerConflicts, 12, 300),
+                12,
+                300,
+            ),
+            privateIntentions: mergeProfileList(
+                actor.hidden.privateIntentions,
+                stableProfileList(hidden.privateIntentions, 12, 300),
+                12,
+                300,
+            ),
+        };
+        if (actorProfileSnapshot(actor) === before) {
+            rejected.push({
+                actorId: actor.id,
+                name: actor.name,
+                reason: 'no-new-profile-facts',
+            });
+            continue;
+        }
+        actor.evidence = mergeEvidence(actor.evidence, [
+            ...groundedEvidence,
+            ref ? `${ref.messageId}:${ref.swipeId}:${ref.generation}:${ref.hash}` : '',
+        ]);
+        actor.updatedTurn = currentTurn;
+        actor.version += 1;
+        ledger.actors[actorIndex] = actor;
+        accepted.push({ actorId: actor.id, name: actor.name, evidence: groundedEvidence });
+    }
+    if (accepted.length) {
+        ledger.turn = Math.max(ledger.turn, currentTurn);
+        ledger.observationReceipts.push({
+            receiptId: `actor-profile:${fingerprint(JSON.stringify([
+                ref?.chatId || ledger.chatId,
+                ref?.messageId || '',
+                ref?.swipeId || 0,
+                ref?.generation || 0,
+                ref?.branchId || '',
+                ref?.hash || '',
+                accepted.map((item) => item.actorId),
+            ])).slice(0, 18)}`,
+            kind: 'profile-enrichment',
+            sourceRef: ref,
+            actorIds: accepted.map((item) => item.actorId),
+            settledAt: Date.now(),
+        });
+        ledger.observationReceipts = ledger.observationReceipts.slice(-120);
+        ledger.updatedAt = Date.now();
+    }
+    return {
+        ledger: normalizeActorLedger(ledger),
+        accepted,
+        rejected,
+    };
 }
 
 export function mergeActorIdentityReveal(value, {

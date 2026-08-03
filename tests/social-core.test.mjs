@@ -18,6 +18,8 @@ test('social narrative contract preserves explicit dark content and blocks inven
     assert.match(contract, /强制状态必须分开/u);
     assert.match(contract, /不是洗白/u);
     assert.match(contract, /不要先复述上一轮正文/u);
+    assert.match(contract, /职业、阵营与本轮情绪不是完整人格/u);
+    assert.match(contract, /删掉姓名后/u);
 });
 
 test('closed option proposals are removed only from assistant prompt messages', () => {
@@ -68,6 +70,18 @@ test('explicit dark action remains reviewable rather than locally erased', () =>
     });
     assert.equal(routed.needed, true);
     assert.ok(routed.reasons.includes('coercion-relation-conflict'));
+});
+
+test('balanced routing flags identity totalization and piles of generic extreme labels', () => {
+    const routed = classifySocialAuditNeed({
+        userText: '我问她接下来打算怎么做。',
+        replyText: '她不再是那个调查员，而是一件致命武器。冰冷、冷酷、暴戾、疯狂的杀意覆盖了全部人格。',
+        changes: [],
+        mode: 'balanced',
+    });
+    assert.equal(routed.needed, true);
+    assert.ok(routed.reasons.includes('identity-totalization'));
+    assert.ok(routed.reasons.includes('stereotype-label-pileup'));
 });
 
 test('semantic auditor can only decide known relation paths', () => {

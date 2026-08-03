@@ -3,6 +3,8 @@ const EXTREME_SOCIAL_RE = /(?:绝望|崩溃|疯狂|狂热|病态|信徒|奴隶|�
 const MOTIVE_ATTRIBUTION_RE = /(?:其实|真正|显然|无疑|本质上|不过是|只是为了|目的(?:就是|在于)|意图(?:就是|在于)|想要借此|以此来).{0,28}(?:试探|操纵|控制|支配|占有|饲养|豢养|剥夺|利用|下手|驯服)|(?:试探|操纵|控制|支配|占有|饲养|豢养|剥夺|利用|驯服).{0,20}(?:目的|意图|打算)/iu;
 const COERCION_RE = /(?:洗脑|精神控制|心智控制|契约命令|强制服从|人格覆写|催眠|奴役|被迫|coerc|mind\s*control|brainwash|compulsion)/iu;
 const ORDINARY_CARE_RE = /(?:买|带|送|递|给).{0,12}(?:茶|水|饭|食物|药|绷带|礼物)|(?:问|询问|打听).{0,16}(?:夜班|兼职|工作|伤势|需不需要|要不要)|(?:照顾|帮忙|道歉|感谢|请客|聊天|谈心|陪同)/iu;
+const TOTALIZING_IDENTITY_RE = /(?:不再是.{0,18}而是(?:一件|一个|纯粹的)|眼(?:里|中).{0,8}只剩|彻底(?:失去|抹去|变成|沦为).{0,18}(?:人格|人性|理智|工具|武器)|(?:整个人|全部人格).{0,12}(?:只剩|化作|变成))/iu;
+const GENERIC_EXTREME_LABEL_RE = /(?:冷酷|冰冷|暴戾|粗暴|凶狠|残忍|疯狂|狂热|病态|绝望|空洞|麻木|结结巴巴|瑟瑟发抖|杀意|致命武器)/giu;
 
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -70,6 +72,10 @@ export function buildSocialNarrativeContract() {
         '9. 上一轮assistant中的<options>或<branches>属于未执行候选。只有用户实际发送的选择才成为事实、动机、记忆、关系证据或未来方向。',
         '10. 回应当前用户输入时直接承接它造成的新动作与反应。除非理解本轮因果不可缺少，不要先复述上一轮正文再开始本轮。',
         '11. 若用户明确选择威胁、操纵、洗脑、人格覆写、主奴关系或其他黑暗行为，按设定、能力、检定、代价和连续证据如实处理；本合同禁止的是无依据加码，不是洗白。',
+        '12. 职业、阵营与本轮情绪不是完整人格。打手不默认咆哮虐待，专业人士不默认冷酷面具，聪明人不默认全知操纵，胆小不默认结巴失能，战士不默认成为“杀意武器”。',
+        '13. 新的持续NPC至少保留一种自己的社交办法、决策办法、现实欲望、边界、习惯或盲点；同场多人不得只靠更换姓名复用同一组极端形容词与反应。',
+        '14. 强烈情绪是状态层，不是身份层。恐惧、愤怒、绝望或服从发生时，人物仍保留长期目标、能力、习惯、关系分寸与恢复路径；除非有明确永久机制和连续证据，不用一句总判词封死人格。',
+        '15. 黑暗内容可以维持原强度，但先用可观察行为、有代价的选择和个体阈值呈现；若删掉姓名后两人的台词、动作和目标仍可互换，必须把其中一人的决定方式写出差异。',
         '</Social_Motive_And_Autonomy_Contract>',
     ].join('\n');
 }
@@ -132,11 +138,16 @@ export function classifySocialAuditNeed({
     if (ORDINARY_CARE_RE.test(userText) && EXTREME_SOCIAL_RE.test(replyText)) {
         reasons.push('ordinary-care-extreme-interpretation');
     }
+    const genericExtremeLabels = String(replyText || '').match(GENERIC_EXTREME_LABEL_RE) || [];
+    if (TOTALIZING_IDENTITY_RE.test(replyText)) reasons.push('identity-totalization');
+    if (genericExtremeLabels.length >= 4) reasons.push('stereotype-label-pileup');
     if (mode === 'strict') {
         return {
             needed: changes.length > 0
                 || EXTREME_SOCIAL_RE.test(replyText)
-                || MOTIVE_ATTRIBUTION_RE.test(replyText),
+                || MOTIVE_ATTRIBUTION_RE.test(replyText)
+                || TOTALIZING_IDENTITY_RE.test(replyText)
+                || genericExtremeLabels.length >= 4,
             reasons: [...new Set(reasons.length ? reasons : ['strict-semantic-review'])],
         };
     }

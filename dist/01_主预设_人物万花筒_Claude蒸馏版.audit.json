@@ -1,0 +1,47 @@
+{
+  "transformVersion": "2.1-character-kaleidoscope",
+  "sourceName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_偶发性双保险版",
+  "outputName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_人物万花筒版",
+  "promptCount": 215,
+  "orderCount": 183,
+  "enabledCount": 75,
+  "modifications": [
+    {
+      "identifier": "cf9b6278-b776-4c56-b02d-d34f0f0f7d31",
+      "beforeName": "",
+      "afterName": "🎭人物万花筒V1（反脸谱·群像碰撞·情绪不覆写人格）",
+      "beforeLength": 0,
+      "afterLength": 1505,
+      "beforeSha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "afterSha256": "F5D84956BDA2C0EC196D4F13DD136B63205E8C7FBFFB9B8177DBF938B4F3B14F"
+    },
+    {
+      "identifier": "941c6128-f8b7-470f-b598-8351e24724cc",
+      "beforeName": "",
+      "afterName": "🖼️正文沉浸排版V1（轻量·载体聊天气泡）",
+      "beforeLength": 0,
+      "afterLength": 419,
+      "beforeSha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "afterSha256": "850DE4F77F41752696E3B13AE9B4D4D7327E4407641ED5C51284FA7947CBC215"
+    }
+  ],
+  "serendipityDoubleGate": true,
+  "characterDiversityIdentifier": "cf9b6278-b776-4c56-b02d-d34f0f0f7d31",
+  "narrativeSurfaceIdentifier": "941c6128-f8b7-470f-b598-8351e24724cc",
+  "storyRegexIds": [
+    "d0a779f6-9168-499c-b12a-e65ca03e9f8c",
+    "27e75ac7-2df0-47d5-a27c-fbe86e07f9fc",
+    "c33f4378-df39-4d2f-b74f-408a0362cf0a",
+    "8e27bdec-c69d-4bbc-b285-c1bab8a45c42",
+    "f83f5aa5-c11a-4379-9cc6-d2814ff1f930",
+    "680bd653-3d2d-4bf5-a774-e076a26bb2e1"
+  ],
+  "sourceFile": "01_主预设_公平导演偶发性双保险版.json",
+  "outputFile": "01_主预设_人物万花筒_Claude蒸馏版.json",
+  "sourceBytes": 524016,
+  "outputBytes": 535699,
+  "sourceSha256": "5C469BEA5E68E087E4D9874E8F2AD6579B030796056CFC961D093C0C90F714E9",
+  "outputSha256": "ED394DC76E50B248217C2408DB1025524B1D3318C7622EAEC294E81CDE06279F",
+  "sourceUnchanged": true,
+  "createdAt": "2026-08-03T13:26:10.851Z"
+}
