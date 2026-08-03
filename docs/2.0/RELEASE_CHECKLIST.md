@@ -76,8 +76,8 @@
 - [x] 最终离线包包含 72 个许可文件、人物 DNA 核心且不含数据库桥；精确字节数与 SHA-256 已记录在 rc.7 报告和 `dist/SHA256SUMS.txt`。
 - [x] `dist/SHA256SUMS.txt` 包含最终 rc.7 离线包 SHA-256。
 - [x] `docs/qc-reports/v2.0.0-rc.7.json` 如实记录当前真实环境、模型与 A/B 通过项，以及 TauriTavern 后台入口阻断状态；`npm.cmd run qc:ci` 通过 blocked 报告门。
-- [ ] 最终实现与报告提交后运行 `npm.cmd run qc:record` 与 `npm.cmd run qc:gate`，收据绑定发布 HEAD。
-- [ ] 推送前再次 fetch 并核验远端 `main`；当前本地已知基线为 `a3b10c5d62c724626e0efe4254902da3525f012d`。
-- [ ] 仅在用户明确授权后正常推送当前 `codex/serendipity-engine-no-billing`，不得 force。
-- [x] 本任务没有更新 `main`、tag 或 GitHub Release 的授权。
-- [x] 未创建发布 tag、GitHub Release，也未更新 `main`。
+- [x] 首个 rc.7 提交已运行 `npm.cmd run qc:record` 与 `npm.cmd run qc:gate`，收据绑定 `72748c0c3458`；授权记录提交后将重新绑定最终 HEAD。
+- [x] 已联网核验远端 `main` 基线为 `8a07c87b0bb84611eb4a391a65dc4bd45cf69195`。
+- [x] 候选分支已正常推送到 `codex/serendipity-engine-no-billing`，未 force；PR #30 已创建。
+- [x] 用户在知悉自动发布门仍被 TauriTavern 后台入口与本次数据库 bundle 网络不可用阻断的情况下，明确授权通过 PR #30 手动更新 `main`；该授权不把阻断改写为通过。
+- [x] 未授权、未创建发布 tag 或 GitHub Release。

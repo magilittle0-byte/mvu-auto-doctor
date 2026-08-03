@@ -612,7 +612,19 @@
       "refs/heads/codex/serendipity-engine-no-billing"
     ],
     "tagAllowed": false,
-    "githubReleaseAllowed": false
+    "githubReleaseAllowed": false,
+    "manualUserOverride": {
+      "authorized": true,
+      "authorizedAt": "2026-08-03T14:48:00.7110631Z",
+      "target": "refs/heads/main",
+      "mechanism": "merge-pr-30",
+      "automatedBlockedEvidenceGateStillFailClosed": true,
+      "knownBlockersAcknowledged": [
+        "tauritavern_background_entry_unavailable",
+        "database_bundle_network_unavailable"
+      ],
+      "tagOrGithubReleaseAuthorized": false
+    }
   },
   "privacy": {
     "apiKeyIncluded": false,
