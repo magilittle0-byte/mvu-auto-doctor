@@ -65,6 +65,7 @@ import {
     applyAcceptedContentObservations,
     emptyActorLedger,
     inferObserverActorIds,
+    mergeActorProfilePatches,
     mergeActorWorldEventsIntoContinuity,
     migrateActorLedgerFromContinuity,
     normalizeActorLedger,
@@ -126,7 +127,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.6';
+const VERSION = '2.0.0-rc.7';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 11;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -175,6 +176,9 @@ const DEFAULTS = Object.freeze({
     strictConnectionPreset: '__current__',
     fastConnectionPreset: '__current__',
     modelRoutingSettingsVersion: 2,
+    strictChannelConcurrency: 2,
+    fastChannelConcurrency: 4,
+    modelConcurrencySettingsVersion: 1,
     preventDoubleWrite: true,
     notifyNoChange: false,
     notificationLevel: 'all',
@@ -218,9 +222,9 @@ const DEFAULTS = Object.freeze({
     actorShardMode: 'auto',
     actorShardMaxWorkers: 2,
     actorShardMaxTokens: 1200,
-    actorShardTimeoutMs: 30000,
+    actorShardTimeoutMs: 90000,
     actorShardPromptAddon: '',
-    actorShardSettingsVersion: 2,
+    actorShardSettingsVersion: 3,
     actorLedgerMaxActorsPerTurn: 2,
     actorLedgerExplorationSlots: 1,
     actorLedgerCollisionIntensity: 2,
@@ -388,6 +392,7 @@ function getSettings() {
     const previousContinuitySettingsVersion = Number(settings.continuitySettingsVersion) || 0;
     const previousForumSettingsVersion = Number(settings.forumSettingsVersion) || 0;
     const previousModelRoutingSettingsVersion = Number(settings.modelRoutingSettingsVersion) || 0;
+    const previousModelConcurrencySettingsVersion = Number(settings.modelConcurrencySettingsVersion) || 0;
     const previousSocialAuditSettingsVersion = Number(settings.socialAuditSettingsVersion) || 0;
     const previousActorShardSettingsVersion = Number(settings.actorShardSettingsVersion) || 0;
     const previousActorLedgerSettingsVersion = Number(settings.actorLedgerSettingsVersion) || 0;
@@ -470,8 +475,8 @@ function getSettings() {
         Math.max(768, Math.floor(Number(settings.actorShardMaxTokens) || 1200)),
     );
     settings.actorShardTimeoutMs = Math.min(
-        60000,
-        Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 30000)),
+        120000,
+        Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 90000)),
     );
     settings.actorLedgerMaxActorsPerTurn = Math.min(
         5,
@@ -505,13 +510,20 @@ function getSettings() {
         settings.actorShardMode = 'off';
         settings.actorShardMaxWorkers = 2;
         settings.actorShardMaxTokens = 1200;
-        settings.actorShardTimeoutMs = 30000;
+        settings.actorShardTimeoutMs = 90000;
         settings.actorShardSettingsVersion = 1;
         changed = true;
     }
     if (previousActorShardSettingsVersion < 2) {
         settings.actorShardMode = 'auto';
         settings.actorShardSettingsVersion = 2;
+        changed = true;
+    }
+    if (previousActorShardSettingsVersion < 3) {
+        if (settings.actorShardTimeoutMs === 30000) {
+            settings.actorShardTimeoutMs = 90000;
+        }
+        settings.actorShardSettingsVersion = 3;
         changed = true;
     }
     if (previousActorLedgerSettingsVersion < 1) {
@@ -618,6 +630,23 @@ function getSettings() {
     const normalizedPresets = normalizeConnectionPresets(settings.connectionPresets);
     if (JSON.stringify(settings.connectionPresets) !== JSON.stringify(normalizedPresets)) {
         settings.connectionPresets = normalizedPresets;
+        changed = true;
+    }
+    for (const [key, fallback] of [
+        ['strictChannelConcurrency', 2],
+        ['fastChannelConcurrency', 4],
+    ]) {
+        const normalized = Math.min(
+            8,
+            Math.max(1, Math.floor(Number(settings[key]) || fallback)),
+        );
+        if (settings[key] !== normalized) {
+            settings[key] = normalized;
+            changed = true;
+        }
+    }
+    if (previousModelConcurrencySettingsVersion < 1) {
+        settings.modelConcurrencySettingsVersion = 1;
         changed = true;
     }
     const presetNames = new Set(normalizedPresets.map((item) => item.name));
@@ -1652,7 +1681,7 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
                 'ok',
                 label,
                 profile.provider === 'direct'
-                    ? `独立兼容 API 已配置（${profile.name} / ${profile.model}）`
+                    ? `独立兼容 API 已配置（${profile.name} / ${profile.model} / 同时请求 ${channel === 'fast' ? settings.fastChannelConcurrency : settings.strictChannelConcurrency}）`
                     : profile.provider === 'story-oracle'
                         ? '兼容旧版故事神谕连接'
                         : '使用酒馆当前连接，不经过故事神谕',
@@ -4290,7 +4319,7 @@ function modelConnectionKey(profile) {
             .toLowerCase();
         // The key never leaves memory and never enters logs. Fingerprinting the
         // credential makes differently named presets sharing the same upstream
-        // serialize correctly without retaining the raw secret in the Map key.
+        // join the same per-channel pool without retaining the raw secret.
         const credential = fingerprint(String(profile.apiKey || ''));
         return [
             'direct',
@@ -4346,8 +4375,14 @@ async function callModel(messages, options = {}) {
     const parallelLane = String(options.parallelLane || '')
         .replace(/[^a-zA-Z0-9_-]/gu, '')
         .slice(0, 40);
-    const connectionKey = parallelLane
-        ? `${modelConnectionKey(profile)}:lane:${parallelLane}`
+    const configuredConcurrency = channel === 'fast'
+        ? settings.fastChannelConcurrency
+        : settings.strictChannelConcurrency;
+    const channelConcurrency = profile.provider === 'direct'
+        ? Math.min(8, Math.max(1, Math.floor(Number(configuredConcurrency) || 1)))
+        : 1;
+    const connectionKey = profile.provider === 'direct'
+        ? `${modelConnectionKey(profile)}:channel:${channel}`
         : modelConnectionKey(profile);
     const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
@@ -4480,7 +4515,8 @@ async function callModel(messages, options = {}) {
         }, {
             priority: modelTaskPriority(task, options.priority),
             signal: controller.signal,
-            label: task,
+            label: parallelLane ? `${task}:${parallelLane}` : task,
+            maxConcurrent: channelConcurrency,
         });
     } finally {
         externalSignal?.removeEventListener?.('abort', abortFromExternal);
@@ -4526,12 +4562,12 @@ function buildSocialAuditMessages({
     const system = [
         '你是人物动机、人格自主性与持久关系变更的结构化二级审核器。',
         '你不负责把故事改成温暖、正能量或善意，也不评价文风。明确威胁、欺骗、洗脑、主奴、黑暗关系与极端情绪，只要有本轮用户授权、设定/机制或连续证据，就必须放行。',
-        '只审核两件事：一，旁白是否把用户未表达的控制、试探、饲养、占有等目的写成全知事实；二，本轮关系字段变化是否有足够证据，以及强制状态是否被误写成自愿好感、信任、亲密或忠诚。',
+        '只审核三件事：一，旁白是否把用户未表达的控制、试探、饲养、占有等目的写成全知事实；二，本轮关系字段变化是否有足够证据，以及强制状态是否被误写成自愿好感、信任、亲密或忠诚；三，正文是否把职业或一次强烈情绪直接写成完整人格，或让多名NPC复用同一组冷酷、暴怒、绝望、怯懦模板。',
         'NPC可以怀疑，但NPC有限视角的怀疑不能作为全知事实；历史恶行可以支持警惕，却不能自动证明本轮善意虚伪。',
-        '普通互动允许不改变持久关系。强烈情绪允许发生，但单次事件不能无依据永久改写人格。',
+        '普通互动允许不改变持久关系。强烈情绪允许发生，但单次事件不能无依据永久改写人格；黑暗内容本身不是违规，缺少个体目标、阈值、习惯与恢复路径的换名模板才需要warning。',
         '每个给出的关系路径都必须返回一条decision。action只能是allow或revert。revert表示恢复到本轮前状态；不得提出新值、替代路径或正文改写。',
         '只返回一个JSON对象，不要代码围栏：',
-        '{"verdict":"pass|warning|violation","summary":"短结论","findings":[{"type":"unauthorized_motive|coercion_conflation|unsupported_relationship|extreme_emotion|valid_dark_content|other","severity":"info|warning|error","reason":"原因","evidence":"给定文本中的短证据"}],"decisions":[{"path":"必须逐字复制给定路径","action":"allow|revert","reason":"原因","evidence":"短证据"}]}',
+        '{"verdict":"pass|warning|violation","summary":"短结论","findings":[{"type":"unauthorized_motive|coercion_conflation|unsupported_relationship|identity_totalization|stereotype_pileup|extreme_emotion|valid_dark_content|other","severity":"info|warning|error","reason":"原因","evidence":"给定文本中的短证据"}],"decisions":[{"path":"必须逐字复制给定路径","action":"allow|revert","reason":"原因","evidence":"短证据"}]}',
     ].join('\n');
     const user = [
         '=== 触发原因 ===',
@@ -7642,6 +7678,7 @@ function buildContinuityMessages({
     retryReason = '',
     excludedSourceIndexes = [],
     actorShardCandidates = null,
+    actorLedger = null,
     worldLaneSchedule = null,
 }) {
     const settings = getSettings();
@@ -7707,6 +7744,8 @@ function buildContinuityMessages({
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 世界采用双轨调度：人物轨维护有身份、有限认知与独立行动的角色；结构世界轨独立维护势力、环境、经济、长期趋势、传播与因果余波。任何一轨都不得替代或吞并另一轨。',
+        '- 人物轨还维护增量人物档案。职业、阵营和本轮强烈情绪不是完整人格；害怕不等于结巴失能，专业不等于冷酷面具，打手不等于咆哮虐待，战士不等于杀意机器。档案要记录人物各自的社交办法、决策办法、现实欲望、边界、日常习惯、盲点、说话节奏、应对压力方式和可共存矛盾。',
+        '- actorProfiles只能补充已在“当前人物档案”中存在的稳定actorId，并且每项evidence必须逐字摘录当前角色卡、世界书、MVU锚点或最近已发生正文中的具体短句；本地会拒绝找不到原文的转述和推测。禁止把一次恐惧、愤怒、绝望或服从直接固化为永久trait；没有新证据就返回空数组。既有档案只做增量补全，不因本轮刺激整套覆写。',
         '- 势力与环境过程可以没有单一代表人物，并可在没有人物候选、人物分片失败或人物行动留在幕后时继续推进、结算或自行结束；不得为了调用人物轨而虚构一个代言NPC。',
         '- 本地另有一个三通道共享压力闸：人物、势力、环境分别调度，但共同消耗医生自己的压力与注入预算。闸门延迟的候选保持未发生；禁止在JSON中换名复制或升级。',
         '- <content>是本回合已发生事实，只能读取和承认，绝不改写、截断或要求重生成。若正文已经出现过量威胁，承认现状，但本轮不得再新增、聚合、复制或升级威胁；优先恢复、错开、互相牵制、信息、资源、退路或远端留存。',
@@ -7811,6 +7850,18 @@ function buildContinuityMessages({
         '',
         '=== 当前MVU主线锚点（时间/地点/人物/势力/任务/资源，只读）===',
         stateAnchors,
+        '',
+        '=== 当前人物档案（增量补全；hidden只供幕后连续性，不得写成公开事实）===',
+        safeJson((actorLedger?.actors || []).slice(0, 32).map((actor) => ({
+            actorId: actor.id,
+            name: actor.name,
+            role: actor.identity?.role || '',
+            identity: actor.identity || {},
+            longTermGoals: actor.longTermGoals || [],
+            capabilities: actor.capabilities || [],
+            hidden: actor.hidden || {},
+            evidence: (actor.evidence || []).slice(-8),
+        }))),
         ...(actorShardCandidates
             ? [
                 '',
@@ -7850,6 +7901,19 @@ function buildContinuityMessages({
         '{',
         '  "turn": 1,',
         '  "lastTick": {"turn": 1, "action": "advanced", "threadId": "稳定ID", "reason": "本轮调度的具体事实依据"},',
+        '  "actorProfiles": [{',
+        '    "actorId": "必须来自当前人物档案的稳定ID", "name": "同一人物名",',
+        '    "evidence": ["角色卡/世界书/已发生正文中的具体短证据"],',
+        '    "identity": {',
+        '      "role": "社会或剧情角色，不是人格标签", "traits": ["有证据的长期倾向"],',
+        '      "desires": ["不围着玩家转的现实欲望"], "boundaries": ["边界与愿付代价"],',
+        '      "socialStyle": "与人相处的办法", "decisionStyle": "做决定的办法",',
+        '      "speechStyle": "说话密度/句长/停顿与回避方式", "copingStyle": "受压后的应对与恢复路径",',
+        '      "everydayHabits": ["小而稳定的日常习惯"], "blindSpots": ["能力之外的盲点"]',
+        '    },',
+        '    "longTermGoals": ["可持续目标"], "capabilities": ["已有证据的能力"],',
+        '    "hidden": {"emotionalInertia": ["情绪惯性"], "innerConflicts": ["可共存矛盾"], "privateIntentions": ["仅供幕后连续性的私人打算"]}',
+        '  }],',
         '  "threads": [{',
         '    "id": "稳定ID", "title": "短标题", "kind": "parallel",',
         '    "eventType": "conflict", "level": 2,',
@@ -7969,7 +8033,10 @@ async function collectActorShardProposals(captured, {
     );
     const result = await runActorShardBatch({
         candidates,
-        maxConcurrency: settings.actorShardMaxWorkers,
+        maxConcurrency: Math.min(
+            settings.actorShardMaxWorkers,
+            settings.fastChannelConcurrency,
+        ),
         timeoutMs: settings.actorShardTimeoutMs,
         isCurrent: () => continuityTargetIsCurrent(captured, token).ok,
         onProgress(progress) {
@@ -8376,7 +8443,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             independentOfActors: true,
         })),
     };
-    const actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
+    let actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
     const worldPressureChanged = JSON.stringify(storedWorldPressure) !== JSON.stringify(worldPressure);
     const localProgressed = (
         clockPlan.changedThreadIds.length > 0
@@ -8407,6 +8474,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             retryReason,
             excludedSourceIndexes: sourcePlan.skippedIndexes,
             actorShardCandidates,
+            actorLedger,
             worldLaneSchedule,
         });
         let output = '';
@@ -8435,6 +8503,29 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 maxThreads: settings.continuityMaxThreads,
             });
             if (parsed.state) {
+                const profileMerge = mergeActorProfilePatches(
+                    actorLedger,
+                    parsed.raw?.actorProfiles,
+                    {
+                        turn: tickTurn,
+                        sourceRef: sourceRefOf(captured),
+                        maxPatches: settings.actorLedgerMaxActorsPerTurn + 4,
+                        evidenceCorpus: [
+                            acceptedNarrative,
+                            worldContext,
+                            stateAnchors,
+                        ].join('\n'),
+                    },
+                );
+                if (profileMerge.accepted.length) {
+                    actorLedger = profileMerge.ledger;
+                    actorLedgerChanged = true;
+                    recordOperation(
+                        '人物档案',
+                        `补全 ${profileMerge.accepted.map((item) => item.name).join('、')} 的人物DNA；拒绝 ${profileMerge.rejected.length} 项无效候选`,
+                        'ok',
+                    );
+                }
                 const rawTick = parsed.raw?.lastTick;
                 const heldThread = scheduledBase.threads.find(
                     (thread) => thread.id === rawTick?.threadId,
@@ -11042,6 +11133,8 @@ function bindModelConnectionManager(root) {
     const savePreset = root.querySelector('.mvuad-connection-preset-save');
     const strictRoute = root.querySelector('.mvuad-strict-preset');
     const fastRoute = root.querySelector('.mvuad-fast-preset');
+    const strictConcurrency = root.querySelector('.mvuad-strict-concurrency');
+    const fastConcurrency = root.querySelector('.mvuad-fast-concurrency');
     const strictStatus = root.querySelector('.mvuad-strict-provider-status');
     const fastStatus = root.querySelector('.mvuad-fast-provider-status');
 
@@ -11119,6 +11212,8 @@ function bindModelConnectionManager(root) {
 
     writeEditor(currentConnectionDraft());
     renderPresetOptions();
+    strictConcurrency.value = String(getSettings().strictChannelConcurrency);
+    fastConcurrency.value = String(getSettings().fastChannelConcurrency);
 
     for (const input of [endpoint, apiKey, model, viaBackend, rawUrl]) {
         input.addEventListener('change', () => {
@@ -11203,6 +11298,22 @@ function bindModelConnectionManager(root) {
         saveSettings();
         inspectEnvironment();
     });
+    for (const [input, key, fallback] of [
+        [strictConcurrency, 'strictChannelConcurrency', 2],
+        [fastConcurrency, 'fastChannelConcurrency', 4],
+    ]) {
+        input.addEventListener('change', () => {
+            const settings = getSettings();
+            const value = Math.min(
+                8,
+                Math.max(1, Math.floor(Number(input.value) || fallback)),
+            );
+            settings[key] = value;
+            input.value = String(value);
+            saveSettings();
+            inspectEnvironment();
+        });
+    }
     fetchModels.addEventListener('click', async () => {
         saveEditor();
         fetchModels.disabled = true;
@@ -11472,15 +11583,24 @@ function buildSettingsPanel() {
                                     <span>严格变量通道</span>
                                     <select class="text_pole mvuad-strict-preset"></select>
                                 </label>
-                                <div class="mvuad-description">负责 MVU 变量诊断与修复；建议选择格式遵从性强的模型。</div>
+                                <label class="mvuad-number">
+                                    <span>严格通道同时请求数</span>
+                                    <input class="text_pole mvuad-strict-concurrency" type="number" min="1" max="8" step="1">
+                                </label>
+                                <div class="mvuad-description">负责 MVU 变量诊断与修复；默认同时 2 个独立 API 请求。变量写入仍逐目标串行提交。</div>
                                 <div class="mvuad-actions">
                                     <button class="menu_button mvuad-test-strict" type="button">测试严格通道</button>
                                 </div>
                                 <div class="mvuad-provider-status mvuad-strict-provider-status" role="status"></div>
                                 <label class="mvuad-select">
-                                    <span>轻量世界 / 论坛通道</span>
+                                    <span>轻量人物 / 世界 / 论坛通道</span>
                                     <select class="text_pole mvuad-fast-preset"></select>
                                 </label>
+                                <label class="mvuad-number">
+                                    <span>轻量通道同时请求数</span>
+                                    <input class="text_pole mvuad-fast-concurrency" type="number" min="1" max="8" step="1">
+                                </label>
+                                <div class="mvuad-description">人物分片、关系二审、世界与论坛共享此并发池；默认同时 4 个独立 API 请求。</div>
                                 <div class="mvuad-fast-options"></div>
                                 <div class="mvuad-actions">
                                     <button class="menu_button mvuad-test-fast" type="button">测试轻量通道</button>

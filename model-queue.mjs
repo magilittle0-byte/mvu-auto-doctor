@@ -9,6 +9,11 @@ function normalizedPriority(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
+function normalizedConcurrency(value) {
+    const number = Math.floor(Number(value) || 1);
+    return Math.min(8, Math.max(1, number));
+}
+
 export class ConnectionTaskScheduler {
     constructor() {
         this.connections = new Map();
@@ -19,6 +24,7 @@ export class ConnectionTaskScheduler {
         priority = 0,
         signal = null,
         label = '',
+        maxConcurrent = 1,
     } = {}) {
         if (typeof run !== 'function') {
             return Promise.reject(new TypeError('模型连接队列缺少可执行任务'));
@@ -29,10 +35,12 @@ export class ConnectionTaskScheduler {
 
         const key = String(connectionKey || 'default');
         const state = this.connections.get(key) || {
-            active: false,
-            activeLabel: '',
+            activeCount: 0,
+            activeLabels: new Map(),
+            maxConcurrent: normalizedConcurrency(maxConcurrent),
             pending: [],
         };
+        state.maxConcurrent = normalizedConcurrency(maxConcurrent);
         this.connections.set(key, state);
 
         return new Promise((resolve, reject) => {
@@ -68,8 +76,11 @@ export class ConnectionTaskScheduler {
     snapshot() {
         return [...this.connections.entries()].map(([key, state]) => ({
             key,
-            active: state.active,
-            activeLabel: state.activeLabel,
+            active: state.activeCount > 0,
+            activeCount: state.activeCount,
+            activeLabel: [...state.activeLabels.values()][0] || '',
+            activeLabels: [...state.activeLabels.values()],
+            maxConcurrent: state.maxConcurrent,
             pending: state.pending.map((entry) => ({
                 label: entry.label,
                 priority: entry.priority,
@@ -78,39 +89,36 @@ export class ConnectionTaskScheduler {
     }
 
     cleanup(key, state) {
-        if (!state.active && !state.pending.length) this.connections.delete(key);
+        if (state.activeCount === 0 && !state.pending.length) this.connections.delete(key);
     }
 
     drain(key, state) {
-        if (state.active) return;
-        const entry = state.pending.shift();
-        if (!entry) {
-            this.cleanup(key, state);
-            return;
-        }
-        if (entry.abortListener && entry.signal?.removeEventListener) {
-            entry.signal.removeEventListener('abort', entry.abortListener);
-        }
-        if (entry.signal?.aborted) {
-            entry.reject(abortError(entry.signal.reason));
-            this.drain(key, state);
-            return;
-        }
+        while (state.activeCount < state.maxConcurrent && state.pending.length) {
+            const entry = state.pending.shift();
+            if (entry.abortListener && entry.signal?.removeEventListener) {
+                entry.signal.removeEventListener('abort', entry.abortListener);
+            }
+            if (entry.signal?.aborted) {
+                entry.reject(abortError(entry.signal.reason));
+                continue;
+            }
 
-        state.active = true;
-        state.activeLabel = entry.label;
-        Promise.resolve()
-            .then(entry.run)
-            .then((value) => {
-                state.active = false;
-                state.activeLabel = '';
-                this.drain(key, state);
-                entry.resolve(value);
-            }, (error) => {
-                state.active = false;
-                state.activeLabel = '';
-                this.drain(key, state);
-                entry.reject(error);
-            });
+            state.activeCount += 1;
+            state.activeLabels.set(entry.sequence, entry.label);
+            Promise.resolve()
+                .then(entry.run)
+                .then((value) => {
+                    state.activeCount -= 1;
+                    state.activeLabels.delete(entry.sequence);
+                    this.drain(key, state);
+                    entry.resolve(value);
+                }, (error) => {
+                    state.activeCount -= 1;
+                    state.activeLabels.delete(entry.sequence);
+                    this.drain(key, state);
+                    entry.reject(error);
+                });
+        }
+        this.cleanup(key, state);
     }
 }

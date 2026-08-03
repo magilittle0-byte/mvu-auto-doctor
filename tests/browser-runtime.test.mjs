@@ -880,7 +880,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.6');
+    assert.equal(continuity.version, '2.0.0-rc.7');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2548,7 +2548,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.6');
+    assert.equal(lifecycle.version, '2.0.0-rc.7');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -3001,6 +3001,8 @@ try {
         const modelList = root.querySelector('.mvuad-model-list');
         const strictRoute = root.querySelector('.mvuad-strict-preset');
         const fastRoute = root.querySelector('.mvuad-fast-preset');
+        const strictConcurrency = root.querySelector('.mvuad-strict-concurrency');
+        const fastConcurrency = root.querySelector('.mvuad-fast-concurrency');
         const network = [];
         window.fetch = async (url, options = {}) => {
             network.push({
@@ -3038,6 +3040,10 @@ try {
         strictRoute.dispatchEvent(new Event('change'));
         fastRoute.value = '格式修复 3.5P';
         fastRoute.dispatchEvent(new Event('change'));
+        strictConcurrency.value = '3';
+        strictConcurrency.dispatchEvent(new Event('change'));
+        fastConcurrency.value = '6';
+        fastConcurrency.dispatchEvent(new Event('change'));
         const backendNetwork = [];
         const backendModelCalls = [];
         t.context.getRequestHeaders = () => ({
@@ -3107,6 +3113,8 @@ try {
             saved: structuredClone(settings.connectionPresets),
             strictRoute: settings.strictConnectionPreset,
             fastRoute: settings.fastConnectionPreset,
+            strictConcurrency: settings.strictChannelConcurrency,
+            fastConcurrency: settings.fastChannelConcurrency,
             legacyHidden: document.querySelector('.mvuad-model-routing')?.hidden === true,
             backendNetwork,
             backendModelCalls,
@@ -3134,6 +3142,8 @@ try {
     assert.equal(connectionManagerResult.saved[1].viaBackend, true);
     assert.equal(connectionManagerResult.strictRoute, '后端转发');
     assert.equal(connectionManagerResult.fastRoute, '格式修复 3.5P');
+    assert.equal(connectionManagerResult.strictConcurrency, 3);
+    assert.equal(connectionManagerResult.fastConcurrency, 6);
     assert.equal(connectionManagerResult.legacyHidden, true);
     assert.equal(connectionManagerResult.backendNetwork.length, 1);
     assert.equal(
@@ -3179,9 +3189,9 @@ try {
                 },
                 {
                     name: 'fast-test',
-                    endpoint: 'https://api.deepseek.example',
+                    endpoint: 'https://strict.example/v1',
                     model: 'deepseek-fast',
-                    apiKey: 'fast-test-secret',
+                    apiKey: 'strict-test-secret',
                     viaBackend: false,
                     rawUrl: false,
                 },
@@ -3260,7 +3270,7 @@ try {
     assert.equal(
         directParallelStarted.maxActive,
         2,
-        '变量医生与活世界必须从同一正文快照独立启动，不能互设长时间屏障',
+        '严格与轻量通道即使共用同一独立 API 预设也必须按各自并发池启动',
     );
     assert.deepEqual(
         directParallelStarted.requests.map((request) => request.model).sort(),
@@ -3484,6 +3494,116 @@ try {
     assert.equal(metadataRace.forum.turn, 1, '并发连续性写入不得覆盖刚保存的论坛页');
     assert.equal(metadataRace.forum.posts.length, 4);
     await metadataRacePage.close();
+
+    const directFastPoolPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await directFastPoolPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await directFastPoolPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await directFastPoolPage.evaluate(() => {
+        const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            fastModelProvider: 'direct',
+            connectionEndpoint: 'https://shared-fast.example/v1',
+            connectionApiKey: 'shared-fast-secret',
+            connectionModel: 'gemini-fast',
+            connectionViaBackend: false,
+            connectionRawUrl: false,
+            fastConnectionPreset: '__current__',
+            fastChannelConcurrency: 2,
+            modelConcurrencySettingsVersion: 1,
+        });
+        const pending = {};
+        const network = { active: 0, maxActive: 0, tasks: [] };
+        window.__DIRECT_FAST_POOL__ = { pending, network };
+        window.fetch = async (_url, options = {}) => {
+            const body = JSON.parse(options.body || '{}');
+            const system = String(body.messages?.[0]?.content || '');
+            const task = system.includes('独立网络论坛模拟器') ? 'forum' : 'continuity';
+            network.active += 1;
+            network.maxActive = Math.max(network.maxActive, network.active);
+            network.tasks.push(task);
+            const content = task === 'forum'
+                ? JSON.stringify({
+                    summary: '并发池论坛页',
+                    newPosts: ['A', 'B', 'C', 'D'].map((suffix, index) => ({
+                        id: `POOL-${suffix}`,
+                        board: '公开广场',
+                        title: `并发池帖子${suffix}`,
+                        author: `网友${suffix}`,
+                        body: `第${index + 1}条公开消息。`,
+                        kind: 'chat',
+                        source: '公开日常',
+                        heat: index + 1,
+                    })),
+                    comments: [
+                        { postId: 'POOL-A', author: '甲', body: '公开回复甲', likes: 1 },
+                        { postId: 'POOL-A', author: '乙', body: '公开回复乙', likes: 1 },
+                        { postId: 'POOL-B', author: '丙', body: '公开回复丙', likes: 1 },
+                        { postId: 'POOL-B', author: '丁', body: '公开回复丁', likes: 1 },
+                        { postId: 'POOL-C', author: '戊', body: '公开回复戊', likes: 1 },
+                        { postId: 'POOL-D', author: '己', body: '公开回复己', likes: 1 },
+                    ],
+                })
+                : JSON.stringify({
+                    turn: 1,
+                    threads: [{
+                        id: 'POOL-WORLD-01',
+                        title: '并发池世界事件',
+                        origin: 'ambient',
+                        relation: 'independent',
+                        stage: 'seeded',
+                        summary: '公开市集照常轮换摊位。',
+                        nextBeat: '下一批摊主登记。',
+                        trigger: '市集日程推进。',
+                        intersection: '玩家到访市集时才可能观察到。',
+                        seedBasis: '公开制度：市集轮换',
+                        knowledge: 'hidden',
+                    }],
+                });
+            return await new Promise((resolve) => {
+                pending[task] = () => {
+                    network.active -= 1;
+                    resolve(new Response(JSON.stringify({
+                        choices: [{ message: { content } }],
+                    }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' },
+                    }));
+                };
+            });
+        };
+        window.__DIRECT_FAST_POOL__.forumPromise = window.MvuAutoDoctorAPI.runForum();
+        window.__DIRECT_FAST_POOL__.continuityPromise = window.MvuAutoDoctorAPI.runContinuity();
+    });
+    await directFastPoolPage.waitForFunction(() => (
+        window.__DIRECT_FAST_POOL__?.network?.tasks?.length === 2
+    ), null, { timeout: 20000 });
+    const directFastPoolStarted = await directFastPoolPage.evaluate(() => ({
+        network: structuredClone(window.__DIRECT_FAST_POOL__.network),
+        bothPending: !!window.__DIRECT_FAST_POOL__.pending.forum
+            && !!window.__DIRECT_FAST_POOL__.pending.continuity,
+    }));
+    assert.equal(directFastPoolStarted.network.maxActive, 2);
+    assert.equal(directFastPoolStarted.bothPending, true);
+    assert.deepEqual(
+        [...directFastPoolStarted.network.tasks].sort(),
+        ['continuity', 'forum'],
+    );
+    await directFastPoolPage.evaluate(() => {
+        window.__DIRECT_FAST_POOL__.pending.forum();
+        window.__DIRECT_FAST_POOL__.pending.continuity();
+    });
+    const directFastPoolFinished = await directFastPoolPage.evaluate(async () => {
+        await Promise.all([
+            window.__DIRECT_FAST_POOL__.forumPromise,
+            window.__DIRECT_FAST_POOL__.continuityPromise,
+        ]);
+        return {
+            forumTurn: window.MvuAutoDoctorAPI.getForumState().turn,
+            continuityTurn: window.MvuAutoDoctorAPI.getContinuityState().turn,
+        };
+    });
+    assert.deepEqual(directFastPoolFinished, { forumTurn: 1, continuityTurn: 1 });
+    await directFastPoolPage.close();
 
     const continueCheckpointPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await continueCheckpointPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -5265,6 +5385,27 @@ try {
     await actorIntegrationPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
     await actorIntegrationPage.evaluate(async () => {
         const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            fastModelProvider: 'direct',
+            connectionEndpoint: 'https://actor-pool.example/v1',
+            connectionApiKey: 'actor-pool-test-secret',
+            connectionModel: 'actor-pool-test-model',
+            connectionViaBackend: false,
+            connectionRawUrl: false,
+            fastConnectionPreset: '__current__',
+            fastChannelConcurrency: 4,
+            modelConcurrencySettingsVersion: 1,
+        });
+        window.fetch = async (_url, options = {}) => {
+            const body = JSON.parse(options.body || '{}');
+            const content = await window.StoryOracleAPI.run(body.messages || []);
+            return new Response(JSON.stringify({
+                choices: [{ message: { content } }],
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        };
         const mode = document.querySelector('.mvuad-actor-shard-mode');
         mode.value = 'on';
         mode.dispatchEvent(new Event('change', { bubbles: true }));
@@ -5418,6 +5559,11 @@ try {
     assert.match(actorIntegration.calls.continuityUser, /本轮非人物结构世界轨/u);
     assert.equal(actorIntegration.settings.actorShardMode, 'on');
     assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
+    assert.equal(actorIntegration.settings.actorShardTimeoutMs, 90000);
+    assert.equal(actorIntegration.settings.actorShardSettingsVersion, 3);
+    assert.equal(actorIntegration.settings.strictChannelConcurrency, 2);
+    assert.equal(actorIntegration.settings.fastChannelConcurrency, 4);
+    assert.equal(actorIntegration.settings.modelConcurrencySettingsVersion, 1);
     assert.deepEqual(actorIntegration.controls, {
         mode: 'on',
         workers: '2',

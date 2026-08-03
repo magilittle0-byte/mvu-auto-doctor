@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+    CHARACTER_DIVERSITY_CONTRACT,
     GLOBAL_FAIR_DIRECTOR_GATE,
+    NARRATIVE_SURFACE_CONTRACT,
     SERENDIPITY_DOUBLE_GATE,
+    transformCharacterDiversityPreset,
     transformFairDirectorPreset,
     transformSerendipityFairDirectorPreset,
 } from '../fair-director-preset-core.mjs';
@@ -90,4 +93,42 @@ test('transform keeps prompt order and enabled chain synchronized while deduplic
     ));
     assert.match(dice.content, /每回合先读取当前角色卡声明/u);
     assert.match(dice.content, /短收据/u);
+});
+
+test('character kaleidoscope adds an enabled diversity contract and lightweight story renderer', () => {
+    const source = fixture();
+    source.extensions = {
+        baibaiToolkit: {
+            regexGroups: {
+                scripts: {},
+            },
+        },
+        regex_scripts: [],
+    };
+    const before = structuredClone(source);
+    const { preset, audit } = transformCharacterDiversityPreset(source);
+    assert.deepEqual(source, before, 'source preset must stay untouched');
+    assert.match(preset.name, /人物万花筒版$/u);
+    assert.equal(audit.transformVersion, '2.1-character-kaleidoscope');
+    assert.equal(audit.storyRegexIds.length, 6);
+    const diversity = preset.prompts.find((item) => (
+        item.identifier === audit.characterDiversityIdentifier
+    ));
+    assert.equal(diversity.content, CHARACTER_DIVERSITY_CONTRACT);
+    assert.match(diversity.content, /强烈情绪是当前状态层，不是身份层/u);
+    assert.match(diversity.content, /删掉姓名后/u);
+    const surface = preset.prompts.find((item) => (
+        item.identifier === audit.narrativeSurfaceIdentifier
+    ));
+    assert.equal(surface.content, NARRATIVE_SURFACE_CONTRACT);
+    assert.match(surface.content, /<story_body>/u);
+    assert.match(surface.content, /<chat_right>/u);
+    const order = preset.prompt_order[0].order;
+    assert.equal(order.find((item) => item.identifier === diversity.identifier)?.enabled, true);
+    assert.equal(order.find((item) => item.identifier === surface.identifier)?.enabled, true);
+    const scripts = preset.extensions.regex_scripts;
+    assert.equal(scripts.length, 6);
+    assert.equal(scripts.every((item) => item.disabled === false), true);
+    assert.equal(scripts.some((item) => /历史只发纯文本/u.test(item.scriptName)), true);
+    assert.equal(scripts.some((item) => /聊天右气泡/u.test(item.scriptName)), true);
 });

@@ -83,7 +83,7 @@ function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
     if (
         !actorLedger
-        || actorLedger.version !== 2
+        || actorLedger.version !== 3
         || actorLedger.persistentAuditLedger !== true
         || actorLedger.continuousMigration !== true
         || actorLedger.privateThoughtsHidden !== true
@@ -746,7 +746,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (report.version === '2.0.0-rc.6') {
+    if (['2.0.0-rc.6', '2.0.0-rc.7'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

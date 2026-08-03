@@ -30,6 +30,12 @@ export interface ActorLedgerActor {
         traits: string[];
         desires: string[];
         boundaries: string[];
+        socialStyle: string;
+        decisionStyle: string;
+        speechStyle: string;
+        copingStyle: string;
+        everydayHabits: string[];
+        blindSpots: string[];
     };
     lineage: {
         rootActorId: string;
@@ -82,7 +88,7 @@ export interface ActorLedger {
     actors: ActorLedgerActor[];
     actionReceipts: Array<Record<string, unknown>>;
     observationReceipts: Array<Record<string, unknown>>;
-    migrations: { continuityV5: boolean; actorLedgerV2: boolean };
+    migrations: { continuityV5: boolean; actorLedgerV2: boolean; actorLedgerV3: boolean };
     updatedAt: number;
 }
 
@@ -99,6 +105,20 @@ export function migrateActorLedgerFromContinuity(
     value: unknown,
     continuity: unknown,
 ): ActorLedger;
+export function mergeActorProfilePatches(
+    value: unknown,
+    patches: unknown[],
+    options?: {
+        turn?: number | null;
+        sourceRef?: ActorLedgerSourceRef | null;
+        maxPatches?: number;
+        evidenceCorpus?: string;
+    },
+): {
+    ledger: ActorLedger;
+    accepted: Array<{ actorId: string; name: string; evidence: string[] }>;
+    rejected: Array<{ actorId: string; name?: string; reason: string }>;
+};
 export function mergeActorIdentityReveal(
     value: unknown,
     options: {

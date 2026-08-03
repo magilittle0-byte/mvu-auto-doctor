@@ -217,7 +217,13 @@ const activeCustomSecret = Array.isArray(sourceSecrets.api_key_custom)
     ))
     : null;
 const customBase = String(sourceSettings.oai_settings?.custom_url || '').trim();
-const customModel = String(sourceSettings.oai_settings?.custom_model || '').trim();
+const requestedQcModel = String(process.env.MVUAD_QC_MODEL || '').trim();
+process.env.MVUAD_QC_MODEL = '';
+if (requestedQcModel && !/^gemini[-_]/iu.test(requestedQcModel)) {
+    throw new Error('Current QC explicitly requires a real Gemini model id');
+}
+const customModel = requestedQcModel
+    || String(sourceSettings.oai_settings?.custom_model || '').trim();
 const brokerSupplied = (
     brokerCredentials.source === 'authorized-project-history-memory'
 );

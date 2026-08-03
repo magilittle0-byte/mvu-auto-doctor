@@ -5,6 +5,7 @@ import {
     applyAcceptedContentObservations,
     emptyActorLedger,
     mergeActorIdentityReveal,
+    mergeActorProfilePatches,
     migrateActorLedgerFromContinuity,
     normalizeActorLedger,
     reconcileActorIdentityRevealsFromAcceptedContent,
@@ -107,6 +108,108 @@ test('legacy continuity migration creates stable actors only from attributable n
     assert.equal(ada.knowledge.some((item) => item.claim.includes('卧底')), false);
     assert.equal(bella.knowledge.some((item) => item.claim.includes('卧底')), false);
     assert.equal(migrated.migrations.continuityV5, true);
+});
+
+test('evidence-backed profile patches persist character DNA without overwriting established identity', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        turn: 6,
+        actors: [actor('ADA', {
+            name: '艾达',
+            identity: {
+                role: '商人',
+                aliases: [],
+                traits: ['谨慎'],
+                desires: [],
+                boundaries: [],
+            },
+        })],
+    });
+    const merged = mergeActorProfilePatches(ledger, [{
+        actorId: 'ADA',
+        name: '艾达',
+        evidence: ['她先核对交货清单，再问能否留一条撤离路线'],
+        identity: {
+            role: '情报官',
+            traits: ['谨慎', '好奇'],
+            desires: ['按时完成自己的交货'],
+            boundaries: ['不把同伴当诱饵'],
+            socialStyle: '先保持礼貌距离，再用具体问题试探',
+            decisionStyle: '先核价并确认退路',
+            speechStyle: '句子短，通常先问条件',
+            copingStyle: '压力上升时转向核对清单和可控步骤',
+            everydayHabits: ['说话前摸一下清单边角'],
+            blindSpots: ['低估临时起意的善意'],
+        },
+        longTermGoals: ['保住北港商路'],
+        hidden: {
+            innerConflicts: ['想帮助同伴但不愿承担无上限风险'],
+        },
+    }], {
+        turn: 7,
+        sourceRef: sourceRef(7),
+        evidenceCorpus: '她先核对交货清单，再问能否留一条撤离路线。',
+    });
+    assert.equal(merged.accepted.length, 1);
+    assert.equal(merged.rejected.length, 0);
+    assert.equal(merged.ledger.version, 3);
+    const ada = merged.ledger.actors[0];
+    assert.equal(ada.identity.role, '商人', 'established role is not overwritten');
+    assert.equal(ada.identity.socialStyle, '先保持礼貌距离，再用具体问题试探');
+    assert.equal(ada.identity.traits.includes('好奇'), true);
+    assert.equal(ada.identity.everydayHabits.includes('说话前摸一下清单边角'), true);
+    assert.equal(ada.hidden.innerConflicts.includes('想帮助同伴但不愿承担无上限风险'), true);
+    assert.equal(
+        merged.ledger.observationReceipts.some((item) => item.kind === 'profile-enrichment'),
+        true,
+    );
+});
+
+test('profile patches reject unknown actors and evidence-free personality invention', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        actors: [actor('ADA', { name: '艾达' })],
+    });
+    const merged = mergeActorProfilePatches(ledger, [
+        { actorId: 'UNKNOWN', name: '陌生人', evidence: ['猜测'], identity: { traits: ['冷酷'] } },
+        { actorId: 'ADA', name: '艾达', evidence: [], identity: { traits: ['绝望'] } },
+    ]);
+    assert.equal(merged.accepted.length, 0);
+    assert.deepEqual(merged.rejected.map((item) => item.reason), [
+        'unknown-actor',
+        'evidence-missing',
+    ]);
+    assert.deepEqual(merged.ledger.actors[0].identity.traits, ['谨慎']);
+});
+
+test('profile patches reject fabricated evidence and do not persist generic extreme labels as identity', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        actors: [actor('ADA', { name: '艾达' })],
+    });
+    const rejected = mergeActorProfilePatches(ledger, [{
+        actorId: 'ADA',
+        evidence: ['她残忍地威胁了所有人'],
+        identity: { traits: ['冷酷'] },
+    }], {
+        evidenceCorpus: '艾达核对清单后询问了撤离路线。',
+    });
+    assert.equal(rejected.accepted.length, 0);
+    assert.equal(rejected.rejected[0].reason, 'evidence-not-grounded');
+
+    const filtered = mergeActorProfilePatches(ledger, [{
+        actorId: 'ADA',
+        evidence: ['艾达核对清单后询问了撤离路线'],
+        identity: {
+            traits: ['冷酷'],
+            decisionStyle: '先核对事实，再为撤离保留余地',
+        },
+    }], {
+        evidenceCorpus: '艾达核对清单后询问了撤离路线。',
+    });
+    assert.equal(filtered.accepted.length, 1);
+    assert.equal(filtered.ledger.actors[0].identity.traits.includes('冷酷'), false);
+    assert.equal(filtered.ledger.actors[0].identity.decisionStyle, '先核对事实，再为撤离保留余地');
 });
 
 test('accepted content updates only named observers and excludes private/internal narration', () => {
