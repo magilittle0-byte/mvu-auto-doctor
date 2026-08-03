@@ -127,7 +127,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.7';
+const VERSION = '2.0.0-rc.8';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 11;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -175,10 +175,12 @@ const DEFAULTS = Object.freeze({
     connectionPresets: [],
     strictConnectionPreset: '__current__',
     fastConnectionPreset: '__current__',
+    strictConnectionSlots: ['__current__', '__current__'],
+    fastConnectionSlots: ['__current__', '__current__', '__current__', '__current__'],
     modelRoutingSettingsVersion: 2,
     strictChannelConcurrency: 2,
     fastChannelConcurrency: 4,
-    modelConcurrencySettingsVersion: 1,
+    modelConcurrencySettingsVersion: 2,
     preventDoubleWrite: true,
     notifyNoChange: false,
     notificationLevel: 'all',
@@ -328,6 +330,7 @@ let modelCallStats = {
     },
 };
 const activeModelControllers = new Set();
+const modelRouteSlotCursors = { strict: 0, fast: 0 };
 let activeTaskProgress = null;
 let taskProgressSerial = 0;
 let lastPromptSnapshot = null;
@@ -632,6 +635,14 @@ function getSettings() {
         settings.connectionPresets = normalizedPresets;
         changed = true;
     }
+    const presetNames = new Set(normalizedPresets.map((item) => item.name));
+    for (const key of ['strictConnectionPreset', 'fastConnectionPreset']) {
+        const route = String(settings[key] || '__current__');
+        if (route !== '__current__' && !presetNames.has(route)) {
+            settings[key] = '__current__';
+            changed = true;
+        }
+    }
     for (const [key, fallback] of [
         ['strictChannelConcurrency', 2],
         ['fastChannelConcurrency', 4],
@@ -645,15 +656,48 @@ function getSettings() {
             changed = true;
         }
     }
-    if (previousModelConcurrencySettingsVersion < 1) {
-        settings.modelConcurrencySettingsVersion = 1;
+    if (previousModelConcurrencySettingsVersion < 2) {
+        // Each former concurrency unit becomes an explicit route slot. This
+        // preserves existing throughput while making every parallel request's
+        // API choice visible and independently editable.
+        settings.strictConnectionSlots = Array.from(
+            { length: settings.strictChannelConcurrency },
+            () => settings.strictConnectionPreset,
+        );
+        settings.fastConnectionSlots = Array.from(
+            { length: settings.fastChannelConcurrency },
+            () => settings.fastConnectionPreset,
+        );
+        settings.modelConcurrencySettingsVersion = 2;
         changed = true;
     }
-    const presetNames = new Set(normalizedPresets.map((item) => item.name));
-    for (const key of ['strictConnectionPreset', 'fastConnectionPreset']) {
-        const route = String(settings[key] || '__current__');
-        if (route !== '__current__' && !presetNames.has(route)) {
-            settings[key] = '__current__';
+    for (const [channel, slotsKey, legacyRouteKey, concurrencyKey] of [
+        ['strict', 'strictConnectionSlots', 'strictConnectionPreset', 'strictChannelConcurrency'],
+        ['fast', 'fastConnectionSlots', 'fastConnectionPreset', 'fastChannelConcurrency'],
+    ]) {
+        const storedSlots = Array.isArray(settings[slotsKey]) ? settings[slotsKey] : [];
+        const legacyRouteChangedExternally = previousModelConcurrencySettingsVersion >= 2
+            && storedSlots.length > 0
+            && String(settings[legacyRouteKey] || '__current__')
+                !== String(storedSlots[0] || '__current__');
+        const slotSource = legacyRouteChangedExternally
+            ? storedSlots.map(() => settings[legacyRouteKey])
+            : storedSlots;
+        const normalizedSlots = normalizeConnectionRouteSlots(slotSource, {
+            fallbackRoute: settings[legacyRouteKey],
+            fallbackCount: channel === 'fast' ? 4 : 2,
+            presetNames,
+        });
+        if (JSON.stringify(settings[slotsKey]) !== JSON.stringify(normalizedSlots)) {
+            settings[slotsKey] = normalizedSlots;
+            changed = true;
+        }
+        if (settings[legacyRouteKey] !== normalizedSlots[0]) {
+            settings[legacyRouteKey] = normalizedSlots[0];
+            changed = true;
+        }
+        if (settings[concurrencyKey] !== normalizedSlots.length) {
+            settings[concurrencyKey] = normalizedSlots.length;
             changed = true;
         }
     }
@@ -1665,33 +1709,37 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
 
     const settings = getSettings();
     for (const [channel, label] of [['strict', '严格模型通道'], ['fast', '轻量模型通道']]) {
-        const profile = directProfile(settings, channel);
-        const directReady = !!(
+        const profiles = channelConnectionProfiles(settings, channel);
+        const primaryProfile = profiles[0].profile;
+        const directReady = profiles.every(({ profile }) => !!(
             openAiChatCompletionsUrl(profile.baseUrl, profile.rawUrl)
             && profile.model
             && profile.apiKey
-        );
-        const available = profile.provider === 'direct'
+        ));
+        const available = primaryProfile.provider === 'direct'
             ? directReady
-            : profile.provider === 'story-oracle'
+            : primaryProfile.provider === 'story-oracle'
                 ? !!(oracle?.isCompatible?.(1) && typeof oracle.run === 'function')
                 : typeof context?.generateRaw === 'function';
+        const routeSummary = profiles
+            .map(({ slotIndex, profile }) => `${slotIndex + 1}:${profile.name} / ${profile.model || '未选模型'}`)
+            .join('；');
         checks.push(available
             ? environmentCheck(
                 'ok',
                 label,
-                profile.provider === 'direct'
-                    ? `独立兼容 API 已配置（${profile.name} / ${profile.model} / 同时请求 ${channel === 'fast' ? settings.fastChannelConcurrency : settings.strictChannelConcurrency}）`
-                    : profile.provider === 'story-oracle'
+                primaryProfile.provider === 'direct'
+                    ? `已配置 ${profiles.length} 个独立 API 槽位（${routeSummary}）`
+                    : primaryProfile.provider === 'story-oracle'
                         ? '兼容旧版故事神谕连接'
                         : '使用酒馆当前连接，不经过故事神谕',
             )
             : environmentCheck(
                 'error',
                 label,
-                profile.provider === 'direct'
-                    ? '独立 API 的地址、模型或密钥尚未填完整'
-                    : profile.provider === 'story-oracle'
+                primaryProfile.provider === 'direct'
+                    ? `至少一个 API 槽位的地址、模型或密钥未填完整（${routeSummary}）`
+                    : primaryProfile.provider === 'story-oracle'
                         ? '故事神谕兼容接口不可用'
                         : '酒馆 generateRaw 不可用',
             ));
@@ -4083,6 +4131,64 @@ function normalizeConnectionPresets(value) {
     return [...byName.values()].slice(0, 50);
 }
 
+function normalizeConnectionRouteSlots(value, {
+    fallbackRoute = '__current__',
+    fallbackCount = 1,
+    presetNames = new Set(),
+} = {}) {
+    const safeFallback = fallbackRoute === '__current__' || presetNames.has(fallbackRoute)
+        ? fallbackRoute
+        : '__current__';
+    const source = Array.isArray(value) && value.length
+        ? value
+        : Array.from(
+            { length: Math.min(8, Math.max(1, Math.floor(Number(fallbackCount) || 1))) },
+            () => safeFallback,
+        );
+    return source.slice(0, 8).map((route) => {
+        const normalized = String(route || '__current__');
+        return normalized === '__current__' || presetNames.has(normalized)
+            ? normalized
+            : '__current__';
+    });
+}
+
+function channelConnectionRoutes(settings, channel = 'strict') {
+    const fast = channel === 'fast';
+    const presets = normalizeConnectionPresets(settings.connectionPresets);
+    return normalizeConnectionRouteSlots(
+        fast ? settings.fastConnectionSlots : settings.strictConnectionSlots,
+        {
+            fallbackRoute: fast
+                ? settings.fastConnectionPreset
+                : settings.strictConnectionPreset,
+            fallbackCount: fast
+                ? settings.fastChannelConcurrency
+                : settings.strictChannelConcurrency,
+            presetNames: new Set(presets.map((item) => item.name)),
+        },
+    );
+}
+
+function setChannelConnectionRoutes(settings, channel, routes) {
+    const fast = channel === 'fast';
+    const slotsKey = fast ? 'fastConnectionSlots' : 'strictConnectionSlots';
+    const legacyRouteKey = fast ? 'fastConnectionPreset' : 'strictConnectionPreset';
+    const concurrencyKey = fast ? 'fastChannelConcurrency' : 'strictChannelConcurrency';
+    const normalized = normalizeConnectionRouteSlots(routes, {
+        fallbackRoute: settings[legacyRouteKey],
+        fallbackCount: settings[concurrencyKey],
+        presetNames: new Set(
+            normalizeConnectionPresets(settings.connectionPresets).map((item) => item.name),
+        ),
+    });
+    settings[slotsKey] = normalized;
+    settings[legacyRouteKey] = normalized[0];
+    settings[concurrencyKey] = normalized.length;
+    settings.modelConcurrencySettingsVersion = 2;
+    return normalized;
+}
+
 function currentConnectionDraft(settings = getSettings()) {
     return {
         name: '当前编辑连接',
@@ -4094,11 +4200,11 @@ function currentConnectionDraft(settings = getSettings()) {
     };
 }
 
-function directProfile(settings, channel = 'strict') {
+function directProfile(settings, channel = 'strict', routeOverride = null) {
     const fast = channel === 'fast';
-    const route = String(
-        fast ? settings.fastConnectionPreset : settings.strictConnectionPreset,
-    ) || '__current__';
+    const route = String(routeOverride ?? (
+        fast ? settings.fastConnectionPreset : settings.strictConnectionPreset
+    )) || '__current__';
     const preset = route === '__current__'
         ? null
         : (settings.connectionPresets || []).find((item) => (
@@ -4117,6 +4223,30 @@ function directProfile(settings, channel = 'strict') {
         rawUrl: preset?.rawUrl ?? settings.connectionRawUrl ?? false,
         jsonMode: fast && settings.fastApiJsonMode !== false,
     };
+}
+
+function channelConnectionProfiles(settings, channel = 'strict') {
+    return channelConnectionRoutes(settings, channel)
+        .map((route, slotIndex) => ({
+            slotIndex,
+            profile: directProfile(settings, channel, route),
+        }));
+}
+
+function selectChannelConnectionProfile(settings, channel = 'strict', requestedSlotIndex = null) {
+    const profiles = channelConnectionProfiles(settings, channel);
+    const explicit = Number(requestedSlotIndex);
+    const hasExplicitSlot = requestedSlotIndex !== null
+        && requestedSlotIndex !== undefined
+        && Number.isInteger(explicit)
+        && explicit >= 0;
+    const slotIndex = hasExplicitSlot
+        ? explicit % profiles.length
+        : modelRouteSlotCursors[channel] % profiles.length;
+    if (!hasExplicitSlot) {
+        modelRouteSlotCursors[channel] = (slotIndex + 1) % profiles.length;
+    }
+    return profiles[slotIndex];
 }
 
 function openAiChatCompletionsUrl(baseUrl, rawUrl = false) {
@@ -4371,18 +4501,17 @@ async function callModel(messages, options = {}) {
     const diagnosticTargetIndex = Number.isInteger(Number(options.targetIndex))
         ? Number(options.targetIndex)
         : -1;
-    const profile = directProfile(settings, channel);
+    const selectedConnection = selectChannelConnectionProfile(
+        settings,
+        channel,
+        options.routeSlotIndex,
+    );
+    const { profile, slotIndex } = selectedConnection;
     const parallelLane = String(options.parallelLane || '')
         .replace(/[^a-zA-Z0-9_-]/gu, '')
         .slice(0, 40);
-    const configuredConcurrency = channel === 'fast'
-        ? settings.fastChannelConcurrency
-        : settings.strictChannelConcurrency;
-    const channelConcurrency = profile.provider === 'direct'
-        ? Math.min(8, Math.max(1, Math.floor(Number(configuredConcurrency) || 1)))
-        : 1;
     const connectionKey = profile.provider === 'direct'
-        ? `${modelConnectionKey(profile)}:channel:${channel}`
+        ? `${modelConnectionKey(profile)}:channel:${channel}:slot:${slotIndex}`
         : modelConnectionKey(profile);
     const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
@@ -4515,8 +4644,10 @@ async function callModel(messages, options = {}) {
         }, {
             priority: modelTaskPriority(task, options.priority),
             signal: controller.signal,
-            label: parallelLane ? `${task}:${parallelLane}` : task,
-            maxConcurrent: channelConcurrency,
+            label: parallelLane
+                ? `${task}:${parallelLane}:slot-${slotIndex + 1}`
+                : `${task}:slot-${slotIndex + 1}`,
+            maxConcurrent: 1,
         });
     } finally {
         externalSignal?.removeEventListener?.('abort', abortFromExternal);
@@ -4562,12 +4693,12 @@ function buildSocialAuditMessages({
     const system = [
         '你是人物动机、人格自主性与持久关系变更的结构化二级审核器。',
         '你不负责把故事改成温暖、正能量或善意，也不评价文风。明确威胁、欺骗、洗脑、主奴、黑暗关系与极端情绪，只要有本轮用户授权、设定/机制或连续证据，就必须放行。',
-        '只审核三件事：一，旁白是否把用户未表达的控制、试探、饲养、占有等目的写成全知事实；二，本轮关系字段变化是否有足够证据，以及强制状态是否被误写成自愿好感、信任、亲密或忠诚；三，正文是否把职业或一次强烈情绪直接写成完整人格，或让多名NPC复用同一组冷酷、暴怒、绝望、怯懦模板。',
+        '只审核四件事：一，旁白是否把用户未表达的控制、试探、饲养、占有等目的写成全知事实；二，本轮关系字段变化是否有足够证据，以及强制状态是否被误写成自愿好感、信任、亲密或忠诚；三，正文是否把职业或一次强烈情绪直接写成完整人格，或让多名NPC复用同一组冷酷、暴怒、绝望、怯懦模板；四，是否用MBTI、九型、Tritype、依恋型、病娇等类型标签代替具体行为，或让同场人物整齐复制同一种情绪反应。',
         'NPC可以怀疑，但NPC有限视角的怀疑不能作为全知事实；历史恶行可以支持警惕，却不能自动证明本轮善意虚伪。',
-        '普通互动允许不改变持久关系。强烈情绪允许发生，但单次事件不能无依据永久改写人格；黑暗内容本身不是违规，缺少个体目标、阈值、习惯与恢复路径的换名模板才需要warning。',
+        '普通互动允许不改变持久关系。强烈情绪允许发生，但单次事件不能无依据永久改写人格；黑暗内容本身不是违规，缺少个体目标、信息依据、关系距离、阈值、习惯与恢复路径的换名模板才需要warning。角色卡明确提供的心理类型也只能是弱参考，不能覆盖正文证据或把偏好当能力上限。',
         '每个给出的关系路径都必须返回一条decision。action只能是allow或revert。revert表示恢复到本轮前状态；不得提出新值、替代路径或正文改写。',
         '只返回一个JSON对象，不要代码围栏：',
-        '{"verdict":"pass|warning|violation","summary":"短结论","findings":[{"type":"unauthorized_motive|coercion_conflation|unsupported_relationship|identity_totalization|stereotype_pileup|extreme_emotion|valid_dark_content|other","severity":"info|warning|error","reason":"原因","evidence":"给定文本中的短证据"}],"decisions":[{"path":"必须逐字复制给定路径","action":"allow|revert","reason":"原因","evidence":"短证据"}]}',
+        '{"verdict":"pass|warning|violation","summary":"短结论","findings":[{"type":"unauthorized_motive|coercion_conflation|unsupported_relationship|identity_totalization|stereotype_pileup|typology_shortcut|group_homogenization|extreme_emotion|valid_dark_content|other","severity":"info|warning|error","reason":"原因","evidence":"给定文本中的短证据"}],"decisions":[{"path":"必须逐字复制给定路径","action":"allow|revert","reason":"原因","evidence":"短证据"}]}',
     ].join('\n');
     const user = [
         '=== 触发原因 ===',
@@ -7744,8 +7875,9 @@ function buildContinuityMessages({
         '- MVU仍是数值、资源、任务状态的唯一实时权威；不得输出或修改MVU、JSONPatch、数据库或SQL。',
         '- 只推动NPC、势力、环境、敌方、约定、谜团和离场角色，不得替玩家角色决定、说话、移动、消费资源或追加检定。',
         '- 世界采用双轨调度：人物轨维护有身份、有限认知与独立行动的角色；结构世界轨独立维护势力、环境、经济、长期趋势、传播与因果余波。任何一轨都不得替代或吞并另一轨。',
-        '- 人物轨还维护增量人物档案。职业、阵营和本轮强烈情绪不是完整人格；害怕不等于结巴失能，专业不等于冷酷面具，打手不等于咆哮虐待，战士不等于杀意机器。档案要记录人物各自的社交办法、决策办法、现实欲望、边界、日常习惯、盲点、说话节奏、应对压力方式和可共存矛盾。',
-        '- actorProfiles只能补充已在“当前人物档案”中存在的稳定actorId，并且每项evidence必须逐字摘录当前角色卡、世界书、MVU锚点或最近已发生正文中的具体短句；本地会拒绝找不到原文的转述和推测。禁止把一次恐惧、愤怒、绝望或服从直接固化为永久trait；没有新证据就返回空数组。既有档案只做增量补全，不因本轮刺激整套覆写。',
+        '- 人物轨还维护增量人物档案。职业、阵营和本轮强烈情绪不是完整人格；害怕不等于结巴失能，专业不等于冷酷面具，打手不等于咆哮虐待，战士不等于杀意机器。档案要记录人物各自的社交与决策办法、现实欲望、边界、日常习惯、盲点、说话节奏、信息取样与典型误读、受压反应与恢复路径、具体关系中的距离模式、自我形象和已观察行为的缝隙、训练形成的逆倾向能力，以及可共存矛盾。',
+        '- 不运行或输出MBTI、九型人格、Tritype、依恋类型、星座、病娇/地雷/白切黑/S-M等分类，也不把这些标签写进actorProfiles。角色卡若明确写了类型，只当弱参考；偏好不等于能力上限，训练、职责和生活经验可以形成与偏好相反的熟练做法。',
+        '- actorProfiles只能补充已在“当前人物档案”中存在的稳定actorId，并且每项evidence必须逐字摘录当前角色卡、世界书、MVU锚点或最近已发生正文中的具体短句；本地会拒绝找不到原文的转述和推测。禁止把一次恐惧、愤怒、绝望或服从直接固化为永久trait；没有新证据就返回空数组。既有档案只做增量补全，不因本轮刺激整套覆写。每名人物每轮最多补三个证据最强的新维度，其余保持未知，禁止为了填满字段发明隐藏创伤、反差或心理诊断。',
         '- 势力与环境过程可以没有单一代表人物，并可在没有人物候选、人物分片失败或人物行动留在幕后时继续推进、结算或自行结束；不得为了调用人物轨而虚构一个代言NPC。',
         '- 本地另有一个三通道共享压力闸：人物、势力、环境分别调度，但共同消耗医生自己的压力与注入预算。闸门延迟的候选保持未发生；禁止在JSON中换名复制或升级。',
         '- <content>是本回合已发生事实，只能读取和承认，绝不改写、截断或要求重生成。若正文已经出现过量威胁，承认现状，但本轮不得再新增、聚合、复制或升级威胁；优先恢复、错开、互相牵制、信息、资源、退路或远端留存。',
@@ -7908,7 +8040,12 @@ function buildContinuityMessages({
         '      "role": "社会或剧情角色，不是人格标签", "traits": ["有证据的长期倾向"],',
         '      "desires": ["不围着玩家转的现实欲望"], "boundaries": ["边界与愿付代价"],',
         '      "socialStyle": "与人相处的办法", "decisionStyle": "做决定的办法",',
-        '      "speechStyle": "说话密度/句长/停顿与回避方式", "copingStyle": "受压后的应对与恢复路径",',
+        '      "speechStyle": "说话密度/句长/停顿与回避方式", "copingStyle": "旧版兼容字段；无既有值可留空",',
+        '      "informationStyle": "如何取样和判断信息", "typicalMisread": "有重复证据的典型误读；没有则留空",',
+        '      "relationshipDistancePattern": "对具体对象如何靠近、试探、守界或撤退，不写依恋型标签",',
+        '      "selfImageGap": "自我形象与已观察行为的吻合或缝隙；没有双侧证据则留空",',
+        '      "learnedCounterDisposition": "因训练/职责/经验习得的逆倾向能力；偏好不等于能力上限",',
+        '      "pressureResponse": "压力上升时首先采用的办法", "recoveryPath": "条件缓解后如何恢复",',
         '      "everydayHabits": ["小而稳定的日常习惯"], "blindSpots": ["能力之外的盲点"]',
         '    },',
         '    "longTermGoals": ["可持续目标"], "capabilities": ["已有证据的能力"],',
@@ -11131,10 +11268,8 @@ function bindModelConnectionManager(root) {
     const deletePreset = root.querySelector('.mvuad-connection-preset-delete');
     const presetName = root.querySelector('.mvuad-connection-preset-name');
     const savePreset = root.querySelector('.mvuad-connection-preset-save');
-    const strictRoute = root.querySelector('.mvuad-strict-preset');
-    const fastRoute = root.querySelector('.mvuad-fast-preset');
-    const strictConcurrency = root.querySelector('.mvuad-strict-concurrency');
-    const fastConcurrency = root.querySelector('.mvuad-fast-concurrency');
+    const strictSlots = root.querySelector('.mvuad-strict-route-slots');
+    const fastSlots = root.querySelector('.mvuad-fast-route-slots');
     const strictStatus = root.querySelector('.mvuad-strict-provider-status');
     const fastStatus = root.querySelector('.mvuad-fast-provider-status');
 
@@ -11168,6 +11303,56 @@ function bindModelConnectionManager(root) {
         settings.fastModelProvider = 'direct';
         saveSettings();
     };
+    const appendRouteOptions = (select, route, presets) => {
+        const current = document.createElement('option');
+        current.value = '__current__';
+        current.textContent = '当前编辑连接';
+        select.appendChild(current);
+        for (const preset of presets) {
+            const option = document.createElement('option');
+            option.value = preset.name;
+            option.textContent = `${preset.name}${preset.model ? ` · ${preset.model}` : ''}`;
+            select.appendChild(option);
+        }
+        select.value = route === '__current__'
+            || presets.some((item) => item.name === route)
+            ? route
+            : '__current__';
+    };
+    const renderRouteSlots = (channel, container, presets) => {
+        const settings = getSettings();
+        const routes = channelConnectionRoutes(settings, channel);
+        container.textContent = '';
+        routes.forEach((route, slotIndex) => {
+            const row = document.createElement('label');
+            row.className = 'mvuad-select mvuad-route-slot';
+            const label = document.createElement('span');
+            label.textContent = `并发槽位 ${slotIndex + 1}`;
+            const select = document.createElement('select');
+            select.className = `text_pole mvuad-route-preset mvuad-${channel}-preset`;
+            select.dataset.slotIndex = String(slotIndex);
+            select.setAttribute(
+                'aria-label',
+                `${channel === 'fast' ? '轻量' : '严格'}通道并发槽位 ${slotIndex + 1} API`,
+            );
+            appendRouteOptions(select, route, presets);
+            select.addEventListener('change', () => {
+                const nextSettings = getSettings();
+                const nextRoutes = channelConnectionRoutes(nextSettings, channel);
+                nextRoutes[slotIndex] = select.value;
+                setChannelConnectionRoutes(nextSettings, channel, nextRoutes);
+                nextSettings[`${channel}ModelProvider`] = 'direct';
+                saveSettings();
+                inspectEnvironment();
+            });
+            row.append(label, select);
+            container.appendChild(row);
+        });
+        const add = root.querySelector(`.mvuad-${channel}-slot-add`);
+        const remove = root.querySelector(`.mvuad-${channel}-slot-remove`);
+        add.disabled = routes.length >= 8;
+        remove.disabled = routes.length <= 1;
+    };
     const renderPresetOptions = () => {
         const settings = getSettings();
         const presets = normalizeConnectionPresets(settings.connectionPresets);
@@ -11186,34 +11371,14 @@ function bindModelConnectionManager(root) {
         savedPreset.value = presets.some((item) => item.name === selectedPreset)
             ? selectedPreset
             : '';
-        for (const [select, route] of [
-            [strictRoute, settings.strictConnectionPreset],
-            [fastRoute, settings.fastConnectionPreset],
-        ]) {
-            select.textContent = '';
-            const current = document.createElement('option');
-            current.value = '__current__';
-            current.textContent = '当前编辑连接';
-            select.appendChild(current);
-            for (const preset of presets) {
-                const option = document.createElement('option');
-                option.value = preset.name;
-                option.textContent = `${preset.name}${preset.model ? ` · ${preset.model}` : ''}`;
-                select.appendChild(option);
-            }
-            select.value = route === '__current__'
-                || presets.some((item) => item.name === route)
-                ? route
-                : '__current__';
-        }
+        renderRouteSlots('strict', strictSlots, presets);
+        renderRouteSlots('fast', fastSlots, presets);
         loadPreset.disabled = !savedPreset.value;
         deletePreset.disabled = !savedPreset.value;
     };
 
     writeEditor(currentConnectionDraft());
     renderPresetOptions();
-    strictConcurrency.value = String(getSettings().strictChannelConcurrency);
-    fastConcurrency.value = String(getSettings().fastChannelConcurrency);
 
     for (const input of [endpoint, apiKey, model, viaBackend, rawUrl]) {
         input.addEventListener('change', () => {
@@ -11278,39 +11443,36 @@ function bindModelConnectionManager(root) {
         if (settings.fastConnectionPreset === name) {
             settings.fastConnectionPreset = '__current__';
         }
+        for (const channel of ['strict', 'fast']) {
+            const routes = channelConnectionRoutes(settings, channel)
+                .map((route) => route === name ? '__current__' : route);
+            setChannelConnectionRoutes(settings, channel, routes);
+        }
         saveSettings();
         renderPresetOptions();
         modelHint.dataset.kind = 'ok';
         modelHint.textContent = `已删除预设“${name}”`;
         inspectEnvironment();
     });
-    strictRoute.addEventListener('change', () => {
-        const settings = getSettings();
-        settings.strictConnectionPreset = strictRoute.value;
-        settings.strictModelProvider = 'direct';
-        saveSettings();
-        inspectEnvironment();
-    });
-    fastRoute.addEventListener('change', () => {
-        const settings = getSettings();
-        settings.fastConnectionPreset = fastRoute.value;
-        settings.fastModelProvider = 'direct';
-        saveSettings();
-        inspectEnvironment();
-    });
-    for (const [input, key, fallback] of [
-        [strictConcurrency, 'strictChannelConcurrency', 2],
-        [fastConcurrency, 'fastChannelConcurrency', 4],
-    ]) {
-        input.addEventListener('change', () => {
+    for (const channel of ['strict', 'fast']) {
+        root.querySelector(`.mvuad-${channel}-slot-add`).addEventListener('click', () => {
             const settings = getSettings();
-            const value = Math.min(
-                8,
-                Math.max(1, Math.floor(Number(input.value) || fallback)),
-            );
-            settings[key] = value;
-            input.value = String(value);
+            const routes = channelConnectionRoutes(settings, channel);
+            if (routes.length >= 8) return;
+            routes.push(routes.at(-1) || '__current__');
+            setChannelConnectionRoutes(settings, channel, routes);
             saveSettings();
+            renderPresetOptions();
+            inspectEnvironment();
+        });
+        root.querySelector(`.mvuad-${channel}-slot-remove`).addEventListener('click', () => {
+            const settings = getSettings();
+            const routes = channelConnectionRoutes(settings, channel);
+            if (routes.length <= 1) return;
+            routes.pop();
+            setChannelConnectionRoutes(settings, channel, routes);
+            saveSettings();
+            renderPresetOptions();
             inspectEnvironment();
         });
     }
@@ -11364,9 +11526,13 @@ function bindModelConnectionManager(root) {
         button.addEventListener('click', async () => {
             saveEditor();
             button.disabled = true;
+            const profiles = channelConnectionProfiles(getSettings(), channel);
             status.dataset.kind = 'busy';
-            status.textContent = '正在测试连接…';
-            try {
+            status.textContent = `正在测试 ${profiles.length} 个 API 槽位…`;
+            const results = await Promise.allSettled(profiles.map(async ({
+                slotIndex,
+                profile,
+            }) => {
                 const output = await callModel([
                     {
                         role: 'system',
@@ -11382,14 +11548,27 @@ function bindModelConnectionManager(root) {
                     channel,
                     jsonMode: channel === 'fast',
                     maxTokens: 128,
-                    task: `${channel === 'fast' ? '轻量' : '严格'}通道测试`,
+                    task: `${channel === 'fast' ? '轻量' : '严格'}通道槽位 ${slotIndex + 1} 测试`,
+                    routeSlotIndex: slotIndex,
                 });
                 if (!String(output || '').trim()) throw new Error('模型返回为空');
+                return `${slotIndex + 1}:${profile.name}`;
+            }));
+            try {
+                const failed = results
+                    .map((result, slotIndex) => ({ result, slotIndex }))
+                    .filter(({ result }) => result.status === 'rejected');
+                if (failed.length) {
+                    const detail = failed.map(({ result, slotIndex }) => (
+                        `槽位 ${slotIndex + 1}（${profiles[slotIndex].profile.name}）：${result.reason?.message || result.reason}`
+                    )).join('；');
+                    throw new Error(detail);
+                }
                 status.dataset.kind = 'ok';
-                status.textContent = '连接成功';
+                status.textContent = `全部 ${profiles.length} 个槽位连接成功：${results.map((result) => result.value).join('；')}`;
             } catch (error) {
                 status.dataset.kind = 'error';
-                status.textContent = `连接失败：${error?.message || error}`;
+                status.textContent = `部分槽位连接失败：${error?.message || error}`;
             } finally {
                 button.disabled = false;
             }
@@ -11528,7 +11707,7 @@ function buildSettingsPanel() {
                         <summary>独立 API 连接与通道路由</summary>
                         <div class="mvuad-settings-fold-body">
                             <div class="mvuad-description">
-                                在这里维护多个 OpenAI-compatible API 预设；变量通道与活世界/论坛通道各自选择一个预设。
+                                在这里维护多个 OpenAI-compatible API 预设；变量通道与活世界/论坛通道的每个并发槽位都可分别选择预设。
                                 医生不会借用酒馆当前模型，也不会借用故事神谕连接。密钥只保存在本机扩展设置中，不进入诊断包。
                             </div>
                             <div class="mvuad-provider-card mvuad-connection-editor">
@@ -11579,31 +11758,27 @@ function buildSettingsPanel() {
                             </div>
                             <div class="mvuad-provider-card mvuad-channel-routing">
                                 <b>通道路由</b>
-                                <label class="mvuad-select">
-                                    <span>严格变量通道</span>
-                                    <select class="text_pole mvuad-strict-preset"></select>
-                                </label>
-                                <label class="mvuad-number">
-                                    <span>严格通道同时请求数</span>
-                                    <input class="text_pole mvuad-strict-concurrency" type="number" min="1" max="8" step="1">
-                                </label>
-                                <div class="mvuad-description">负责 MVU 变量诊断与修复；默认同时 2 个独立 API 请求。变量写入仍逐目标串行提交。</div>
+                                <div class="mvuad-route-heading">严格变量通道</div>
+                                <div class="mvuad-description">每个槽位同一时间最多执行 1 个请求；槽位可以分别选择不同 API 预设，也可以重复选择同一预设。变量写入仍逐目标串行提交。</div>
+                                <div class="mvuad-route-slots mvuad-strict-route-slots"></div>
+                                <div class="mvuad-actions mvuad-route-actions">
+                                    <button class="menu_button mvuad-strict-slot-add" type="button">＋ 严格并发槽位</button>
+                                    <button class="menu_button mvuad-strict-slot-remove" type="button">－ 最后一个槽位</button>
+                                </div>
                                 <div class="mvuad-actions">
-                                    <button class="menu_button mvuad-test-strict" type="button">测试严格通道</button>
+                                    <button class="menu_button mvuad-test-strict" type="button">测试全部严格槽位</button>
                                 </div>
                                 <div class="mvuad-provider-status mvuad-strict-provider-status" role="status"></div>
-                                <label class="mvuad-select">
-                                    <span>轻量人物 / 世界 / 论坛通道</span>
-                                    <select class="text_pole mvuad-fast-preset"></select>
-                                </label>
-                                <label class="mvuad-number">
-                                    <span>轻量通道同时请求数</span>
-                                    <input class="text_pole mvuad-fast-concurrency" type="number" min="1" max="8" step="1">
-                                </label>
-                                <div class="mvuad-description">人物分片、关系二审、世界与论坛共享此并发池；默认同时 4 个独立 API 请求。</div>
+                                <div class="mvuad-route-heading">轻量人物 / 世界 / 论坛通道</div>
+                                <div class="mvuad-description">人物分片、关系二审、世界与论坛共享这些槽位；每个槽位都明确绑定一个 API 预设。</div>
+                                <div class="mvuad-route-slots mvuad-fast-route-slots"></div>
+                                <div class="mvuad-actions mvuad-route-actions">
+                                    <button class="menu_button mvuad-fast-slot-add" type="button">＋ 轻量并发槽位</button>
+                                    <button class="menu_button mvuad-fast-slot-remove" type="button">－ 最后一个槽位</button>
+                                </div>
                                 <div class="mvuad-fast-options"></div>
                                 <div class="mvuad-actions">
-                                    <button class="menu_button mvuad-test-fast" type="button">测试轻量通道</button>
+                                    <button class="menu_button mvuad-test-fast" type="button">测试全部轻量槽位</button>
                                 </div>
                                 <div class="mvuad-provider-status mvuad-fast-provider-status" role="status"></div>
                             </div>

@@ -5,6 +5,8 @@ const COERCION_RE = /(?:洗脑|精神控制|心智控制|契约命令|强制服�
 const ORDINARY_CARE_RE = /(?:买|带|送|递|给).{0,12}(?:茶|水|饭|食物|药|绷带|礼物)|(?:问|询问|打听).{0,16}(?:夜班|兼职|工作|伤势|需不需要|要不要)|(?:照顾|帮忙|道歉|感谢|请客|聊天|谈心|陪同)/iu;
 const TOTALIZING_IDENTITY_RE = /(?:不再是.{0,18}而是(?:一件|一个|纯粹的)|眼(?:里|中).{0,8}只剩|彻底(?:失去|抹去|变成|沦为).{0,18}(?:人格|人性|理智|工具|武器)|(?:整个人|全部人格).{0,12}(?:只剩|化作|变成))/iu;
 const GENERIC_EXTREME_LABEL_RE = /(?:冷酷|冰冷|暴戾|粗暴|凶狠|残忍|疯狂|狂热|病态|绝望|空洞|麻木|结结巴巴|瑟瑟发抖|杀意|致命武器)/giu;
+const TYPOLOGY_SHORTCUT_RE = /(?:\b(?:INTJ|INTP|ENTJ|ENTP|INFJ|INFP|ENFJ|ENFP|ISTJ|ISFJ|ESTJ|ESFJ|ISTP|ISFP|ESTP|ESFP)\b|\b[1-9]w[1-9]\b|\btritype\b|MBTI|九型人格|三型组合|依恋类型|安全型依恋|焦虑型依恋|回避型依恋|恐惧型依恋|病娇|地雷系|白切黑|抖[SM]|S\s*\/\s*M)/iu;
+const UNIFORM_GROUP_RE = /(?:(?:所有人|众人|全员|三人|几人|他们|她们).{0,48}(?:同时|齐齐|一齐|异口同声|都).{0,28}|(?:同时|齐齐|一齐|异口同声).{0,36})(?:沉默|发抖|冷笑|愤怒|绝望|崇拜|恐惧|麻木|冷酷|服从)/iu;
 
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -76,6 +78,9 @@ export function buildSocialNarrativeContract() {
         '13. 新的持续NPC至少保留一种自己的社交办法、决策办法、现实欲望、边界、习惯或盲点；同场多人不得只靠更换姓名复用同一组极端形容词与反应。',
         '14. 强烈情绪是状态层，不是身份层。恐惧、愤怒、绝望或服从发生时，人物仍保留长期目标、能力、习惯、关系分寸与恢复路径；除非有明确永久机制和连续证据，不用一句总判词封死人格。',
         '15. 黑暗内容可以维持原强度，但先用可观察行为、有代价的选择和个体阈值呈现；若删掉姓名后两人的台词、动作和目标仍可互换，必须把其中一人的决定方式写出差异。',
+        '16. 不使用MBTI、九型、Tritype、依恋型、星座、病娇/地雷/白切黑/S-M等标签代替塑造。角色卡若明确给出标签，也只视作弱偏好；训练、职责与经验可以产生和偏好相反的熟练能力。',
+        '17. 持续人物按证据逐步显出信息取样与典型误读、受压反应与恢复路径、对不同对象的关系距离、自我形象与行为缝隙、习得的逆倾向能力。没有证据的维度保持未知，不为填表发明创伤或反差。',
+        '18. 首次出场正文最多显露三项人物差异，优先是当下目标、决定办法和一个普通细节；不要首段塞满身世、创伤、怪癖、口癖、类型与阴谋。同场群像先覆盖所有具名持续NPC，再按不同依据、顺序和代价行动。',
         '</Social_Motive_And_Autonomy_Contract>',
     ].join('\n');
 }
@@ -141,13 +146,17 @@ export function classifySocialAuditNeed({
     const genericExtremeLabels = String(replyText || '').match(GENERIC_EXTREME_LABEL_RE) || [];
     if (TOTALIZING_IDENTITY_RE.test(replyText)) reasons.push('identity-totalization');
     if (genericExtremeLabels.length >= 4) reasons.push('stereotype-label-pileup');
+    if (TYPOLOGY_SHORTCUT_RE.test(replyText)) reasons.push('typology-shortcut');
+    if (UNIFORM_GROUP_RE.test(replyText)) reasons.push('group-reaction-homogenization');
     if (mode === 'strict') {
         return {
             needed: changes.length > 0
                 || EXTREME_SOCIAL_RE.test(replyText)
                 || MOTIVE_ATTRIBUTION_RE.test(replyText)
                 || TOTALIZING_IDENTITY_RE.test(replyText)
-                || genericExtremeLabels.length >= 4,
+                || genericExtremeLabels.length >= 4
+                || TYPOLOGY_SHORTCUT_RE.test(replyText)
+                || UNIFORM_GROUP_RE.test(replyText),
             reasons: [...new Set(reasons.length ? reasons : ['strict-semantic-review'])],
         };
     }

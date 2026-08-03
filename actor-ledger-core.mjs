@@ -1,6 +1,6 @@
 import { fingerprint } from './core.mjs';
 
-export const ACTOR_LEDGER_VERSION = 3;
+export const ACTOR_LEDGER_VERSION = 4;
 export const ACTOR_LEDGER_MAX_ACTORS = 96;
 export const ACTOR_LEDGER_MAX_RECEIPTS = 240;
 
@@ -166,6 +166,13 @@ function normalizeActor(value, index, turn) {
             decisionStyle: cleanText(identity.decisionStyle, 240),
             speechStyle: cleanText(identity.speechStyle, 240),
             copingStyle: cleanText(identity.copingStyle, 240),
+            informationStyle: cleanText(identity.informationStyle, 240),
+            typicalMisread: cleanText(identity.typicalMisread, 240),
+            relationshipDistancePattern: cleanText(identity.relationshipDistancePattern, 240),
+            selfImageGap: cleanText(identity.selfImageGap, 240),
+            learnedCounterDisposition: cleanText(identity.learnedCounterDisposition, 240),
+            pressureResponse: cleanText(identity.pressureResponse, 240),
+            recoveryPath: cleanText(identity.recoveryPath, 240),
             everydayHabits: cleanList(identity.everydayHabits, 8, 180),
             blindSpots: cleanList(identity.blindSpots, 8, 220),
         },
@@ -280,7 +287,12 @@ export function emptyActorLedger(chatId = '') {
         actors: [],
         actionReceipts: [],
         observationReceipts: [],
-        migrations: { continuityV5: false, actorLedgerV2: true, actorLedgerV3: true },
+        migrations: {
+            continuityV5: false,
+            actorLedgerV2: true,
+            actorLedgerV3: true,
+            actorLedgerV4: true,
+        },
         updatedAt: 0,
     };
 }
@@ -318,6 +330,7 @@ export function normalizeActorLedger(value, {
             continuityV5: source.migrations?.continuityV5 === true,
             actorLedgerV2: true,
             actorLedgerV3: true,
+            actorLedgerV4: true,
         },
         updatedAt: integer(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -401,10 +414,16 @@ function mergeProfileText(current, proposed, limit = 240) {
 
 const VOLATILE_PROFILE_LABEL_RE = /^(?:冷酷|冰冷|暴躁|粗暴|凶狠|残忍|疯狂|狂热|病态|绝望|恐惧|怯懦|结巴|空洞|麻木|杀意|致命武器|忠诚|服从)$/iu;
 const TOTALIZING_PROFILE_RE = /(?:不再是.{0,18}而是(?:一件|一个)|彻底(?:失去|抹去|变成|沦为)|(?:全部人格|整个人).{0,12}(?:只剩|化作|变成))/iu;
+const TYPOLOGY_PROFILE_RE = /(?:\b(?:INTJ|INTP|ENTJ|ENTP|INFJ|INFP|ENFJ|ENFP|ISTJ|ISFJ|ESTJ|ESFJ|ISTP|ISFP|ESTP|ESFP)\b|\b[1-9]w[1-9]\b|\btritype\b|MBTI|迈尔斯|九型人格|三型组合|依恋类型|安全型依恋|焦虑型依恋|回避型依恋|恐惧型依恋|病娇|地雷系|白切黑|抖[SM]|S\s*\/\s*M)/iu;
 
 function stableProfileText(value, limit = 240) {
     const cleaned = cleanText(value, limit);
-    if (!cleaned || VOLATILE_PROFILE_LABEL_RE.test(cleaned) || TOTALIZING_PROFILE_RE.test(cleaned)) {
+    if (
+        !cleaned
+        || VOLATILE_PROFILE_LABEL_RE.test(cleaned)
+        || TOTALIZING_PROFILE_RE.test(cleaned)
+        || TYPOLOGY_PROFILE_RE.test(cleaned)
+    ) {
         return '';
     }
     return cleaned;
@@ -414,7 +433,20 @@ function stableProfileList(value, limit = 12, itemLimit = 240) {
     return cleanList(value, limit, itemLimit).filter((item) => (
         !VOLATILE_PROFILE_LABEL_RE.test(item)
         && !TOTALIZING_PROFILE_RE.test(item)
+        && !TYPOLOGY_PROFILE_RE.test(item)
     ));
+}
+
+function mergeProfilePattern(current, proposed, limit = 240) {
+    const oldValue = cleanText(current, limit);
+    const newValue = cleanText(proposed, limit);
+    if (!newValue) return oldValue;
+    if (!oldValue) return newValue;
+    const oldKey = evidenceLookupText(oldValue);
+    const newKey = evidenceLookupText(newValue);
+    if (oldKey === newKey || oldKey.includes(newKey)) return oldValue;
+    if (newKey.includes(oldKey)) return newValue;
+    return cleanText(`${oldValue}；${newValue}`, limit);
 }
 
 function evidenceLookupText(value) {
@@ -511,10 +543,38 @@ export function mergeActorProfilePatches(value, patches, {
             traits: mergeProfileList(actor.identity.traits, stableProfileList(identity.traits, 12, 180), 12, 180),
             desires: mergeProfileList(actor.identity.desires, stableProfileList(identity.desires, 12, 240), 12, 240),
             boundaries: mergeProfileList(actor.identity.boundaries, stableProfileList(identity.boundaries, 12, 240), 12, 240),
-            socialStyle: mergeProfileText(actor.identity.socialStyle, stableProfileText(identity.socialStyle)),
-            decisionStyle: mergeProfileText(actor.identity.decisionStyle, stableProfileText(identity.decisionStyle)),
-            speechStyle: mergeProfileText(actor.identity.speechStyle, stableProfileText(identity.speechStyle)),
-            copingStyle: mergeProfileText(actor.identity.copingStyle, stableProfileText(identity.copingStyle)),
+            socialStyle: mergeProfilePattern(actor.identity.socialStyle, stableProfileText(identity.socialStyle)),
+            decisionStyle: mergeProfilePattern(actor.identity.decisionStyle, stableProfileText(identity.decisionStyle)),
+            speechStyle: mergeProfilePattern(actor.identity.speechStyle, stableProfileText(identity.speechStyle)),
+            copingStyle: mergeProfilePattern(actor.identity.copingStyle, stableProfileText(identity.copingStyle)),
+            informationStyle: mergeProfilePattern(
+                actor.identity.informationStyle,
+                stableProfileText(identity.informationStyle),
+            ),
+            typicalMisread: mergeProfilePattern(
+                actor.identity.typicalMisread,
+                stableProfileText(identity.typicalMisread),
+            ),
+            relationshipDistancePattern: mergeProfilePattern(
+                actor.identity.relationshipDistancePattern,
+                stableProfileText(identity.relationshipDistancePattern),
+            ),
+            selfImageGap: mergeProfilePattern(
+                actor.identity.selfImageGap,
+                stableProfileText(identity.selfImageGap),
+            ),
+            learnedCounterDisposition: mergeProfilePattern(
+                actor.identity.learnedCounterDisposition,
+                stableProfileText(identity.learnedCounterDisposition),
+            ),
+            pressureResponse: mergeProfilePattern(
+                actor.identity.pressureResponse,
+                stableProfileText(identity.pressureResponse),
+            ),
+            recoveryPath: mergeProfilePattern(
+                actor.identity.recoveryPath,
+                stableProfileText(identity.recoveryPath),
+            ),
             everydayHabits: mergeProfileList(
                 actor.identity.everydayHabits,
                 stableProfileList(identity.everydayHabits, 8, 180),

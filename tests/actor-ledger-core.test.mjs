@@ -128,7 +128,7 @@ test('evidence-backed profile patches persist character DNA without overwriting 
     const merged = mergeActorProfilePatches(ledger, [{
         actorId: 'ADA',
         name: '艾达',
-        evidence: ['她先核对交货清单，再问能否留一条撤离路线'],
+        evidence: ['她先核对交货清单，再问能否留一条撤离路线；她自称不擅长交涉，却用多年柜台经验安抚了争执'],
         identity: {
             role: '情报官',
             traits: ['谨慎', '好奇'],
@@ -138,6 +138,13 @@ test('evidence-backed profile patches persist character DNA without overwriting 
             decisionStyle: '先核价并确认退路',
             speechStyle: '句子短，通常先问条件',
             copingStyle: '压力上升时转向核对清单和可控步骤',
+            informationStyle: '先核对书面清单，再用具体问题补缺口',
+            typicalMisread: '容易把临时善意先当成附带条件的交易',
+            relationshipDistancePattern: '先保持礼貌距离，确认对方履约后才主动靠近',
+            selfImageGap: '自称不擅长交涉，实际能用柜台经验安抚争执',
+            learnedCounterDisposition: '不喜欢临场交涉，却因多年柜台经验能稳住争执',
+            pressureResponse: '压力上升时先缩小问题并核对可控步骤',
+            recoveryPath: '确认退路和责任边界后恢复正常交流',
             everydayHabits: ['说话前摸一下清单边角'],
             blindSpots: ['低估临时起意的善意'],
         },
@@ -148,14 +155,21 @@ test('evidence-backed profile patches persist character DNA without overwriting 
     }], {
         turn: 7,
         sourceRef: sourceRef(7),
-        evidenceCorpus: '她先核对交货清单，再问能否留一条撤离路线。',
+        evidenceCorpus: '她先核对交货清单，再问能否留一条撤离路线；她自称不擅长交涉，却用多年柜台经验安抚了争执。',
     });
     assert.equal(merged.accepted.length, 1);
     assert.equal(merged.rejected.length, 0);
-    assert.equal(merged.ledger.version, 3);
+    assert.equal(merged.ledger.version, 4);
     const ada = merged.ledger.actors[0];
     assert.equal(ada.identity.role, '商人', 'established role is not overwritten');
     assert.equal(ada.identity.socialStyle, '先保持礼貌距离，再用具体问题试探');
+    assert.equal(ada.identity.informationStyle, '先核对书面清单，再用具体问题补缺口');
+    assert.equal(ada.identity.typicalMisread, '容易把临时善意先当成附带条件的交易');
+    assert.equal(ada.identity.relationshipDistancePattern, '先保持礼貌距离，确认对方履约后才主动靠近');
+    assert.equal(ada.identity.selfImageGap, '自称不擅长交涉，实际能用柜台经验安抚争执');
+    assert.equal(ada.identity.learnedCounterDisposition, '不喜欢临场交涉，却因多年柜台经验能稳住争执');
+    assert.equal(ada.identity.pressureResponse, '压力上升时先缩小问题并核对可控步骤');
+    assert.equal(ada.identity.recoveryPath, '确认退路和责任边界后恢复正常交流');
     assert.equal(ada.identity.traits.includes('好奇'), true);
     assert.equal(ada.identity.everydayHabits.includes('说话前摸一下清单边角'), true);
     assert.equal(ada.hidden.innerConflicts.includes('想帮助同伴但不愿承担无上限风险'), true);
@@ -201,15 +215,70 @@ test('profile patches reject fabricated evidence and do not persist generic extr
         actorId: 'ADA',
         evidence: ['艾达核对清单后询问了撤离路线'],
         identity: {
-            traits: ['冷酷'],
+            traits: ['冷酷', 'INTJ 5w4 回避型依恋'],
             decisionStyle: '先核对事实，再为撤离保留余地',
+            informationStyle: 'INTJ式直觉判断',
         },
     }], {
         evidenceCorpus: '艾达核对清单后询问了撤离路线。',
     });
     assert.equal(filtered.accepted.length, 1);
     assert.equal(filtered.ledger.actors[0].identity.traits.includes('冷酷'), false);
+    assert.equal(filtered.ledger.actors[0].identity.traits.includes('INTJ 5w4 回避型依恋'), false);
+    assert.equal(filtered.ledger.actors[0].identity.informationStyle, '');
     assert.equal(filtered.ledger.actors[0].identity.decisionStyle, '先核对事实，再为撤离保留余地');
+});
+
+test('v3 actor ledgers migrate to v4 dynamic evidence fields without inventing personality', () => {
+    const legacy = {
+        ...emptyActorLedger('chat-actor-ledger'),
+        version: 3,
+        migrations: { continuityV5: true, actorLedgerV2: true, actorLedgerV3: true },
+        actors: [actor('ADA', {
+            name: '艾达',
+            identity: {
+                role: '商人',
+                aliases: [],
+                traits: ['谨慎'],
+                desires: ['按时交货'],
+                boundaries: ['不拿同伴当诱饵'],
+                copingStyle: '受压时先核对清单',
+            },
+        })],
+    };
+    const migrated = normalizeActorLedger(legacy);
+    assert.equal(migrated.version, 4);
+    assert.equal(migrated.migrations.actorLedgerV4, true);
+    assert.equal(migrated.actors[0].identity.copingStyle, '受压时先核对清单');
+    assert.equal(migrated.actors[0].identity.informationStyle, '');
+    assert.equal(migrated.actors[0].identity.typicalMisread, '');
+    assert.equal(migrated.actors[0].identity.relationshipDistancePattern, '');
+    assert.equal(migrated.actors[0].identity.selfImageGap, '');
+    assert.equal(migrated.actors[0].identity.learnedCounterDisposition, '');
+    assert.equal(migrated.actors[0].identity.pressureResponse, '');
+    assert.equal(migrated.actors[0].identity.recoveryPath, '');
+});
+
+test('repeated grounded observations extend a behavior pattern instead of replacing it', () => {
+    const ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-actor-ledger'),
+        actors: [actor('ADA', {
+            name: '艾达',
+            identity: {
+                role: '商人', aliases: [], traits: [], desires: [], boundaries: [],
+                informationStyle: '先查书面记录',
+            },
+        })],
+    });
+    const merged = mergeActorProfilePatches(ledger, [{
+        actorId: 'ADA',
+        evidence: ['记录缺页时，她转而询问亲历者并比较两份说法'],
+        identity: { informationStyle: '记录缺页时询问亲历者并交叉比较说法' },
+    }], {
+        evidenceCorpus: '记录缺页时，她转而询问亲历者并比较两份说法。',
+    });
+    assert.equal(merged.accepted.length, 1);
+    assert.match(merged.ledger.actors[0].identity.informationStyle, /先查书面记录；记录缺页时询问亲历者/u);
 });
 
 test('accepted content updates only named observers and excludes private/internal narration', () => {

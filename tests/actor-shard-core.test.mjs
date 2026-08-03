@@ -115,6 +115,10 @@ test('strict proposal parser rejects extra fields and identity/evidence escape',
         parseActorShardProposal(`说明：${JSON.stringify(valid)}`, { candidate }).error,
         'actor_shard.json_missing',
     );
+    const fenced = parseActorShardProposal(`\`\`\`json\n${JSON.stringify(valid)}\n\`\`\``, { candidate });
+    assert.deepEqual(fenced.proposal, valid);
+    assert.equal(fenced.repaired, true);
+    assert.deepEqual(fenced.repairKinds, ['strip-json-code-fence']);
     assert.equal(
         parseActorShardProposal(
             JSON.stringify({ ...valid, sourceThreads: ['UNRELATED'] }),
@@ -341,6 +345,9 @@ test('actor shard output example is directly valid against the candidate evidenc
     assert.match(messages[0].content, /资源列表为空时必须输出\[\]/u);
     assert.match(messages[0].content, /能力列表为空时必须输出空字符串/u);
     assert.match(messages[0].content, /没有提供可核验目标ID时必须输出\[\]/u);
+    assert.match(messages[0].content, /信息取样、典型误读、具体关系距离/u);
+    assert.match(messages[0].content, /不得用MBTI、九型、Tritype、依恋型/u);
+    assert.match(messages[0].content, /不为补反差发明创伤或秘密/u);
     const shape = JSON.parse(messages[1].content.split('\n').at(-1));
     assert.deepEqual(shape.knowledgeBasis, candidate.knowledgeBasis);
     assert.deepEqual(shape.sourceThreads, candidate.sourceThreads);

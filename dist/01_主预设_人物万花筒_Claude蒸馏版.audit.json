@@ -1,5 +1,5 @@
 {
-  "transformVersion": "2.1-character-kaleidoscope",
+  "transformVersion": "2.2-dynamic-character-evidence",
   "sourceName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_偶发性双保险版",
   "outputName": "01_主预设_外置兼容终版 (6)_公平导演改良副本_人物万花筒版",
   "promptCount": 215,
@@ -9,11 +9,11 @@
     {
       "identifier": "cf9b6278-b776-4c56-b02d-d34f0f0f7d31",
       "beforeName": "",
-      "afterName": "🎭人物万花筒V1（反脸谱·群像碰撞·情绪不覆写人格）",
+      "afterName": "🎭人物万花筒V2（动态人格·证据渐变·去类型标签）",
       "beforeLength": 0,
-      "afterLength": 1505,
+      "afterLength": 2364,
       "beforeSha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "afterSha256": "F5D84956BDA2C0EC196D4F13DD136B63205E8C7FBFFB9B8177DBF938B4F3B14F"
+      "afterSha256": "424C13B0C55176863AD7D5C000E80C35F3E6BC1993FCF118E778E7F3FE4660B6"
     },
     {
       "identifier": "941c6128-f8b7-470f-b598-8351e24724cc",
@@ -39,9 +39,9 @@
   "sourceFile": "01_主预设_公平导演偶发性双保险版.json",
   "outputFile": "01_主预设_人物万花筒_Claude蒸馏版.json",
   "sourceBytes": 524016,
-  "outputBytes": 535699,
+  "outputBytes": 538174,
   "sourceSha256": "5C469BEA5E68E087E4D9874E8F2AD6579B030796056CFC961D093C0C90F714E9",
-  "outputSha256": "ED394DC76E50B248217C2408DB1025524B1D3318C7622EAEC294E81CDE06279F",
+  "outputSha256": "3D1A944464EE941918D38D721467A1CFD7AE6182A47450A4A2BA4D21B6B09D8A",
   "sourceUnchanged": true,
-  "createdAt": "2026-08-03T13:26:10.851Z"
+  "createdAt": "2026-08-03T16:41:05.384Z"
 }

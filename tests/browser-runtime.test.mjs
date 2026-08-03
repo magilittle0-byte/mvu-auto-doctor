@@ -693,11 +693,28 @@ const server = http.createServer((request, response) => {
 
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const { port } = server.address();
-const launchOptions = { headless: true };
+const launchOptions = {
+    headless: true,
+    args: [
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+    ],
+};
 if (systemBrowser) {
     launchOptions.executablePath = systemBrowser;
 }
 const browser = await chromium.launch(launchOptions);
+const rawNewPage = browser.newPage.bind(browser);
+browser.newPage = async (...args) => {
+    const page = await rawNewPage(...args);
+    // This suite intentionally opens many isolated runtime pages. On a busy desktop,
+    // local module evaluation can exceed Playwright's 30s default without indicating
+    // a product timeout, so keep semantic waits explicit and give page boot a wider lane.
+    page.setDefaultTimeout(60000);
+    page.setDefaultNavigationTimeout(60000);
+    return page;
+};
 
 try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -880,7 +897,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.7');
+    assert.equal(continuity.version, '2.0.0-rc.8');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2548,7 +2565,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.7');
+    assert.equal(lifecycle.version, '2.0.0-rc.8');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2991,6 +3008,10 @@ try {
     const connectionManagerPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await connectionManagerPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await connectionManagerPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await connectionManagerPage.waitForSelector(
+        '.mvuad-connection-manager .mvuad-connection-endpoint',
+        { state: 'attached' },
+    );
     const connectionManagerResult = await connectionManagerPage.evaluate(async () => {
         const t = window.__TEST__;
         const root = document.querySelector('.mvuad-connection-manager');
@@ -2999,10 +3020,9 @@ try {
         const model = root.querySelector('.mvuad-connection-model');
         const presetName = root.querySelector('.mvuad-connection-preset-name');
         const modelList = root.querySelector('.mvuad-model-list');
-        const strictRoute = root.querySelector('.mvuad-strict-preset');
-        const fastRoute = root.querySelector('.mvuad-fast-preset');
-        const strictConcurrency = root.querySelector('.mvuad-strict-concurrency');
-        const fastConcurrency = root.querySelector('.mvuad-fast-concurrency');
+        const routeSelects = (channel) => (
+            [...root.querySelectorAll(`.mvuad-${channel}-preset`)]
+        );
         const network = [];
         window.fetch = async (url, options = {}) => {
             network.push({
@@ -3036,14 +3056,13 @@ try {
         modelList.dispatchEvent(new Event('change'));
         presetName.value = '格式修复 3.5P';
         root.querySelector('.mvuad-connection-preset-save').click();
-        strictRoute.value = '格式修复 3.5P';
-        strictRoute.dispatchEvent(new Event('change'));
-        fastRoute.value = '格式修复 3.5P';
-        fastRoute.dispatchEvent(new Event('change'));
-        strictConcurrency.value = '3';
-        strictConcurrency.dispatchEvent(new Event('change'));
-        fastConcurrency.value = '6';
-        fastConcurrency.dispatchEvent(new Event('change'));
+        root.querySelector('.mvuad-strict-slot-add').click();
+        root.querySelector('.mvuad-fast-slot-add').click();
+        root.querySelector('.mvuad-fast-slot-add').click();
+        for (const select of [...routeSelects('strict'), ...routeSelects('fast')]) {
+            select.value = '格式修复 3.5P';
+            select.dispatchEvent(new Event('change'));
+        }
         const backendNetwork = [];
         const backendModelCalls = [];
         t.context.getRequestHeaders = () => ({
@@ -3062,12 +3081,21 @@ try {
             },
         };
         window.fetch = async (url, options = {}) => {
+            const method = String(options.method || 'GET');
             backendNetwork.push({
                 url: String(url),
-                method: String(options.method || 'GET'),
+                method,
                 headers: structuredClone(options.headers || {}),
                 body: JSON.parse(options.body || '{}'),
             });
+            if (method === 'POST') {
+                return new Response(JSON.stringify({
+                    choices: [{ message: { content: 'OK' } }],
+                }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                });
+            }
             return new Response(JSON.stringify({
                 data: [{ id: 'backend-3.5-flash' }],
             }), {
@@ -3093,8 +3121,9 @@ try {
             poll();
         });
         root.querySelector('.mvuad-connection-preset-save').click();
-        strictRoute.value = '后端转发';
-        strictRoute.dispatchEvent(new Event('change'));
+        const strictRoutes = routeSelects('strict');
+        strictRoutes[1].value = '后端转发';
+        strictRoutes[1].dispatchEvent(new Event('change'));
         root.querySelector('.mvuad-test-strict').click();
         await new Promise((resolve) => {
             const poll = () => {
@@ -3113,6 +3142,8 @@ try {
             saved: structuredClone(settings.connectionPresets),
             strictRoute: settings.strictConnectionPreset,
             fastRoute: settings.fastConnectionPreset,
+            strictSlots: structuredClone(settings.strictConnectionSlots),
+            fastSlots: structuredClone(settings.fastConnectionSlots),
             strictConcurrency: settings.strictChannelConcurrency,
             fastConcurrency: settings.fastChannelConcurrency,
             legacyHidden: document.querySelector('.mvuad-model-routing')?.hidden === true,
@@ -3140,12 +3171,18 @@ try {
     });
     assert.equal(connectionManagerResult.saved[1].name, '后端转发');
     assert.equal(connectionManagerResult.saved[1].viaBackend, true);
-    assert.equal(connectionManagerResult.strictRoute, '后端转发');
+    assert.equal(connectionManagerResult.strictRoute, '格式修复 3.5P');
     assert.equal(connectionManagerResult.fastRoute, '格式修复 3.5P');
+    assert.deepEqual(connectionManagerResult.strictSlots, [
+        '格式修复 3.5P',
+        '后端转发',
+        '格式修复 3.5P',
+    ]);
+    assert.deepEqual(connectionManagerResult.fastSlots, Array(6).fill('格式修复 3.5P'));
     assert.equal(connectionManagerResult.strictConcurrency, 3);
     assert.equal(connectionManagerResult.fastConcurrency, 6);
     assert.equal(connectionManagerResult.legacyHidden, true);
-    assert.equal(connectionManagerResult.backendNetwork.length, 1);
+    assert.equal(connectionManagerResult.backendNetwork.length, 3);
     assert.equal(
         connectionManagerResult.backendNetwork[0].url,
         '/api/backends/chat-completions/status',
@@ -3157,6 +3194,10 @@ try {
     assert.match(
         connectionManagerResult.backendNetwork[0].body.custom_include_headers,
         /Bearer backend-test-secret/u,
+    );
+    assert.deepEqual(
+        connectionManagerResult.backendNetwork.slice(1).map((entry) => entry.url),
+        Array(2).fill('https://models.example/v1/chat/completions'),
     );
     assert.equal(connectionManagerResult.backendModelCalls.length, 1);
     assert.equal(
@@ -3502,25 +3543,45 @@ try {
         const t = window.__TEST__;
         Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
             fastModelProvider: 'direct',
-            connectionEndpoint: 'https://shared-fast.example/v1',
-            connectionApiKey: 'shared-fast-secret',
-            connectionModel: 'gemini-fast',
-            connectionViaBackend: false,
-            connectionRawUrl: false,
-            fastConnectionPreset: '__current__',
+            connectionPresets: [
+                {
+                    name: '轻量 A',
+                    endpoint: 'https://fast-a.example/v1',
+                    apiKey: 'fast-a-secret',
+                    model: 'gemini-fast-a',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+                {
+                    name: '轻量 B',
+                    endpoint: 'https://fast-b.example/v1',
+                    apiKey: 'fast-b-secret',
+                    model: 'gemini-fast-b',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+            ],
+            fastConnectionPreset: '轻量 A',
+            fastConnectionSlots: ['轻量 A', '轻量 B'],
             fastChannelConcurrency: 2,
-            modelConcurrencySettingsVersion: 1,
+            modelConcurrencySettingsVersion: 2,
         });
         const pending = {};
-        const network = { active: 0, maxActive: 0, tasks: [] };
+        const network = { active: 0, maxActive: 0, tasks: [], routes: [] };
         window.__DIRECT_FAST_POOL__ = { pending, network };
-        window.fetch = async (_url, options = {}) => {
+        window.fetch = async (url, options = {}) => {
             const body = JSON.parse(options.body || '{}');
             const system = String(body.messages?.[0]?.content || '');
             const task = system.includes('独立网络论坛模拟器') ? 'forum' : 'continuity';
             network.active += 1;
             network.maxActive = Math.max(network.maxActive, network.active);
             network.tasks.push(task);
+            network.routes.push({
+                task,
+                url: String(url),
+                model: String(body.model || ''),
+                authorization: String(options.headers?.Authorization || ''),
+            });
             const content = task === 'forum'
                 ? JSON.stringify({
                     summary: '并发池论坛页',
@@ -3587,6 +3648,24 @@ try {
     assert.deepEqual(
         [...directFastPoolStarted.network.tasks].sort(),
         ['continuity', 'forum'],
+    );
+    assert.deepEqual(
+        directFastPoolStarted.network.routes
+            .map(({ url, model, authorization }) => ({ url, model, authorization }))
+            .sort((left, right) => left.url.localeCompare(right.url)),
+        [
+            {
+                url: 'https://fast-a.example/v1/chat/completions',
+                model: 'gemini-fast-a',
+                authorization: 'Bearer fast-a-secret',
+            },
+            {
+                url: 'https://fast-b.example/v1/chat/completions',
+                model: 'gemini-fast-b',
+                authorization: 'Bearer fast-b-secret',
+            },
+        ],
+        '两个轻量并发槽位必须真正路由到各自的 API、模型和密钥',
     );
     await directFastPoolPage.evaluate(() => {
         window.__DIRECT_FAST_POOL__.pending.forum();
@@ -5393,8 +5472,9 @@ try {
             connectionViaBackend: false,
             connectionRawUrl: false,
             fastConnectionPreset: '__current__',
+            fastConnectionSlots: Array(4).fill('__current__'),
             fastChannelConcurrency: 4,
-            modelConcurrencySettingsVersion: 1,
+            modelConcurrencySettingsVersion: 2,
         });
         window.fetch = async (_url, options = {}) => {
             const body = JSON.parse(options.body || '{}');
@@ -5563,7 +5643,7 @@ try {
     assert.equal(actorIntegration.settings.actorShardSettingsVersion, 3);
     assert.equal(actorIntegration.settings.strictChannelConcurrency, 2);
     assert.equal(actorIntegration.settings.fastChannelConcurrency, 4);
-    assert.equal(actorIntegration.settings.modelConcurrencySettingsVersion, 1);
+    assert.equal(actorIntegration.settings.modelConcurrencySettingsVersion, 2);
     assert.deepEqual(actorIntegration.controls, {
         mode: 'on',
         workers: '2',

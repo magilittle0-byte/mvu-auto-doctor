@@ -20,6 +20,9 @@ test('social narrative contract preserves explicit dark content and blocks inven
     assert.match(contract, /不要先复述上一轮正文/u);
     assert.match(contract, /职业、阵营与本轮情绪不是完整人格/u);
     assert.match(contract, /删掉姓名后/u);
+    assert.match(contract, /不使用MBTI、九型、Tritype、依恋型/u);
+    assert.match(contract, /信息取样与典型误读/u);
+    assert.match(contract, /首次出场正文最多显露三项人物差异/u);
 });
 
 test('closed option proposals are removed only from assistant prompt messages', () => {
@@ -82,6 +85,28 @@ test('balanced routing flags identity totalization and piles of generic extreme 
     assert.equal(routed.needed, true);
     assert.ok(routed.reasons.includes('identity-totalization'));
     assert.ok(routed.reasons.includes('stereotype-label-pileup'));
+});
+
+test('balanced routing reviews psychology labels used as characterization shortcuts', () => {
+    const routed = classifySocialAuditNeed({
+        userText: '我问她如何判断这条消息。',
+        replyText: '她是典型INTJ和5w4回避型依恋，所以天然不信任何人。',
+        changes: [],
+        mode: 'balanced',
+    });
+    assert.equal(routed.needed, true);
+    assert.ok(routed.reasons.includes('typology-shortcut'));
+});
+
+test('balanced routing reviews uniform group reactions without banning valid dark scenes', () => {
+    const routed = classifySocialAuditNeed({
+        userText: '我推开会议室的门。',
+        replyText: '所有人都同时沉默，齐齐露出冷酷的神情。',
+        changes: [],
+        mode: 'balanced',
+    });
+    assert.equal(routed.needed, true);
+    assert.ok(routed.reasons.includes('group-reaction-homogenization'));
 });
 
 test('semantic auditor can only decide known relation paths', () => {

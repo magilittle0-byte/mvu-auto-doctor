@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "version": "2.0.0-rc.8",
+  "testedAt": "2026-08-03T16:16:46.029Z",
+  "result": "pass-character-scope",
+  "scope": "synthetic-character-diversity-and-doctor-model-chain",
+  "model": "gemini-3.1-pro-preview",
+  "upstream": "api2.gemai.cc",
+  "targetModelMatchesUserLogs": true,
+  "characterAB": {
+    "baseline": "complete-rc.7-character-kaleidoscope-v1-from-148094f49fee3d09cb94e2b18f421b7a97e67e29",
+    "candidate": "rc.8-character-kaleidoscope-v2",
+    "scenarioCount": 4,
+    "logicalCalls": 12,
+    "successfulHttpResponses": 12,
+    "upstreamAttempts": 13,
+    "httpStatusCounts": {
+      "200": 12,
+      "500": 1
+    },
+    "winners": {
+      "v2": 3,
+      "v1": 0,
+      "tie": 1
+    },
+    "meanScores": {
+      "v1": {
+        "differentiation": 3.25,
+        "agency": 2.75,
+        "ordinaryHumanity": 4.0,
+        "evidenceGrounding": 3.25,
+        "dynamicPersonality": 2.5,
+        "darkIntegrity": 3.75
+      },
+      "v2": {
+        "differentiation": 4.0,
+        "agency": 4.0,
+        "ordinaryHumanity": 4.5,
+        "evidenceGrounding": 4.5,
+        "dynamicPersonality": 4.0,
+        "darkIntegrity": 4.75
+      }
+    },
+    "violations": {
+      "v1": {
+        "typologyShortcut": 0,
+        "interchangeableCharacters": 0,
+        "firstAppearanceOverload": 0,
+        "uniformGroupReaction": 0,
+        "forcedWarmth": 0,
+        "unsupportedDarkness": 0
+      },
+      "v2": {
+        "typologyShortcut": 0,
+        "interchangeableCharacters": 0,
+        "firstAppearanceOverload": 0,
+        "uniformGroupReaction": 0,
+        "forcedWarmth": 0,
+        "unsupportedDarkness": 0
+      }
+    },
+    "scenarios": [
+      {
+        "id": "ordinary-clerk-first-appearance",
+        "winner": "v2"
+      },
+      {
+        "id": "type-label-bait-and-trained-skill",
+        "winner": "v2"
+      },
+      {
+        "id": "counter-disposition-under-pressure",
+        "winner": "v2"
+      },
+      {
+        "id": "ensemble-pressure-and-recovery",
+        "winner": "tie"
+      }
+    ],
+    "promptHashes": {
+      "v1": "f5d84956bda2c0ec196d4f13dd136b63205e8c7fbffb9b8177dbf938b4f3b14f",
+      "v2": "424c13b0c55176863ad7d5c000e80c35f3e6bc1993fcf118e778e7f3fe4660b6"
+    }
+  },
+  "doctorModelChain": {
+    "host": "sterile-sillytavern-1.18.0",
+    "syntheticFixture": true,
+    "modelCalls": 3,
+    "http200": 3,
+    "retryCount": 0,
+    "fallbackUsed": false,
+    "actorShardSelected": 1,
+    "actorShardSucceeded": 1,
+    "actorShardFailed": 0,
+    "actorWorldSettled": true,
+    "actorReceiptCount": 3,
+    "worldLaneTypes": [
+      "environment",
+      "faction"
+    ],
+    "worldLaneReceiptCount": 2,
+    "worldLaneIndependentOfActors": true,
+    "invalidSocialFixtureZeroWrite": true,
+    "doctorErrorCount": 0,
+    "geminiCompatibilityRepair": "strip-one-complete-json-code-fence-only"
+  },
+  "excludedCalibrationRuns": [
+    {
+      "reason": "compressed-v1-baseline",
+      "usedAsVersionEvidence": false
+    },
+    {
+      "reason": "upstream-http-524-incomplete-batch",
+      "usedAsVersionEvidence": false
+    },
+    {
+      "reason": "judge-json-missing-incomplete-batch",
+      "usedAsVersionEvidence": false
+    },
+    {
+      "reason": "doctor-proxy-pointed-to-opencode-and-returned-401",
+      "usedAsVersionEvidence": false
+    },
+    {
+      "reason": "pre-repair-actor-shard-json-fence-rejected",
+      "usedAsVersionEvidence": false
+    }
+  ],
+  "privacy": {
+    "syntheticOnly": true,
+    "privateChatSent": false,
+    "referencePresetTextSent": false,
+    "rawPromptsPersisted": false,
+    "rawNarrativeResponsesPersisted": false,
+    "derivedJudgeMetricsPersisted": true,
+    "apiKeyIncluded": false,
+    "credentialPersisted": false,
+    "credentialClearedFromBrowserMemory": true,
+    "credentialClearedFromProxy": true,
+    "temporaryDataRemoved": true,
+    "originalUserDataModified": false
+  }
+}
