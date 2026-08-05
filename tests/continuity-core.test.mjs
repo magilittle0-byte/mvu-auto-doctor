@@ -5,6 +5,7 @@ import {
     applyWorldUpdate,
     attachChangedSourceRefs,
     buildContinuityInjection,
+    continuityConsumptionEvidence,
     continuityLifecycleStats,
     continuityLedgerView,
     continuityScenarioDigest,
@@ -1315,6 +1316,26 @@ const ambientEnvironmentSchedule = scheduleWorldLanes(normalizeContinuityState({
 });
 assert.equal(ambientEnvironmentSchedule.selected[0].sourceId, 'environment:ambient');
 assert.equal(ambientEnvironmentSchedule.selected[0].label.includes('经济'), false);
+
+const valenReceipt = {
+    evidenceTerms: ['Roy', '卡尔', '瓦伦', '吉迪·普莱姆'],
+    semanticEvidenceTerms: [
+        '瓦伦完成治疗并销毁了暴露身份的诊疗记录',
+        '瓦伦的主动行动',
+    ],
+};
+assert.equal(
+    continuityConsumptionEvidence(valenReceipt, 'Roy和卡尔继续处理当前委托。'),
+    '',
+    '通用人物名不得消费未进入正文的瓦伦支线',
+);
+assert.equal(
+    continuityConsumptionEvidence(
+        valenReceipt,
+        '瓦伦完成治疗并销毁了暴露身份的诊疗记录，随后保持联络静默。',
+    ),
+    '瓦伦完成治疗并销毁了暴露身份的诊疗记录',
+);
 
 let namespace = appendRepairJournal({}, {
     id: 'repair-1',

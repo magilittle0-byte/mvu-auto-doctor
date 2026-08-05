@@ -718,17 +718,38 @@ try {
                 && latestData.stat_data.characters.Subject.relationship === 'fanatic'
             ),
             continuityStatus: continuityResult?.status || '',
+            continuityClockOnly: continuityResult?.clockOnly === true,
             actorWorldSettled: actorReceipts.some(
                 (receipt) => receipt.stage === 'world_settled',
             ),
+            actorSemanticSettled: actorReceipts.some(
+                (receipt) => (
+                    receipt.stage === 'world_settled'
+                    && receipt.semanticProgress === true
+                ),
+            ),
             actorReceiptCount: actorReceipts.length,
             actorLedgerPublicCount: actorLedgerView.actors.length,
+            actorSemanticProgressCount: Number(
+                actorLedgerView.semanticProgressCount || 0,
+            ),
+            actorStateFactCount: actorLedgerView.actors.reduce(
+                (total, actor) => total + (
+                    Array.isArray(actor.stateFacts) ? actor.stateFacts.length : 0
+                ),
+                0,
+            ),
+            actorConsecutiveFailureCount: Number(
+                actorLedgerView.consecutiveFailureCount || 0,
+            ),
             actorShardDiagnostic: {
                 status: actorShardDiagnostic.status || '',
                 selected: Number(actorShardDiagnostic.selected || 0),
                 completed: Number(actorShardDiagnostic.completed || 0),
                 succeeded: Number(actorShardDiagnostic.succeeded || 0),
                 failed: Number(actorShardDiagnostic.failed || 0),
+                semanticActions: Number(actorShardDiagnostic.semanticActions || 0),
+                heldActions: Number(actorShardDiagnostic.heldActions || 0),
                 failureCodes: Array.isArray(actorShardDiagnostic.failureCodes)
                     ? actorShardDiagnostic.failureCodes.slice(0, 8)
                     : [],
@@ -791,7 +812,14 @@ try {
         || modelResult.modelCompleted !== true
         || modelResult.fallbackUsed === true
         || modelResult.continuityStatus !== 'applied'
+        || modelResult.continuityClockOnly === true
         || modelResult.actorWorldSettled !== true
+        || modelResult.actorSemanticSettled !== true
+        || modelResult.actorSemanticProgressCount < 1
+        || modelResult.actorStateFactCount < 1
+        || modelResult.actorConsecutiveFailureCount !== 0
+        || modelResult.actorShardDiagnostic.semanticActions < 1
+        || modelResult.actorShardDiagnostic.heldActions !== 0
         || modelResult.worldLaneIndependentOfActors !== true
         || !modelResult.worldLaneTypes.includes('environment')
         || !modelResult.worldLaneTypes.includes('faction')

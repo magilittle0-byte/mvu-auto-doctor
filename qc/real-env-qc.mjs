@@ -81,9 +81,10 @@ function reportHash() {
 
 function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
+    const semanticRuntimeRequired = report.version === '2.0.0-rc.9';
     if (
         !actorLedger
-        || actorLedger.version !== 4
+        || actorLedger.version !== (semanticRuntimeRequired ? 5 : 4)
         || actorLedger.persistentAuditLedger !== true
         || actorLedger.continuousMigration !== true
         || actorLedger.privateThoughtsHidden !== true
@@ -102,6 +103,17 @@ function validateActorLedgerEvidence(report) {
         || actorLedger.publicViewExcludesPrivateState !== true
         || actorLedger.realUiControlsVerified !== true
         || actorLedger.optionalFailureNonBlocking !== true
+        || (
+            semanticRuntimeRequired
+            && (
+                actorLedger.semanticProgressRequired !== true
+                || actorLedger.clockOnlySuccessRejected !== true
+                || actorLedger.failedWorkersSettled !== true
+                || actorLedger.playerAndGroupsExcluded !== true
+                || actorLedger.stateFactsPersisted !== true
+                || actorLedger.semanticStarvationBounded !== true
+            )
+        )
     ) fail('Actor Ledger closed-loop evidence is incomplete');
 }
 
@@ -160,6 +172,7 @@ function validateSerendipityEvidence(report) {
 }
 
 function validateRc6PassReport(report) {
+    const semanticRuntimeRequired = report.version === '2.0.0-rc.9';
     const billing = report.checks?.billingRemoval;
     if (
         !billing
@@ -229,6 +242,16 @@ function validateRc6PassReport(report) {
         || model.doctorModelCompleted !== true
         || model.appliedContinuityCalls < 1
         || model.actorWorldSettled !== true
+        || (
+            semanticRuntimeRequired
+            && (
+                model.actorSemanticSettled !== true
+                || model.actorSemanticProgressCount < 1
+                || model.actorStateFactCount < 1
+                || model.actorConsecutiveFailureCount !== 0
+                || model.clockOnly !== false
+            )
+        )
         || model.actorReceiptCount < 1
         || model.worldLaneTypes?.join(',') !== 'environment,faction'
         || model.worldLaneReceiptCount < 2
@@ -289,6 +312,14 @@ function validateRc6PassReport(report) {
         || tauri.sandboxProcessStopped !== true
         || tauri.cdpPortClosed !== true
         || tauri.userRunningTauriTavernTouched !== false
+        || (
+            semanticRuntimeRequired
+            && (
+                tauri.suspendedLaunch !== true
+                || tauri.hiddenWatchdogBeforeResume !== true
+                || tauri.startupWindowHidden !== true
+            )
+        )
     ) fail('rc6 real TauriTavern evidence is incomplete');
 
     const artifact = report.releaseArtifact;
@@ -806,7 +837,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

@@ -11,7 +11,9 @@ const PROPOSAL_KEYS = Object.freeze([
     'travelTurns',
     'knowledgeBasis',
     'currentGoal',
+    'intent',
     'candidateAction',
+    'stateChanges',
     'interactionTargets',
     'resourceCosts',
     'capabilityUsed',
@@ -22,7 +24,19 @@ const PROPOSAL_KEYS = Object.freeze([
 ]);
 const INTERACTION_KEYS = Object.freeze(['actorId', 'actorName']);
 const RESOURCE_COST_KEYS = Object.freeze(['resourceId', 'amount']);
-const GROUP_NAME = /(?:队|军|协会|组织|公司|家族|势力|居民|商户|人群|群众|议会|公会)$/u;
+const STATE_CHANGE_KEYS = Object.freeze(['kind', 'summary']);
+const STATE_CHANGE_KINDS = new Set([
+    'location',
+    'plan',
+    'resource',
+    'knowledge',
+    'relationship',
+    'risk',
+    'condition',
+    'commitment',
+    'environment',
+]);
+const GROUP_NAME = /(?:队|小队|团队|军|军团|旅团|兵团|团|协会|组织|公司|集团|家族|势力|帮派|教会|政府|部门|机构|委员会|居民|商户|人群|群众|议会|公会)$/u;
 
 function clone(value) {
     return value === undefined ? undefined : structuredClone(value);
@@ -133,8 +147,12 @@ export function selectActorShardCandidates({
     schedule = null,
     presentText = '',
     maxWorkers = 2,
+    excludedActorNames = [],
 } = {}) {
     const limit = boundedWorkers(maxWorkers);
+    const excludedNames = new Set(
+        cleanList(excludedActorNames, 24, 160).map((item) => normalizedKey(item)),
+    );
     const byActor = new Map();
     const scheduledIds = new Set(
         (Array.isArray(schedule?.selected) ? schedule.selected : [])
@@ -150,6 +168,9 @@ export function selectActorShardCandidates({
         if (
             !id
             || !name
+            || excludedNames.has(normalizedKey(name))
+            || GROUP_NAME.test(name)
+            || actorNameAppears(presentText, name)
             || (scheduledIds.size && !scheduledIds.has(id))
             || !['active', 'dormant'].includes(actor?.status)
             || (actor?.status === 'dormant' && actor?.inactiveReason === 'sleep')
@@ -209,6 +230,8 @@ export function selectActorShardCandidates({
                 capabilities: clone(actor?.capabilities || []),
                 commitments: clone(actor?.commitments || []),
                 plan: clone(actor?.plan || {}),
+                constraints: clone(actor?.constraints || []),
+                stateFacts: clone(actor?.stateFacts || []),
                 hidden: clone(actor?.hidden || {}),
                 lastAction: clone(actor?.lastAction || null),
                 nextActionTurn: Number(actor?.nextActionTurn) || 0,
@@ -225,7 +248,12 @@ export function selectActorShardCandidates({
         const score = threadScore(thread);
         for (const rawName of Array.isArray(thread.actors) ? thread.actors : []) {
             const name = cleanText(rawName, 120);
-            if (!name || name.length < 2 || GROUP_NAME.test(name)) continue;
+            if (
+                !name
+                || name.length < 2
+                || GROUP_NAME.test(name)
+                || excludedNames.has(normalizedKey(name))
+            ) continue;
             if (actorNameAppears(presentText, name)) continue;
             const id = stableActorId(name);
             const current = byActor.get(id) || {
@@ -295,6 +323,8 @@ export function buildActorShardMessages(candidate, {
         '你没有任何写权限：禁止修改MVU、世界书、论坛、聊天正文、数据库、任务、关系或事实账本。',
         '只能使用提供的有限认知依据。未知就保持未知；不得读取玩家私密信息，不得替玩家行动、说话、移动、消费或授权。',
         '角色拥有持久状态与到期行动窗口。必须提出可执行行动、具体改计划，或说明一个可核验且尚未满足的时间/地点/资源/能力条件；禁止空泛等待。',
+        'persistentActorState.constraints是玩家命令、承诺或边界，只限制角色不得违背的大方向，不会冻结角色的治疗、掩护、准备、观察、关系维护、风险处理和日常事务。除非确有具体未满足条件，否则必须让角色在约束内自主产生状态变化。',
+        'intent必须是execute、replan或wait。execute/replan至少给出一项stateChanges；每项只描述本轮真正新增的地点、计划、资源、知识、关系、风险、状态、承诺或环境事实。重复旧状态、刷新时间和“继续等待”不是状态变化。wait只能用于具体条件尚未满足，stateChanges必须为[]。',
         'persistentActorState.identity与hidden是证据化人物档案：行动应体现该角色自己的社交与决策办法、现实欲望、边界、习惯、盲点、信息取样、典型误读、具体关系距离、受压反应与恢复路径，以及训练形成的逆倾向能力，而不是仅由职业或本轮情绪驱动。强烈情绪不能抹掉其长期目标与日常行为；自我形象与行为有缝隙时用选择体现，不要写成旁白诊断。',
         '不得用MBTI、九型、Tritype、依恋型、病娇等类型标签推演行动，也不得把偏好当能力上限。若档案字段仍为空，只按已有证据行动，不自行套入“冷酷、暴躁、绝望、怯懦、狂热”默认模板，不为补反差发明创伤或秘密。',
         '角色可以主动寻找、来访、寄信、悬赏、跟踪、求助、袭击、取走其有权取得的物品，或制造交通、价格、舆论、势力与环境后果；仍不得替玩家接受、服从、支付或决定。',
@@ -340,7 +370,9 @@ export function buildActorShardMessages(candidate, {
             travelTurns: 0,
             knowledgeBasis: candidate?.knowledgeBasis || [],
             currentGoal: candidate?.goals?.[0] || '继续既定目标',
+            intent: 'execute',
             candidateAction: `围绕“${candidate?.goals?.[0] || '既定目标'}”继续行动（候选，尚未发生）`,
+            stateChanges: [{ kind: 'plan', summary: '完成一个可核验的具体准备步骤' }],
             interactionTargets: [],
             resourceCosts: [],
             capabilityUsed: '',
@@ -433,6 +465,26 @@ export function parseActorShardProposal(output, { candidate } = {}) {
         return { error: 'actor_shard.capability_invalid' };
     }
     const location = cleanText(value.location, 160);
+    const intent = cleanText(value.intent, 40);
+    if (!['execute', 'replan', 'wait'].includes(intent)) {
+        return { error: 'actor_shard.intent_invalid' };
+    }
+    const stateChanges = Array.isArray(value.stateChanges)
+        ? value.stateChanges
+        : null;
+    if (
+        !stateChanges
+        || stateChanges.length > 8
+        || stateChanges.some((item) => (
+            !exactKeys(item, STATE_CHANGE_KEYS)
+            || !STATE_CHANGE_KINDS.has(cleanText(item.kind, 80))
+            || cleanText(item.summary, 500).length < 4
+        ))
+        || (intent === 'wait' && stateChanges.length > 0)
+        || (intent !== 'wait' && stateChanges.length === 0)
+    ) {
+        return { error: 'actor_shard.semantic_delta_invalid' };
+    }
     const travelTurns = Math.floor(Number(value.travelTurns));
     const currentLocation = cleanText(
         candidate?.actorState?.location?.name || candidate?.locations?.[0],
@@ -454,7 +506,12 @@ export function parseActorShardProposal(output, { candidate } = {}) {
         travelTurns,
         knowledgeBasis: cleanList(value.knowledgeBasis, 8, 400),
         currentGoal: cleanText(value.currentGoal, 500),
+        intent,
         candidateAction: cleanText(value.candidateAction, 700),
+        stateChanges: stateChanges.map((item) => ({
+            kind: cleanText(item.kind, 80),
+            summary: cleanText(item.summary, 500),
+        })),
         interactionTargets: interactionTargets.map((item) => ({
             actorId: cleanText(item.actorId, 180),
             actorName: cleanText(item.actorName, 120),
