@@ -2,7 +2,7 @@
 
 这是一个独立的 SillyTavern / TauriTavern 扩展。它包含通用 MVU 审计修复、零模型调用的正文/装备硬合同检查、人物动机与关系证据守卫、分类活世界与事件连续性账本，以及不占正文的内置世界论坛，不会修改角色卡、SP·数据库、预设、缝合怪、Zsd 或 Story Oracle 文件。
 
-2.0.0-rc.8 以完整目标身份和持久变量写入屏障保护医生自己管理的写入：只有当前 message/swipe/generation/branch/content fingerprint 已 `settled` 才会继续，`failed/stale/late` 结果永远不能写进错误楼层或分支。正文 `<content>` 是只读事实来源；医生只输出变量补丁，不会改写正文。人物、势力、环境三条后台通道独立运行并共享医生自己的压力与注入预算；Actor Ledger v4 按证据保存信息取样与典型误读、关系距离、自我形象缝隙、习得的逆倾向能力，以及受压反应和恢复路径，供后续 NPC 分片持续使用。类型标签不会直接进入人物档案，首次出场与群像另有防过载、换名碰撞和覆盖检查。偶发性引擎仍只签发一次性许可证，不读取角色卡骰池、不替玩家行动。TavernDB 等第三方脚本独立运行，不需要注册医生协议，也不等待变量结算。RC安装与共存测试见 [`docs/2.0/USER_GUIDE_2.0_RC.md`](docs/2.0/USER_GUIDE_2.0_RC.md)，迁移与回滚步骤见 [`docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`](docs/2.0/MIGRATION_ROLLBACK_GUIDE.md)，维护者发布门见 [`docs/2.0/RELEASE_CHECKLIST.md`](docs/2.0/RELEASE_CHECKLIST.md)。
+2.0.0-rc.9 以完整目标身份和持久变量写入屏障保护医生自己管理的写入：只有当前 message/swipe/generation/branch/content fingerprint 已 `settled` 才会继续，`failed/stale/late` 结果永远不能写进错误楼层或分支。正文 `<content>` 是只读事实来源；医生只输出变量补丁，不会改写正文。人物、势力、环境三条后台通道独立运行并共享医生自己的压力与注入预算；Actor Ledger v5 除保存证据化人格与认知外，还把玩家依赖条件拆为约束，并要求非等待行动产生可持久化的语义状态变化。人物不会因为玩家没有点名就冻结；失败会被结算、轮转和重排，单纯走钟不再伪装成世界推进。类型标签不会直接进入人物档案，首次出场与群像另有防过载、换名碰撞和覆盖检查。偶发性引擎仍只签发一次性许可证，不读取角色卡骰池、不替玩家行动。TavernDB 等第三方脚本独立运行，不需要注册医生协议，也不等待变量结算。RC安装与共存测试见 [`docs/2.0/USER_GUIDE_2.0_RC.md`](docs/2.0/USER_GUIDE_2.0_RC.md)，迁移与回滚步骤见 [`docs/2.0/MIGRATION_ROLLBACK_GUIDE.md`](docs/2.0/MIGRATION_ROLLBACK_GUIDE.md)，维护者发布门见 [`docs/2.0/RELEASE_CHECKLIST.md`](docs/2.0/RELEASE_CHECKLIST.md)。
 
 “通用”指核心只依赖当前 MVU 数据、动态 JSON Pointer、实际 Schema/规则和 SillyTavern
 生命周期，不依赖某张角色卡、某组表名/列名、骰子 DOM 或缝合怪品牌。装备、骰子和
@@ -13,13 +13,13 @@ TavernDB 检测也不读取表格内容、不调用数据库 API；真实表格 
 
 ## 安装
 
-> `2.0.0-rc.8` 已完成独立的自动回归、GemAI Gemini、真实 SillyTavern、作者版
+> `2.0.0-rc.9` 已完成独立的自动回归、GemAI Gemini、真实 SillyTavern、作者版
 > TavernDB 与隐藏 TauriTavern 发布门复核，并经本轮明确授权晋升默认 `main`。离线候选包
 > 仍可用于手动更新或回滚演练；具体步骤见
 > [`2.0 RC 使用说明`](docs/2.0/USER_GUIDE_2.0_RC.md)。
 
 已有安装：先备份当前聊天并等待自动医生任务结束，然后只点击自动医生这一行自己的“更新”并刷新。
-更新后扩展信息应显示 `2.0.0-rc.8`。不要点“全部更新”，
+更新后扩展信息应显示 `2.0.0-rc.9`。不要点“全部更新”，
 也不要操作数据库、骰子前端、缝合怪、推进重roll助手或其他脚本的更新、分支、删除或重装按钮。
 
 全新在线安装使用：
@@ -29,7 +29,7 @@ TavernDB 检测也不读取表格内容、不调用数据库 API；真实表格 
 分支或标签：留空（默认 main）
 ```
 
-线上 `manifest.json` 已是 rc.8；安装后刷新页面应显示 `2.0.0-rc.8`。更新或安装只改变自动医生自己的
+线上 `manifest.json` 已是 rc.9；安装后刷新页面应显示 `2.0.0-rc.9`。更新或安装只改变自动医生自己的
 扩展代码，不会替换数据库、骰子前端、缝合怪、推进重roll助手或其他脚本。
 
 每次收到新的 AI 回复后，扩展会：

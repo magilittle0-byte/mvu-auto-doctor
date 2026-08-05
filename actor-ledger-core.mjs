@@ -1,6 +1,6 @@
 import { fingerprint } from './core.mjs';
 
-export const ACTOR_LEDGER_VERSION = 4;
+export const ACTOR_LEDGER_VERSION = 5;
 export const ACTOR_LEDGER_MAX_ACTORS = 96;
 export const ACTOR_LEDGER_MAX_RECEIPTS = 240;
 
@@ -11,8 +11,9 @@ const INTENTS = new Set(['execute', 'replan', 'wait']);
 const PRIVATE_NARRATION = /(?:心想|暗想|暗自|内心|心底|心理|秘密想|私下决定|未说出口|回忆起|玩家的秘密|玩家私密)/u;
 const PLAYER_SOVEREIGNTY = /(?:让|迫使|命令|说服|要求)(?:了)?玩家(?:接受|同意|服从|支付|交出|前往|离开|攻击|回答|承诺|决定)|玩家(?:接受了|同意了|服从了|支付了|交出了|前往了|离开了|攻击了|回答了|承诺了|决定了)/u;
 const GENERIC_WAIT = /^(?:等待|继续等待|暂时不动|按兵不动|保持现状|没有变化|暂无变化|无事发生|条件未成熟)[。.!！]?$/u;
-const GROUP_NAME = /(?:队|军|协会|组织|公司|家族|势力|居民|商户|人群|群众|议会|公会|商会)$/u;
+const GROUP_NAME = /(?:队|小队|团队|军|军团|旅团|兵团|团|协会|组织|公司|集团|家族|势力|帮派|教会|政府|部门|机构|委员会|居民|商户|人群|群众|议会|公会|商会)$/u;
 const NON_ACTOR_NAME = /^(?:玩家|player|user|系统|system|环境|environment|世界|world|旁白|narrator|主持人|gm|game master)$/iu;
+const PLAYER_DEPENDENT_GOAL = /(?:等待|等候|直到|由|让|需要|必须等)(?:玩家|主角|主人|user|player)|(?:玩家|主角|主人|user|player).{0,24}(?:决定|联系|召唤|下令|命令|批准|同意|前往|到来|选择|处置)/iu;
 const DIRECT_OBSERVATION = /(?:看见|看到|目睹|注意到|发现|听见|听到|闻到|察觉|收到|读到|被告知|获悉|亲历|遭遇|触碰|检查到|观察到)/u;
 const OBSERVATION_NEGATION = /(?:没看见|没有看见|未看见|没听见|没有听见|未听见|一无所知|并不知道|不知情|尚未知晓)/u;
 
@@ -53,12 +54,29 @@ function stableActorId(name) {
     return `NPC-${fingerprint(cleanText(name, 160).toLocaleLowerCase()).slice(0, 16)}`;
 }
 
-function isActorName(value) {
+function normalizeExcludedActorNames(value) {
+    return new Set(cleanList(value, 24, 160).map((item) => item.toLocaleLowerCase()));
+}
+
+function isActorName(value, excludedActorNames = new Set()) {
     const name = cleanText(value, 160);
     return !!name
         && name.length >= 2
         && !NON_ACTOR_NAME.test(name)
-        && !GROUP_NAME.test(name);
+        && !GROUP_NAME.test(name)
+        && !excludedActorNames.has(name.toLocaleLowerCase());
+}
+
+function playerDependentGoal(value, excludedActorNames = new Set()) {
+    const text = cleanText(value, 500);
+    if (!text) return false;
+    if (PLAYER_DEPENDENT_GOAL.test(text)) return true;
+    const lower = text.toLocaleLowerCase();
+    return [...excludedActorNames].some((name) => (
+        name
+        && lower.includes(name)
+        && /(?:决定|联系|召唤|下令|命令|批准|同意|前往|到来|选择|处置|传唤|发话)/u.test(text)
+    ));
 }
 
 function normalizeSourceRef(value) {
@@ -195,6 +213,19 @@ function normalizeActor(value, index, turn) {
         },
         longTermGoals: cleanList(value.longTermGoals, 12, 400),
         currentGoals: cleanList(value.currentGoals, 8, 400),
+        constraints: cleanList(value.constraints, 12, 500),
+        stateFacts: (Array.isArray(value.stateFacts) ? value.stateFacts : [])
+            .filter((item) => item && typeof item === 'object')
+            .map((item, factIndex) => ({
+                id: cleanText(item.id, 120)
+                    || `ASF-${fingerprint(`${id}|${item.kind}|${item.summary}|${factIndex}`).slice(0, 16)}`,
+                kind: cleanText(item.kind, 80) || 'condition',
+                summary: cleanText(item.summary, 500),
+                turn: integer(item.turn, 0, Number.MAX_SAFE_INTEGER, turn),
+                evidence: cleanList(item.evidence, 8, 240),
+            }))
+            .filter((item) => item.summary)
+            .slice(-48),
         knowledge: (Array.isArray(value.knowledge) ? value.knowledge : [])
             .map((item, knowledgeIndex) => normalizeKnowledge(item, knowledgeIndex, turn))
             .filter(Boolean)
@@ -238,6 +269,25 @@ function normalizeActor(value, index, turn) {
             : null,
         nextActionTurn: integer(value.nextActionTurn, 0, Number.MAX_SAFE_INTEGER, turn + 1),
         deadlineTurn: integer(value.deadlineTurn, 0, Number.MAX_SAFE_INTEGER, 0),
+        lastSemanticTurn: integer(
+            value.lastSemanticTurn,
+            0,
+            Number.MAX_SAFE_INTEGER,
+            value.lastAction?.turn ?? value.createdTurn ?? turn,
+        ),
+        semanticProgressCount: integer(
+            value.semanticProgressCount,
+            0,
+            Number.MAX_SAFE_INTEGER,
+            value.settledActionCount ?? 0,
+        ),
+        lastAttemptTurn: integer(value.lastAttemptTurn, 0, Number.MAX_SAFE_INTEGER, 0),
+        consecutiveActionFailures: integer(
+            value.consecutiveActionFailures,
+            0,
+            10_000,
+            0,
+        ),
         initiative: number(value.initiative, 0, 3, 1),
         opportunity: number(value.opportunity, 0, 3, 0),
         silenceTurns: integer(value.silenceTurns, 0, 10_000, 0),
@@ -292,6 +342,7 @@ export function emptyActorLedger(chatId = '') {
             actorLedgerV2: true,
             actorLedgerV3: true,
             actorLedgerV4: true,
+            actorLedgerV5: true,
         },
         updatedAt: 0,
     };
@@ -300,14 +351,16 @@ export function emptyActorLedger(chatId = '') {
 export function normalizeActorLedger(value, {
     chatId = '',
     maxActors = ACTOR_LEDGER_MAX_ACTORS,
+    excludedActorNames = [],
 } = {}) {
     const source = value && typeof value === 'object' ? value : {};
     const turn = integer(source.turn, 0, Number.MAX_SAFE_INTEGER, 0);
+    const excluded = normalizeExcludedActorNames(excludedActorNames);
     const actors = [];
     const used = new Set();
     for (const raw of Array.isArray(source.actors) ? source.actors : []) {
         const item = normalizeActor(raw, actors.length, turn);
-        if (!item || used.has(item.id)) continue;
+        if (!item || !isActorName(item.name, excluded) || used.has(item.id)) continue;
         used.add(item.id);
         actors.push(item);
         if (actors.length >= integer(maxActors, 1, ACTOR_LEDGER_MAX_ACTORS, ACTOR_LEDGER_MAX_ACTORS)) {
@@ -331,6 +384,7 @@ export function normalizeActorLedger(value, {
             actorLedgerV2: true,
             actorLedgerV3: true,
             actorLedgerV4: true,
+            actorLedgerV5: true,
         },
         updatedAt: integer(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -340,15 +394,51 @@ function mergeEvidence(current, additions, limit = 24) {
     return cleanList([...(current || []), ...(additions || [])], limit, 300);
 }
 
-export function migrateActorLedgerFromContinuity(value, continuity) {
-    const ledger = normalizeActorLedger(value, { chatId: continuity?.chatId || value?.chatId });
-    const byId = new Map(ledger.actors.map((item) => [item.id, item]));
+export function migrateActorLedgerFromContinuity(value, continuity, {
+    excludedActorNames = [],
+} = {}) {
+    const excluded = normalizeExcludedActorNames(excludedActorNames);
+    const ledger = normalizeActorLedger(value, {
+        chatId: continuity?.chatId || value?.chatId,
+        excludedActorNames,
+    });
+    const byId = new Map();
+    const byName = new Map();
+    for (const actor of ledger.actors) {
+        const nameKey = actor.name.toLocaleLowerCase();
+        if (byName.has(nameKey)) continue;
+        byId.set(actor.id, actor);
+        byName.set(nameKey, actor);
+    }
+    for (const actor of byId.values()) {
+        const migratedConstraints = actor.currentGoals.filter(
+            (item) => playerDependentGoal(item, excluded),
+        );
+        actor.currentGoals = actor.currentGoals.filter(
+            (item) => !playerDependentGoal(item, excluded),
+        );
+        actor.constraints = mergeEvidence(
+            actor.constraints,
+            migratedConstraints,
+            12,
+        );
+    }
     const turn = integer(continuity?.turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
     for (const thread of Array.isArray(continuity?.threads) ? continuity.threads : []) {
         for (const actorName of cleanList(thread?.actors, 16, 160)) {
-            if (!isActorName(actorName)) continue;
+            if (!isActorName(actorName, excluded)) continue;
             const id = stableActorId(actorName);
-            const current = byId.get(id) || normalizeActor({
+            const nameKey = actorName.toLocaleLowerCase();
+            const publicHints = thread?.knowledge === 'hidden'
+                ? []
+                : cleanList([thread?.nextBeat, thread?.trigger], 4, 400);
+            const autonomousGoals = publicHints.filter(
+                (item) => !playerDependentGoal(item, excluded),
+            );
+            const directiveConstraints = publicHints.filter(
+                (item) => playerDependentGoal(item, excluded),
+            );
+            const current = byId.get(id) || byName.get(nameKey) || normalizeActor({
                 id,
                 name: actorName,
                 tier: 'background',
@@ -357,9 +447,8 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
                     sinceTurn: turn,
                     evidence: cleanList([thread?.id, thread?.seedBasis], 8, 240),
                 },
-                currentGoals: thread?.knowledge === 'hidden'
-                    ? []
-                    : cleanList([thread?.nextBeat, thread?.trigger], 4, 400),
+                currentGoals: autonomousGoals,
+                constraints: directiveConstraints,
                 nextActionTurn: turn + 1,
                 evidence: cleanList([
                     thread?.id,
@@ -376,9 +465,13 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
             ]);
             if (thread?.knowledge !== 'hidden') {
                 current.currentGoals = mergeEvidence(current.currentGoals, [
-                    thread?.nextBeat,
-                    thread?.trigger,
+                    ...autonomousGoals,
                 ], 8);
+                current.constraints = mergeEvidence(
+                    current.constraints,
+                    directiveConstraints,
+                    12,
+                );
                 const claim = cleanText(thread?.summary, 700);
                 if (claim) {
                     const knowledge = normalizeKnowledge({
@@ -395,16 +488,20 @@ export function migrateActorLedgerFromContinuity(value, continuity) {
                     ) current.knowledge.push(knowledge);
                 }
             }
-            byId.set(id, current);
+            byId.set(current.id, current);
+            byName.set(nameKey, current);
         }
     }
     return normalizeActorLedger({
         ...ledger,
         turn: Math.max(ledger.turn, turn),
         actors: [...byId.values()],
-        migrations: { ...ledger.migrations, continuityV5: true },
+        migrations: { ...ledger.migrations, continuityV5: true, actorLedgerV5: true },
         updatedAt: Date.now(),
-    }, { chatId: ledger.chatId || continuity?.chatId });
+    }, {
+        chatId: ledger.chatId || continuity?.chatId,
+        excludedActorNames,
+    });
 }
 
 function mergeProfileText(current, proposed, limit = 240) {
@@ -982,8 +1079,19 @@ export function reconcileActorLifecycleFromAcceptedContent(value, {
     return ledger;
 }
 
+function actorStarvationLimit(actor) {
+    if (actor.tier === 'key') return 3;
+    if (actor.tier === 'secondary') return 4;
+    return 6;
+}
+
 function schedulingScore(actor, turn) {
     const due = actor.nextActionTurn <= turn;
+    const semanticAge = Math.max(
+        actor.silenceTurns,
+        turn - Math.max(0, Number(actor.lastSemanticTurn) || 0),
+    );
+    const starved = due && semanticAge >= actorStarvationLimit(actor);
     const deadlineDistance = actor.deadlineTurn > 0 ? actor.deadlineTurn - turn : Infinity;
     const openCommitments = actor.commitments.filter((item) => item.status === 'open');
     const overdueCommitments = openCommitments.filter((item) => item.dueTurn <= turn);
@@ -992,6 +1100,10 @@ function schedulingScore(actor, turn) {
     if (due) {
         score += 100;
         reasons.push('action-due');
+    }
+    if (starved) {
+        score += 220;
+        reasons.push('semantic-starvation');
     }
     if (deadlineDistance <= 0) {
         score += 90;
@@ -1009,21 +1121,23 @@ function schedulingScore(actor, turn) {
     }
     score += actor.initiative * 12;
     score += actor.opportunity * 14;
-    score += Math.min(40, actor.silenceTurns * 2);
+    score += Math.min(80, semanticAge * 3);
     score += Math.min(20, actor.resources.reduce((total, item) => total + item.amount, 0));
     score -= Math.min(40, actor.attentionScore / 10);
     if (actor.status === 'dormant') score -= 10;
     if (actor.status === 'dormant' && actor.inactiveReason === 'sleep') score = -Infinity;
     if (!['active', 'dormant'].includes(actor.status)) score = -Infinity;
-    return { score, reasons };
+    return { score, reasons, semanticAge, starved };
 }
 
 export function scheduleActorTurns(value, {
     turn = null,
     maxActors = 2,
     explorationSlots = 1,
+    excludedActorNames = [],
 } = {}) {
-    const ledger = normalizeActorLedger(value);
+    const excluded = normalizeExcludedActorNames(excludedActorNames);
+    const ledger = normalizeActorLedger(value, { excludedActorNames });
     const currentTurn = integer(turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
     const limit = integer(maxActors, 0, 5, 2);
     const explorationLimit = Math.min(
@@ -1031,10 +1145,16 @@ export function scheduleActorTurns(value, {
         integer(explorationSlots, 0, 2, 1),
     );
     const scored = ledger.actors
+        .filter((actor) => isActorName(actor.name, excluded))
         .map((actor) => ({ actor, ...schedulingScore(actor, currentTurn) }))
         .filter((item) => Number.isFinite(item.score))
         .sort((left, right) => (
-            right.score - left.score
+            Number(right.starved) - Number(left.starved)
+            || (left.starved && right.starved
+                ? left.actor.lastAttemptTurn - right.actor.lastAttemptTurn
+                : 0)
+            || right.score - left.score
+            || right.semanticAge - left.semanticAge
             || left.actor.nextActionTurn - right.actor.nextActionTurn
             || left.actor.id.localeCompare(right.actor.id)
         ));
@@ -1051,7 +1171,8 @@ export function scheduleActorTurns(value, {
         .filter((item) => !selectedIds.has(item.actor.id))
         .sort((left, right) => (
             left.actor.attentionScore - right.actor.attentionScore
-            || right.actor.silenceTurns - left.actor.silenceTurns
+            || right.semanticAge - left.semanticAge
+            || left.actor.lastAttemptTurn - right.actor.lastAttemptTurn
             || right.actor.opportunity - left.actor.opportunity
             || left.actor.id.localeCompare(right.actor.id)
         ))
@@ -1085,8 +1206,9 @@ export function actorActionCandidatesFromShard(value, proposals, {
         const actor = byId.get(cleanText(proposal?.actorId, 120));
         if (!actor) return clone(proposal);
         const action = cleanText(proposal?.candidateAction, 700);
-        const wait = /(?:等待|暂缓|按兵不动|尚缺|条件未满足)/u.test(action);
-        const replan = /(?:改为|调整计划|重新计划|另寻|放弃原计划)/u.test(action);
+        const declaredIntent = cleanText(proposal?.intent, 40);
+        const wait = declaredIntent === 'wait';
+        const replan = declaredIntent === 'replan';
         const contactMatch = intensity > 0 && action.match(
             intensity >= 2
                 ? /(?:寻找|来访|拜访|寄信|传信|悬赏|跟踪|求助|袭击|取走|拿走|封锁|抬价|降价|散布|公告|布告|交通|舆论)/u
@@ -1114,6 +1236,12 @@ export function actorActionCandidatesFromShard(value, proposals, {
                 travelTurns: integer(proposal?.travelTurns, 0, 10_000, 0),
             },
             action,
+            stateChanges: (Array.isArray(proposal?.stateChanges)
+                ? proposal.stateChanges
+                : []).map((item) => ({
+                kind: cleanText(item?.kind, 80),
+                summary: cleanText(item?.summary, 500),
+            })).filter((item) => item.kind && item.summary),
             knowledgeRefs,
             resourceCosts: (Array.isArray(proposal?.resourceCosts)
                 ? proposal.resourceCosts
@@ -1252,6 +1380,18 @@ function validateCandidate(actor, candidate, turn) {
     if (capability && !actor.capabilities.includes(capability)) {
         reasons.push('capability-out-of-bounds');
     }
+    const stateChanges = (Array.isArray(candidate?.stateChanges)
+        ? candidate.stateChanges
+        : [])
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+            kind: cleanText(item.kind, 80),
+            summary: cleanText(item.summary, 500),
+        }))
+        .filter((item) => item.kind && item.summary);
+    if (intent !== 'wait' && !stateChanges.length) {
+        reasons.push('semantic-delta-missing');
+    }
     if (intent === 'wait') {
         const condition = cleanText(candidate?.waitCondition, 500);
         if (condition.length < 8 || GENERIC_WAIT.test(condition)) {
@@ -1308,6 +1448,7 @@ function updateTier(actor) {
 
 export function settleActorActionCandidates(value, candidates, {
     turn = null,
+    attemptedActorIds = [],
 } = {}) {
     const ledger = normalizeActorLedger(value);
     const currentTurn = integer(turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
@@ -1316,8 +1457,12 @@ export function settleActorActionCandidates(value, candidates, {
     const rejected = [];
     const worldEvents = [];
     const receipts = [];
+    const semanticAcceptedIds = new Set();
+    const attemptedIds = new Set(cleanList(attemptedActorIds, 96, 120));
     for (const raw of Array.isArray(candidates) ? candidates : []) {
         const candidate = clone(raw);
+        const candidateActorId = cleanText(candidate?.actorId, 120);
+        if (candidateActorId) attemptedIds.add(candidateActorId);
         const actor = byId.get(cleanText(candidate?.actorId, 120));
         const reasons = validateCandidate(actor, candidate, currentTurn);
         if (reasons.length) {
@@ -1335,6 +1480,7 @@ export function settleActorActionCandidates(value, candidates, {
             candidate.location,
         ])).slice(0, 18)}`;
         const next = clone(actor);
+        next.lastAttemptTurn = currentTurn;
         for (const cost of Array.isArray(candidate.resourceCosts) ? candidate.resourceCosts : []) {
             const resource = next.resources.find(
                 (item) => item.id === cleanText(cost.resourceId, 100),
@@ -1352,6 +1498,16 @@ export function settleActorActionCandidates(value, candidates, {
         if (planUpdate) next.plan.summary = planUpdate;
         if (candidate.intent === 'wait') next.plan.status = 'blocked';
         else if (candidate.intent === 'replan') next.plan.status = 'active';
+        const stateChanges = (Array.isArray(candidate.stateChanges)
+            ? candidate.stateChanges
+            : [])
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => ({
+                kind: cleanText(item.kind, 80),
+                summary: cleanText(item.summary, 500),
+            }))
+            .filter((item) => item.kind && item.summary);
+        const semanticProgress = candidate.intent !== 'wait' && stateChanges.length > 0;
         next.lastAction = {
             id: actionId,
             turn: currentTurn,
@@ -1362,28 +1518,51 @@ export function settleActorActionCandidates(value, candidates, {
             1,
             integer(candidate.location.travelTurns, 0, 10_000, 0),
         );
-        next.silenceTurns = 0;
+        next.silenceTurns = semanticProgress
+            ? 0
+            : Math.min(10_000, next.silenceTurns + 1);
         next.attentionScore += candidate.contact ? 1 : 0;
-        next.settledActionCount += 1;
+        if (semanticProgress) {
+            next.settledActionCount += 1;
+            next.semanticProgressCount += 1;
+            next.lastSemanticTurn = currentTurn;
+            next.consecutiveActionFailures = 0;
+            next.stateFacts = [
+                ...next.stateFacts,
+                ...stateChanges.map((change, changeIndex) => ({
+                    id: `ASF-${fingerprint(`${actionId}|${change.kind}|${change.summary}|${changeIndex}`).slice(0, 16)}`,
+                    kind: change.kind,
+                    summary: change.summary,
+                    turn: currentTurn,
+                    evidence: mergeEvidence([], candidate.evidence, 8),
+                })),
+            ].slice(-48);
+            semanticAcceptedIds.add(next.id);
+        }
         next.tier = updateTier(next);
         next.status = 'active';
         next.updatedTurn = currentTurn;
         next.version += 1;
         byId.set(next.id, next);
-        const event = contactWorldEvent(next, candidate, actionId, currentTurn);
-        accepted.push({ ...candidate, actionId });
+        const event = semanticProgress
+            ? contactWorldEvent(next, candidate, actionId, currentTurn)
+            : null;
+        accepted.push({ ...candidate, actionId, semanticProgress });
         receipts.push(stageReceipt(actionId, next.id, 'planned', currentTurn, {
             summary: cleanText(candidate.planUpdate || next.plan.summary, 500),
         }));
         receipts.push(stageReceipt(actionId, next.id, 'executed', currentTurn, {
             summary: cleanText(candidate.action, 700),
+            semanticProgress,
         }));
         receipts.push(stageReceipt(actionId, next.id, 'world_settled', currentTurn, {
             worldEventId: event?.id || '',
             observableConsequence: event?.observableConsequence || '',
+            semanticProgress,
+            status: semanticProgress ? 'settled' : 'held',
         }));
-        worldEvents.push(event);
-        if (event.observableConsequence) {
+        if (event) worldEvents.push(event);
+        if (event?.observableConsequence) {
             receipts.push(stageReceipt(actionId, next.id, 'injected', currentTurn, {
                 worldEventId: event.id,
                 observableConsequence: event.observableConsequence,
@@ -1393,12 +1572,25 @@ export function settleActorActionCandidates(value, candidates, {
     ledger.turn = Math.max(ledger.turn, currentTurn);
     ledger.actors = ledger.actors.map((actor) => {
         const next = byId.get(actor.id) || actor;
-        if (!accepted.some((item) => item.actorId === actor.id)) {
+        if (!semanticAcceptedIds.has(actor.id)) {
+            if (attemptedIds.has(actor.id)) {
+                next.lastAttemptTurn = currentTurn;
+                if (!accepted.some((item) => item.actorId === actor.id)) {
+                    next.consecutiveActionFailures = Math.min(
+                        10_000,
+                        next.consecutiveActionFailures + 1,
+                    );
+                }
+            }
+            if (!accepted.some((item) => item.actorId === actor.id)) {
             next.silenceTurns = Math.min(10_000, next.silenceTurns + 1);
+            }
             if (
                 next.status === 'active'
                 && next.silenceTurns >= 12
                 && !next.commitments.some((item) => item.status === 'open')
+                && !next.constraints.length
+                && !next.currentGoals.length
             ) next.status = 'dormant';
         }
         return next;
@@ -1451,12 +1643,30 @@ export function settleActorInjectionReceipts(value, {
 
 export function actorLedgerView(value) {
     const ledger = normalizeActorLedger(value);
+    const semanticSilences = ledger.actors.map((actor) => Math.max(
+        actor.silenceTurns,
+        ledger.turn - Math.max(0, Number(actor.lastSemanticTurn) || 0),
+    ));
     return {
         version: ledger.version,
         turn: ledger.turn,
         actorCount: ledger.actors.length,
         activeCount: ledger.actors.filter((item) => item.status === 'active').length,
         dormantCount: ledger.actors.filter((item) => item.status === 'dormant').length,
+        semanticProgressCount: ledger.actors.reduce(
+            (total, actor) => total + actor.semanticProgressCount,
+            0,
+        ),
+        maxSemanticSilence: Math.max(0, ...semanticSilences),
+        stalledDueCount: ledger.actors.filter((actor, index) => (
+            ['active', 'dormant'].includes(actor.status)
+            && actor.nextActionTurn <= ledger.turn
+            && semanticSilences[index] >= actorStarvationLimit(actor)
+        )).length,
+        consecutiveFailureCount: ledger.actors.reduce(
+            (total, actor) => total + actor.consecutiveActionFailures,
+            0,
+        ),
         actors: ledger.actors.map((actor) => {
             const publicActor = clone(actor);
             delete publicActor.hidden;

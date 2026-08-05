@@ -342,7 +342,12 @@ window.StoryOracleAPI = {
           travelTurns: 0,
           knowledgeBasis: [actor.limitedKnowledgeBasis[0]],
           currentGoal: actor.currentGoalHints[0] || '继续既定目标',
+          intent: 'execute',
           candidateAction: '沿已知传播链继续调查',
+          stateChanges: [{
+            kind: 'knowledge',
+            summary: '沿公开传播链获得一项新的可核验调查结果',
+          }],
           interactionTargets: [],
           resourceCosts: [],
           capabilityUsed: '',
@@ -897,7 +902,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.8');
+    assert.equal(continuity.version, '2.0.0-rc.9');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2565,7 +2570,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.8');
+    assert.equal(lifecycle.version, '2.0.0-rc.9');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -3683,6 +3688,97 @@ try {
     });
     assert.deepEqual(directFastPoolFinished, { forumTurn: 1, continuityTurn: 1 });
     await directFastPoolPage.close();
+
+    const directFailoverPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await directFailoverPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await directFailoverPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const directFailover = await directFailoverPage.evaluate(async () => {
+        const t = window.__TEST__;
+        Object.assign(t.context.extensionSettings.mvu_auto_doctor, {
+            fastModelProvider: 'direct',
+            connectionPresets: [
+                {
+                    name: '故障槽位',
+                    endpoint: 'https://broken-fast.example/v1',
+                    apiKey: 'broken-fast-secret',
+                    model: 'broken-fast-model',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+                {
+                    name: '健康槽位',
+                    endpoint: 'https://healthy-fast.example/v1',
+                    apiKey: 'healthy-fast-secret',
+                    model: 'healthy-fast-model',
+                    viaBackend: false,
+                    rawUrl: false,
+                },
+            ],
+            fastConnectionPreset: '故障槽位',
+            fastConnectionSlots: ['故障槽位', '健康槽位'],
+            fastChannelConcurrency: 2,
+            modelConcurrencySettingsVersion: 2,
+        });
+        const routes = [];
+        window.fetch = async (url, options = {}) => {
+            const body = JSON.parse(options.body || '{}');
+            routes.push({ url: String(url), model: String(body.model || '') });
+            const content = String(url).includes('broken-fast.example')
+                ? ''
+                : JSON.stringify({
+                    turn: 1,
+                    lastTick: {
+                        turn: 1,
+                        action: 'created',
+                        threadId: 'FAILOVER-WORLD-01',
+                        reason: '健康槽位接管后建立合成世界事件。',
+                    },
+                    threads: [{
+                        id: 'FAILOVER-WORLD-01',
+                        title: '健康槽位接管事件',
+                        kind: 'parallel',
+                        eventType: 'progress',
+                        level: 1,
+                        origin: 'ambient',
+                        relation: 'independent',
+                        stage: 'seeded',
+                        summary: '公共码头开始登记下一轮摊位。',
+                        offscreenBeat: '登记员贴出了新的轮换表。',
+                        nextBeat: '摊主依次提交申请。',
+                        trigger: '公共登记时段开始。',
+                        seedBasis: '合成公共码头制度',
+                        knowledge: 'observed',
+                    }],
+                });
+            return new Response(JSON.stringify({
+                choices: [{ message: { content } }],
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        };
+        const result = await window.MvuAutoDoctorAPI.runContinuity();
+        return {
+            result,
+            routes,
+            diagnostics: window.MvuAutoDoctorAPI.getModelDiagnostics()
+                .filter((entry) => entry.task === '活世界整理'),
+        };
+    });
+    assert.equal(directFailover.result.status, 'applied');
+    assert.deepEqual(directFailover.routes.map((item) => item.model), [
+        'broken-fast-model',
+        'healthy-fast-model',
+    ]);
+    assert.equal(directFailover.diagnostics.some((item) => (
+        item.status === 'failed' && item.routeSlotIndex === 0
+    )), true);
+    assert.equal(directFailover.diagnostics.some((item) => (
+        item.status === 'succeeded'
+        && item.routeSlotIndex === 1
+        && item.failover === true
+    )), true);
+    await directFailoverPage.close();
 
     const continueCheckpointPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await continueCheckpointPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -5062,10 +5158,10 @@ try {
         '论坛遇到429不得立刻重试',
     );
     assert.equal(rateLimitResult.forum.status, 'stalled');
-    assert.equal(rateLimitResult.world.status, 'applied');
+    assert.equal(rateLimitResult.world.status, 'degraded');
     assert.equal(rateLimitResult.world.degraded, true);
     assert.ok(rateLimitResult.state.turn > 5, '模型限流时本地世界时钟仍须落账');
-    assert.match(rateLimitResult.status, /本地时钟已推进/u);
+    assert.match(rateLimitResult.status, /仅保存.*时钟变化|没有语义推进/u);
     await rateLimitPage.close();
 
     const transportPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -5308,7 +5404,7 @@ try {
             diagnostics: window.MvuAutoDoctorAPI.getModelDiagnostics(),
         };
     });
-    assert.equal(invalidContinuity.result.status, 'applied');
+    assert.equal(invalidContinuity.result.status, 'degraded');
     assert.equal(invalidContinuity.result.degraded, true);
     assert.match(invalidContinuity.status, /模型返回未通过账本校验/u);
     assert.doesNotMatch(invalidContinuity.status, /模型暂不可用/u);

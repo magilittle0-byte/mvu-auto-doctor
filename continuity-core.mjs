@@ -2443,6 +2443,15 @@ export function continuityContentDigest(state) {
     return JSON.stringify(normalized);
 }
 
+export function continuityConsumptionEvidence(receipt, content) {
+    const accepted = String(content || '');
+    return (Array.isArray(receipt?.semanticEvidenceTerms)
+        ? receipt.semanticEvidenceTerms
+        : [])
+        .map((term) => cleanText(term, 700))
+        .find((term) => term.length >= 4 && accepted.includes(term)) || '';
+}
+
 export function appendRepairJournal(namespace, record, {
     maxEntries = 5,
     maxSnapshotChars = 180000,

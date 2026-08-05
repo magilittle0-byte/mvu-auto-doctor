@@ -51,6 +51,14 @@ export interface ActorLedgerActor {
     };
     longTermGoals: string[];
     currentGoals: string[];
+    constraints: string[];
+    stateFacts: Array<{
+        id: string;
+        kind: string;
+        summary: string;
+        turn: number;
+        evidence: string[];
+    }>;
     knowledge: ActorKnowledge[];
     location: { name: string; sinceTurn: number; evidence: string[] };
     resources: Array<{ id: string; name: string; amount: number; unit: string; evidence: string[] }>;
@@ -77,6 +85,10 @@ export interface ActorLedgerActor {
     lastAction: null | { id: string; turn: number; summary: string; outcome: string };
     nextActionTurn: number;
     deadlineTurn: number;
+    lastSemanticTurn: number;
+    semanticProgressCount: number;
+    lastAttemptTurn: number;
+    consecutiveActionFailures: number;
     initiative: number;
     opportunity: number;
     silenceTurns: number;
@@ -100,6 +112,7 @@ export interface ActorLedger {
         actorLedgerV2: boolean;
         actorLedgerV3: boolean;
         actorLedgerV4: boolean;
+        actorLedgerV5: boolean;
     };
     updatedAt: number;
 }
@@ -111,11 +124,12 @@ export const ACTOR_LEDGER_MAX_RECEIPTS: number;
 export function emptyActorLedger(chatId?: string): ActorLedger;
 export function normalizeActorLedger(
     value: unknown,
-    options?: { chatId?: string; maxActors?: number },
+    options?: { chatId?: string; maxActors?: number; excludedActorNames?: string[] },
 ): ActorLedger;
 export function migrateActorLedgerFromContinuity(
     value: unknown,
     continuity: unknown,
+    options?: { excludedActorNames?: string[] },
 ): ActorLedger;
 export function mergeActorProfilePatches(
     value: unknown,
@@ -164,7 +178,12 @@ export function applyAcceptedContentObservations(
 export function inferObserverActorIds(value: unknown, content: string): string[];
 export function scheduleActorTurns(
     value: unknown,
-    options?: { turn?: number | null; maxActors?: number; explorationSlots?: number },
+    options?: {
+        turn?: number | null;
+        maxActors?: number;
+        explorationSlots?: number;
+        excludedActorNames?: string[];
+    },
 ): {
     turn: number;
     selected: Array<{
@@ -184,7 +203,7 @@ export function actorActionCandidatesFromShard(
 export function settleActorActionCandidates(
     value: unknown,
     candidates: unknown[],
-    options?: { turn?: number | null },
+    options?: { turn?: number | null; attemptedActorIds?: string[] },
 ): {
     ledger: ActorLedger;
     accepted: unknown[];
@@ -206,6 +225,10 @@ export function actorLedgerView(value: unknown): {
     actorCount: number;
     activeCount: number;
     dormantCount: number;
+    semanticProgressCount: number;
+    maxSemanticSilence: number;
+    stalledDueCount: number;
+    consecutiveFailureCount: number;
     actors: Array<Omit<ActorLedgerActor, 'hidden'>>;
     receipts: unknown[];
     observationReceipts: unknown[];

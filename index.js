@@ -31,6 +31,7 @@ import {
     attachChangedSourceRefs,
     buildContinuityInjection,
     continuityContentDigest,
+    continuityConsumptionEvidence,
     continuityLifecycleStats,
     continuityLedgerView,
     continuityScenarioDigest,
@@ -127,7 +128,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.8';
+const VERSION = '2.0.0-rc.9';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 11;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -150,6 +151,7 @@ const ACTOR_ACTION_ERROR_LABELS = Object.freeze({
     'evidence-out-of-bounds': '来源证据不属于该人物',
     'resource-insufficient': '资源不足',
     'capability-out-of-bounds': '能力不在人物账本中',
+    'semantic-delta-missing': '没有产生可核验的新世界事实',
     'wait-condition-not-concrete': '等待理由没有指出具体未满足条件',
 });
 const MIN_MODEL_TIMEOUT_MS = 10_000;
@@ -331,6 +333,7 @@ let modelCallStats = {
 };
 const activeModelControllers = new Set();
 const modelRouteSlotCursors = { strict: 0, fast: 0 };
+const modelRouteHealth = { strict: new Map(), fast: new Map() };
 let activeTaskProgress = null;
 let taskProgressSerial = 0;
 let lastPromptSnapshot = null;
@@ -927,6 +930,9 @@ function normalizedModelDiagnostics(value) {
             cacheHitTokens: Math.max(0, Math.floor(Number(entry.cacheHitTokens) || 0)),
             cacheMissTokens: Math.max(0, Math.floor(Number(entry.cacheMissTokens) || 0)),
             attempt: Math.max(0, Math.floor(Number(entry.attempt) || 0)),
+            routeSlotIndex: Math.max(0, Math.floor(Number(entry.routeSlotIndex) || 0)),
+            routeName: String(entry.routeName || '').slice(0, 120),
+            failover: entry.failover === true,
             targetIndex: Number.isInteger(Number(entry.targetIndex))
                 ? Number(entry.targetIndex)
                 : -1,
@@ -1745,6 +1751,38 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
             ));
     }
 
+    const runtimeActors = actorLedgerView(readChatNamespace(context).actorLedger);
+    const recentWorldCalls = normalizedModelDiagnostics(modelDiagnostics)
+        .filter((entry) => /世界|连续|NPC 分片/u.test(entry.task))
+        .slice(0, 24);
+    const recentWorldFailures = recentWorldCalls.filter(
+        (entry) => entry.phase === 'transport' && entry.status === 'failed',
+    ).length;
+    const recoveredWorldFailures = recentWorldCalls.filter(
+        (entry) => entry.phase === 'transport'
+            && entry.status === 'succeeded'
+            && entry.failover === true,
+    ).length;
+    const unrecoveredWorldFailures = Math.max(
+        0,
+        recentWorldFailures - recoveredWorldFailures,
+    );
+    if (runtimeActors.stalledDueCount > 0 || unrecoveredWorldFailures > 0) {
+        checks.push(environmentCheck(
+            'warn',
+            '活世界运行效果',
+            `到期且语义停滞人物 ${runtimeActors.stalledDueCount} 名；`
+            + `最近未恢复的活世界传输失败 ${unrecoveredWorldFailures} 次；`
+            + `累计语义行动 ${runtimeActors.semanticProgressCount} 项`,
+        ));
+    } else {
+        checks.push(environmentCheck(
+            'ok',
+            '活世界运行效果',
+            `没有到期停滞人物；累计语义行动 ${runtimeActors.semanticProgressCount} 项`,
+        ));
+    }
+
     lastEnvironmentReport = {
         checkedAt: Date.now(),
         checks,
@@ -1862,6 +1900,10 @@ function diagnosticPayload() {
                     activeCount: actors.activeCount,
                     dormantCount: actors.dormantCount,
                     receiptCount: actors.receipts.length,
+                    semanticProgressCount: actors.semanticProgressCount,
+                    maxSemanticSilence: actors.maxSemanticSilence,
+                    stalledDueCount: actors.stalledDueCount,
+                    consecutiveFailureCount: actors.consecutiveFailureCount,
                     privateThoughtsExposed: false,
                 },
                 worldPressure: normalizeWorldPressureState(namespace.worldPressure),
@@ -2407,6 +2449,25 @@ async function acknowledgeBarrierReceipt(input) {
 function currentCharacter(context) {
     if (!context || context.groupId != null) return null;
     return context.characters?.[context.characterId] || null;
+}
+
+function currentPlayerActorNames(context = getContext()) {
+    const candidates = [
+        context?.name1,
+        context?.user_name,
+        context?.userName,
+        context?.persona?.name,
+        window.name1,
+        ...(Array.isArray(context?.chat)
+            ? context.chat
+                .filter((message) => message?.is_user)
+                .map((message) => message?.name)
+            : []),
+    ];
+    return [...new Set(candidates
+        .map((item) => String(item || '').trim())
+        .filter((item) => item.length >= 2))]
+        .slice(0, 12);
 }
 
 function embeddedBooks(character) {
@@ -4233,6 +4294,48 @@ function channelConnectionProfiles(settings, channel = 'strict') {
         }));
 }
 
+function modelRouteHealthKey(channel, slotIndex, profile) {
+    return [
+        channel,
+        Number(slotIndex) || 0,
+        String(profile?.route || profile?.name || ''),
+        String(profile?.model || ''),
+    ].join(':');
+}
+
+function modelRouteHealthRecord(channel, slotIndex, profile) {
+    const key = modelRouteHealthKey(channel, slotIndex, profile);
+    return modelRouteHealth[channel].get(key) || {
+        consecutiveFailures: 0,
+        openedUntil: 0,
+        lastFailureAt: 0,
+        lastSuccessAt: 0,
+    };
+}
+
+function markModelRouteHealth(channel, slotIndex, profile, succeeded) {
+    const key = modelRouteHealthKey(channel, slotIndex, profile);
+    const current = modelRouteHealthRecord(channel, slotIndex, profile);
+    const now = Date.now();
+    const next = succeeded
+        ? {
+            ...current,
+            consecutiveFailures: 0,
+            openedUntil: 0,
+            lastSuccessAt: now,
+        }
+        : {
+            ...current,
+            consecutiveFailures: current.consecutiveFailures + 1,
+            openedUntil: current.consecutiveFailures + 1 >= 2
+                ? now + 5 * 60 * 1000
+                : current.openedUntil,
+            lastFailureAt: now,
+        };
+    modelRouteHealth[channel].set(key, next);
+    return next;
+}
+
 function selectChannelConnectionProfile(settings, channel = 'strict', requestedSlotIndex = null) {
     const profiles = channelConnectionProfiles(settings, channel);
     const explicit = Number(requestedSlotIndex);
@@ -4240,9 +4343,20 @@ function selectChannelConnectionProfile(settings, channel = 'strict', requestedS
         && requestedSlotIndex !== undefined
         && Number.isInteger(explicit)
         && explicit >= 0;
-    const slotIndex = hasExplicitSlot
+    const startingSlot = hasExplicitSlot
         ? explicit % profiles.length
         : modelRouteSlotCursors[channel] % profiles.length;
+    const slotIndex = hasExplicitSlot
+        ? startingSlot
+        : Array.from({ length: profiles.length }, (_, offset) => (
+            (startingSlot + offset) % profiles.length
+        )).find((candidateSlot) => (
+            modelRouteHealthRecord(
+                channel,
+                candidateSlot,
+                profiles[candidateSlot].profile,
+            ).openedUntil <= Date.now()
+        )) ?? startingSlot;
     if (!hasExplicitSlot) {
         modelRouteSlotCursors[channel] = (slotIndex + 1) % profiles.length;
     }
@@ -4529,10 +4643,12 @@ async function callModel(messages, options = {}) {
     };
     renderPromptSnapshot();
     try {
-        return await modelConnectionScheduler.enqueue(connectionKey, async () => {
+        try {
+            return await modelConnectionScheduler.enqueue(connectionKey, async () => {
             const callStartedAt = Date.now();
             recordModelCall(task, 'started', null, callGenerationSerial);
             const succeed = (output) => {
+                markModelRouteHealth(channel, slotIndex, profile, true);
                 recordModelCall(task, 'succeeded', null, callGenerationSerial);
                 recordModelDiagnostic({
                     phase: 'transport',
@@ -4547,6 +4663,10 @@ async function callModel(messages, options = {}) {
                     outputChars: String(output || '').length,
                     httpStatus: profile.provider === 'direct' && profile.viaBackend !== true ? 200 : 0,
                     attempt: Math.max(1, Number(options.attempt) || 1),
+                    routeSlotIndex: slotIndex,
+                    routeName: profile.name,
+                    failover: Array.isArray(options.attemptedRouteSlots)
+                        && options.attemptedRouteSlots.length > 0,
                     ...normalizedProviderUsage(providerUsage),
                 });
                 return output;
@@ -4623,6 +4743,7 @@ async function callModel(messages, options = {}) {
                 );
                 return succeed(output);
             } catch (error) {
+                markModelRouteHealth(channel, slotIndex, profile, false);
                 recordModelCall(task, 'failed', error, callGenerationSerial);
                 recordModelDiagnostic({
                     phase: 'transport',
@@ -4636,6 +4757,10 @@ async function callModel(messages, options = {}) {
                     queueWaitMs: callStartedAt - queuedAt,
                     httpStatus: Math.max(0, Number(error?.status) || 0),
                     attempt: Math.max(1, Number(options.attempt) || 1),
+                    routeSlotIndex: slotIndex,
+                    routeName: profile.name,
+                    failover: Array.isArray(options.attemptedRouteSlots)
+                        && options.attemptedRouteSlots.length > 0,
                     failureKind: isRateLimitError(error) ? 'rate-limit' : 'transport-error',
                     reason: error?.message || error,
                 });
@@ -4648,7 +4773,46 @@ async function callModel(messages, options = {}) {
                 ? `${task}:${parallelLane}:slot-${slotIndex + 1}`
                 : `${task}:slot-${slotIndex + 1}`,
             maxConcurrent: 1,
-        });
+            });
+        } catch (error) {
+            const attemptedRouteSlots = [
+                ...(Array.isArray(options.attemptedRouteSlots)
+                    ? options.attemptedRouteSlots
+                    : []),
+                slotIndex,
+            ];
+            const attemptedRouteKeys = [
+                ...(Array.isArray(options.attemptedRouteKeys)
+                    ? options.attemptedRouteKeys
+                    : []),
+                modelConnectionKey(profile),
+            ];
+            const nextRoute = options.failover === true
+                && !externalSignal?.aborted
+                ? channelConnectionProfiles(settings, channel).find((item) => (
+                    !attemptedRouteSlots.includes(item.slotIndex)
+                    && !attemptedRouteKeys.includes(modelConnectionKey(item.profile))
+                    && modelRouteHealthRecord(
+                        channel,
+                        item.slotIndex,
+                        item.profile,
+                    ).openedUntil <= Date.now()
+                ))
+                : null;
+            if (!nextRoute) throw error;
+            recordOperation(
+                '模型接管',
+                `${task} 的槽位 ${slotIndex + 1} 失败，已转交槽位 ${nextRoute.slotIndex + 1}`,
+                'warn',
+            );
+            return await callModel(messages, {
+                ...options,
+                routeSlotIndex: nextRoute.slotIndex,
+                attemptedRouteSlots,
+                attemptedRouteKeys,
+                attempt: Math.max(1, Number(options.attempt) || 1) + 1,
+            });
+        }
     } finally {
         externalSignal?.removeEventListener?.('abort', abortFromExternal);
         activeModelControllers.delete(controller);
@@ -7172,6 +7336,16 @@ function continuityInjectionCandidates(state) {
                 .map((value) => String(value || '').trim())
                 .filter((value) => value.length >= 2)
                 .slice(0, 16);
+            const semanticEvidenceTerms = [
+                thread.title,
+                thread.convergence?.entryBeat,
+                thread.offscreenBeat,
+                ...(thread.effects || []),
+                ...(thread.rumors || []),
+            ]
+                .map((value) => String(value || '').trim())
+                .filter((value) => value.length >= 4)
+                .slice(0, 12);
             return {
                 threadId: thread.id,
                 priority,
@@ -7185,6 +7359,7 @@ function continuityInjectionCandidates(state) {
                     Number(state.turn || 0) + (thread.stage === 'resolved' ? 2 : 4),
                 ),
                 evidenceTerms,
+                semanticEvidenceTerms,
             };
         });
     const visibleWorld = [
@@ -7197,6 +7372,7 @@ function continuityInjectionCandidates(state) {
                 triggerCondition: `当前行动接触趋势范围：${item.scope || item.name}`,
                 expiresTurn: Number(item.expiresTurn || state.turn + 4),
                 evidenceTerms: [item.name, item.summary, item.scope].filter(Boolean),
+                semanticEvidenceTerms: [item.summary, item.lastChange].filter(Boolean),
             })),
         ...(state?.world?.factions || [])
             .filter((item) => item.knowledge !== 'hidden')
@@ -7207,6 +7383,7 @@ function continuityInjectionCandidates(state) {
                 triggerCondition: item.goal || item.lastChange || '当前人物或地点接触该势力',
                 expiresTurn: Number(state.turn || 0) + 4,
                 evidenceTerms: [item.name, item.summary, item.lastChange].filter(Boolean),
+                semanticEvidenceTerms: [item.summary, item.lastChange, item.goal].filter(Boolean),
             })),
         ...(state?.world?.winds || [])
             .filter((item) => item.knowledge !== 'hidden')
@@ -7217,6 +7394,7 @@ function continuityInjectionCandidates(state) {
                 triggerCondition: `当前人物位于传播范围或主动询问：${item.scope || item.topic}`,
                 expiresTurn: Number(item.expiresTurn || state.turn + 3),
                 evidenceTerms: [item.topic, item.content, item.scope].filter(Boolean),
+                semanticEvidenceTerms: [item.content, item.lastChange].filter(Boolean),
             })),
         ...(state?.world?.environment?.incidents || [])
             .filter((item) => item.knowledge !== 'hidden' && item.status !== 'resolved')
@@ -7227,6 +7405,7 @@ function continuityInjectionCandidates(state) {
                 triggerCondition: item.trigger || '当前场景进入事件影响范围',
                 expiresTurn: Number(item.expiresTurn || state.turn + 3),
                 evidenceTerms: [item.title, item.summary, item.lastChange].filter(Boolean),
+                semanticEvidenceTerms: [item.summary, item.lastChange, item.trigger].filter(Boolean),
             })),
     ];
     return [...threadCandidates, ...visibleWorld]
@@ -7361,6 +7540,7 @@ function prepareContinuityInjectionBatch(namespace, state, {
         triggerCondition: candidate.triggerCondition,
         expiresTurn: candidate.expiresTurn,
         evidenceTerms: candidate.evidenceTerms,
+        semanticEvidenceTerms: candidate.semanticEvidenceTerms,
         status: 'injected',
         stages: [
             { stage: 'planned', status: 'settled', at: now },
@@ -7526,10 +7706,7 @@ async function settleContinuityInjectionReceipts(captured) {
             || String(receipt?.chatId || '') !== String(captured.chatId || '')
             || !['injected', 'landed', 'missing'].includes(receipt.status)
         ) return receipt;
-        const evidence = (receipt.evidenceTerms || []).find((term) => (
-            String(term || '').length >= 2
-            && content.includes(String(term))
-        )) || '';
+        const evidence = continuityConsumptionEvidence(receipt, content);
         const expired = Number(receipt.expiresTurn || 0)
             < Number(receipt.targetTurn || 0);
         const status = expired ? 'expired' : evidence ? 'consumed' : 'retained';
@@ -7964,6 +8141,79 @@ function buildContinuityMessages({
     const markerText = markers.taggedSections
         .map((item) => `<${item.tag}>${item.content}</${item.tag}>`)
         .join('\n');
+    const focusedThreadIds = new Set([
+        ...(actorShardCandidates?.proposals || [])
+            .flatMap((proposal) => proposal?.sourceThreads || []),
+        ...(worldLaneSchedule?.selected || []).map((lane) => lane?.sourceId),
+    ].filter(Boolean));
+    const promptThreads = [...(base.threads || [])]
+        .sort((left, right) => (
+            Number(focusedThreadIds.has(right.id)) - Number(focusedThreadIds.has(left.id))
+            || Number(left.stage === 'resolved') - Number(right.stage === 'resolved')
+            || Number(left.lastAdvancedTurn || 0) - Number(right.lastAdvancedTurn || 0)
+            || Number(right.urgency || 0) - Number(left.urgency || 0)
+            || String(left.id || '').localeCompare(String(right.id || ''))
+        ))
+        .slice(0, 18)
+        .map((thread) => ({
+            ...thread,
+            sourceRefs: (thread.sourceRefs || []).slice(-4),
+            effects: (thread.effects || []).slice(-6),
+            rumors: (thread.rumors || []).slice(-6),
+            propagation: (thread.propagation || []).slice(-8),
+        }));
+    const compactWorld = {
+        ...(base.world || {}),
+        trends: (base.world?.trends || []).slice(-12),
+        factions: (base.world?.factions || []).slice(-12),
+        winds: (base.world?.winds || []).slice(-12),
+        influences: (base.world?.influences || []).slice(-12),
+        shadows: {
+            enemies: (base.world?.shadows?.enemies || []).slice(-12),
+            secrets: (base.world?.shadows?.secrets || []).slice(-12),
+        },
+    };
+    const promptBase = {
+        version: base.version,
+        chatId: base.chatId,
+        turn: base.turn,
+        lastTick: base.lastTick,
+        scenarioPlan: base.scenarioPlan,
+        world: compactWorld,
+        threads: promptThreads,
+        promptSelection: {
+            includedThreadCount: promptThreads.length,
+            omittedThreadCount: Math.max(0, (base.threads || []).length - promptThreads.length),
+            omittedThreadsRemainAuthoritative: true,
+        },
+    };
+    const focusedActorIds = new Set(
+        (actorShardCandidates?.proposals || []).map((proposal) => proposal?.actorId),
+    );
+    const promptActors = [...(actorLedger?.actors || [])]
+        .sort((left, right) => (
+            Number(focusedActorIds.has(right.id)) - Number(focusedActorIds.has(left.id))
+            || Number(left.lastSemanticTurn || 0) - Number(right.lastSemanticTurn || 0)
+            || String(left.id || '').localeCompare(String(right.id || ''))
+        ))
+        .slice(0, 16)
+        .map((actor) => ({
+            actorId: actor.id,
+            name: actor.name,
+            role: actor.identity?.role || '',
+            identity: actor.identity || {},
+            longTermGoals: actor.longTermGoals || [],
+            currentGoals: actor.currentGoals || [],
+            constraints: actor.constraints || [],
+            plan: actor.plan || {},
+            location: actor.location || {},
+            lastAction: actor.lastAction || null,
+            lastSemanticTurn: actor.lastSemanticTurn || 0,
+            stateFacts: (actor.stateFacts || []).slice(-8),
+            capabilities: actor.capabilities || [],
+            hidden: actor.hidden || {},
+            evidence: (actor.evidence || []).slice(-8),
+        }));
     const user = [
         `当前导演模式：${director}`,
         `当前自主度：${settings.continuityAutonomy}`,
@@ -7972,28 +8222,23 @@ function buildContinuityMessages({
         `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
         '',
         '=== 更新前支线账本 ===',
-        safeJson(base),
+        safeJson(promptBase),
         '',
         '=== 本回合可识别的预设/缝合怪记录 ===',
-        markerText || '无结构化记录；仍可依据下方世界设定低频维护自主事件。',
+        cropText(
+            markerText || '无结构化记录；仍可依据下方世界设定低频维护自主事件。',
+            6000,
+            '预设事件记录',
+        ),
         '',
         '=== 内置论坛的公共信号（普通水帖已过滤，仍不等于事实）===',
         forumSignals.length ? safeJson(forumSignals) : '无达到事件候选门槛的论坛信号。',
         '',
         '=== 当前MVU主线锚点（时间/地点/人物/势力/任务/资源，只读）===',
-        stateAnchors,
+        cropText(stateAnchors, 8000, 'MVU主线锚点'),
         '',
         '=== 当前人物档案（增量补全；hidden只供幕后连续性，不得写成公开事实）===',
-        safeJson((actorLedger?.actors || []).slice(0, 32).map((actor) => ({
-            actorId: actor.id,
-            name: actor.name,
-            role: actor.identity?.role || '',
-            identity: actor.identity || {},
-            longTermGoals: actor.longTermGoals || [],
-            capabilities: actor.capabilities || [],
-            hidden: actor.hidden || {},
-            evidence: (actor.evidence || []).slice(-8),
-        }))),
+        safeJson(promptActors),
         ...(actorShardCandidates
             ? [
                 '',
@@ -8014,7 +8259,7 @@ function buildContinuityMessages({
             : []),
         '',
         `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
-        worldContext.text,
+        cropText(worldContext.text, 16000, '世界设定取材池'),
         '',
         '=== 最近剧情（含本轮回复）===',
         cropText(
@@ -8024,7 +8269,7 @@ function buildContinuityMessages({
                 settings.continuityContextMessages,
                 new Set(excludedSourceIndexes),
             ),
-            18000,
+            12000,
             '支线剧情上下文',
         ),
         '',
@@ -8113,6 +8358,7 @@ async function collectActorShardProposals(captured, {
     actorSchedule,
     messageText,
     token,
+    excludedActorNames = [],
 } = {}) {
     const settings = getSettings();
     if (settings.actorShardMode === 'off') {
@@ -8130,6 +8376,7 @@ async function collectActorShardProposals(captured, {
         actorLedger,
         schedule: actorSchedule,
         presentText: messageText,
+        excludedActorNames,
         maxWorkers: Math.min(
             settings.actorShardMaxWorkers,
             settings.actorLedgerMaxActorsPerTurn,
@@ -8203,6 +8450,7 @@ async function collectActorShardProposals(captured, {
                 jsonMode: true,
                 signal,
                 parallelLane: candidate.id,
+                failover: true,
             },
         ),
     });
@@ -8352,7 +8600,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         : namespace.actorLedger;
     const storedActorLedger = normalizeActorLedger(
         rerollActorBase,
-        { chatId: captured.chatId },
+        {
+            chatId: captured.chatId,
+            excludedActorNames: currentPlayerActorNames(context),
+        },
     );
     const storedWorldPressure = normalizeWorldPressureState(namespace.worldPressure);
     const knownThreatPressure = scheduledBase.threads
@@ -8373,9 +8624,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         pressureCap: settings.worldPressureCap,
         knownThreatPressure,
     });
+    const excludedActorNames = currentPlayerActorNames(context);
     let actorLedger = migrateActorLedgerFromContinuity(
         storedActorLedger,
         scheduledBase,
+        { excludedActorNames },
     );
     actorLedger.turn = tickTurn;
     actorLedger = reconcileActorIdentityRevealsFromAcceptedContent(actorLedger, {
@@ -8400,6 +8653,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         turn: tickTurn,
         maxActors: settings.actorLedgerMaxActorsPerTurn,
         explorationSlots: settings.actorLedgerExplorationSlots,
+        excludedActorNames,
     });
     let actorShardCandidates = null;
     let actorSettlement = {
@@ -8409,6 +8663,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         worldEvents: [],
         receipts: [],
     };
+    let actorSettlementFinalized = false;
+    let actorShardStatus = 'not-run';
+    const scheduledActorIds = actorSchedule.selected.map((item) => item.actorId);
     try {
         const actorShardResult = await collectActorShardProposals(captured, {
             base: scheduledBase,
@@ -8416,7 +8673,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             actorSchedule,
             messageText: acceptedNarrative,
             token,
+            excludedActorNames,
         });
+        actorShardStatus = actorShardResult.status;
         if (actorShardResult.status === 'stale') {
             return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
         }
@@ -8452,8 +8711,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             actorSettlement = settleActorActionCandidates(
                 actorLedger,
                 actorPressureDecision.admitted.map((item) => item.source),
-                { turn: tickTurn },
+                {
+                    turn: tickTurn,
+                    attemptedActorIds: scheduledActorIds,
+                },
             );
+            actorSettlementFinalized = true;
             for (const delayed of actorPressureDecision.delayed) {
                 actorSettlement.rejected.push({
                     actorId: delayed.source?.actorId || '',
@@ -8482,6 +8745,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             latestActorShardDiagnostics = {
                 ...latestActorShardDiagnostics,
                 acceptedActions: actorSettlement.accepted.length,
+                semanticActions: actorSettlement.accepted.filter(
+                    (item) => item.semanticProgress === true,
+                ).length,
+                heldActions: actorSettlement.accepted.filter(
+                    (item) => item.semanticProgress !== true,
+                ).length,
                 rejectedActions: actorSettlement.rejected.length,
                 rejectionReasons: [...new Set(
                     actorSettlement.rejected.flatMap((item) => item.reasons || []),
@@ -8511,6 +8780,29 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             failed: 1,
         };
         console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
+    }
+    if (
+        !actorSettlementFinalized
+        && actorShardStatus !== 'disabled'
+        && scheduledActorIds.length
+    ) {
+        actorSettlement = settleActorActionCandidates(actorLedger, [], {
+            turn: tickTurn,
+            attemptedActorIds: scheduledActorIds,
+        });
+        actorSettlementFinalized = true;
+        actorLedger = actorSettlement.ledger;
+        latestActorShardDiagnostics = {
+            ...latestActorShardDiagnostics,
+            semanticActions: 0,
+            heldActions: 0,
+            scheduledWithoutSemanticAction: scheduledActorIds.length,
+        };
+        recordOperation(
+            '人物行动',
+            `本轮 ${scheduledActorIds.length} 名到期人物没有形成语义行动；已累计沉默并进入公平重排`,
+            'warn',
+        );
     }
 
     let worldLaneSchedule = scheduleWorldLanes(scheduledBase, {
@@ -8582,12 +8874,15 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     };
     let actorLedgerChanged = JSON.stringify(storedActorLedger) !== JSON.stringify(actorLedger);
     const worldPressureChanged = JSON.stringify(storedWorldPressure) !== JSON.stringify(worldPressure);
-    const localProgressed = (
+    const clockOnlyProgressed = (
         clockPlan.changedThreadIds.length > 0
         || worldClockChanged
-        || actorSettlement.accepted.length > 0
     );
-    let next = localProgressed ? scheduledBase : base;
+    const localProgressed = actorSettlement.accepted.some(
+        (item) => item.semanticProgress === true,
+    );
+    const localStateChanged = clockOnlyProgressed || localProgressed;
+    let next = localStateChanged ? scheduledBase : base;
     let retryReason = '';
     let progressed = false;
     let modelValidated = false;
@@ -8623,6 +8918,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 channel: 'fast',
                 targetIndex: captured.index,
                 jsonMode: true,
+                failover: true,
             });
         } catch (error) {
             modelFailure = String(error.message || error);
@@ -8755,7 +9051,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             modelValidated = true;
             break;
         }
-        if (localProgressed) {
+        if (localStateChanged) {
             // The deterministic clocks are authoritative enough to keep the
             // living-world ledger moving. A 429, timeout, empty response, or
             // malformed JSON may postpone narrative enrichment, but must never
@@ -8793,25 +9089,28 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         const clockThread = next.threads.find(
             (thread) => thread.id === clockPlan.changedThreadIds[0],
         );
+        const semanticActorEvent = actorSettlement.worldEvents.at(-1);
         next.lastTick = {
             turn: tickTurn,
-            action: clockThread?.stage === 'resolved'
+            action: !modelValidated && !localProgressed
+                ? 'held'
+                : clockThread?.stage === 'resolved'
                 ? 'resolved'
                 : clockThread?.stage === 'manifested'
                     ? 'manifested'
                     : 'advanced',
-            threadId: clockThread?.id || clockPlan.changedThreadIds[0],
+            threadId: semanticActorEvent
+                ? `ACTOR-${semanticActorEvent.id}`
+                : clockThread?.id || clockPlan.changedThreadIds[0],
             reason: modelValidated
                 ? clockThread?.evolveResult === 'success'
                     ? '本地事件时钟成功推进，模型已完成因果复核'
                     : clockThread?.evolveResult === 'setback'
                         ? '本地事件时钟受挫回退，模型已完成因果复核'
                         : '本地事件时钟本轮保持，模型已完成因果复核'
-                : clockThread?.evolveResult === 'success'
-                    ? `${degradedModelReason}；本地事件时钟已成功推进，叙事后果待后续轮次补全`
-                    : clockThread?.evolveResult === 'setback'
-                        ? `${degradedModelReason}；本地事件时钟已记录受挫，叙事后果待后续轮次补全`
-                        : `${degradedModelReason}；本地事件时钟已保留本轮结果，待后续轮次补全`,
+                : localProgressed
+                    ? `${degradedModelReason}；已提交NPC语义行动，但宏观连续性仍标记为降级`
+                    : `${degradedModelReason}；仅保存本地时钟，未产生可验证的新世界事实`,
         };
     } else if (
         next.lastTick?.turn <= (base.lastTick?.turn || 0)
@@ -8819,11 +9118,13 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     ) {
         next.lastTick = {
             turn: tickTurn,
-            action: 'advanced',
+            action: modelValidated || localProgressed ? 'advanced' : 'held',
             threadId: 'WORLD',
             reason: modelValidated
                 ? '分类世界状态或本地传播时钟发生变化，模型已完成因果复核'
-                : `${degradedModelReason}；分类世界状态或本地传播时钟已保留，待后续轮次补全`,
+                : localProgressed
+                    ? `${degradedModelReason}；NPC语义行动已提交，分类世界复核仍待补全`
+                    : `${degradedModelReason}；只保存分类世界时钟，没有语义推进`,
         };
     }
     next.turn = Math.max(tickTurn, Number(next.turn) || 0);
@@ -8909,10 +9210,12 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     applyContinuityInjection();
     const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
     const held = next.lastTick?.action === 'held';
-    if (!modelValidated && localProgressed) {
+    if (!modelValidated && localStateChanged) {
         setContinuityStatus(
-            `世界连续性：${degradedModelReason}，本地时钟已推进 ${clockPlan.changedThreadIds.length || 1} 项；不会丢账`,
-            '',
+            localProgressed
+                ? `世界连续性：宏观模型未通过，但已提交 ${actorSettlement.accepted.filter((item) => item.semanticProgress).length} 项NPC语义行动；本轮降级，不计为完整通过`
+                : `世界连续性：${degradedModelReason}；仅保存 ${clockPlan.changedThreadIds.length || 1} 项时钟变化，没有语义推进`,
+            'warn',
         );
     } else {
         setContinuityStatus(
@@ -8923,12 +9226,18 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         );
     }
     return {
-        status: 'applied',
+        status: !modelValidated && localStateChanged ? 'degraded' : 'applied',
         active,
         director,
         held,
-        degraded: !modelValidated && localProgressed,
-        actorActions: actorSettlement.accepted.length,
+        degraded: !modelValidated && localStateChanged,
+        clockOnly: !modelValidated && clockOnlyProgressed && !localProgressed,
+        actorActions: actorSettlement.accepted.filter(
+            (item) => item.semanticProgress === true,
+        ).length,
+        actorHeld: actorSettlement.accepted.filter(
+            (item) => item.semanticProgress !== true,
+        ).length,
         actorActionRejected: actorSettlement.rejected.length,
         reason: modelFailure || undefined,
     };

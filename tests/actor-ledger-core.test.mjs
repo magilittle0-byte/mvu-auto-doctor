@@ -159,7 +159,7 @@ test('evidence-backed profile patches persist character DNA without overwriting 
     });
     assert.equal(merged.accepted.length, 1);
     assert.equal(merged.rejected.length, 0);
-    assert.equal(merged.ledger.version, 4);
+    assert.equal(merged.ledger.version, 5);
     const ada = merged.ledger.actors[0];
     assert.equal(ada.identity.role, '商人', 'established role is not overwritten');
     assert.equal(ada.identity.socialStyle, '先保持礼貌距离，再用具体问题试探');
@@ -229,7 +229,7 @@ test('profile patches reject fabricated evidence and do not persist generic extr
     assert.equal(filtered.ledger.actors[0].identity.decisionStyle, '先核对事实，再为撤离保留余地');
 });
 
-test('v3 actor ledgers migrate to v4 dynamic evidence fields without inventing personality', () => {
+test('v3 actor ledgers migrate to v5 semantic evidence fields without inventing personality', () => {
     const legacy = {
         ...emptyActorLedger('chat-actor-ledger'),
         version: 3,
@@ -247,7 +247,7 @@ test('v3 actor ledgers migrate to v4 dynamic evidence fields without inventing p
         })],
     };
     const migrated = normalizeActorLedger(legacy);
-    assert.equal(migrated.version, 4);
+    assert.equal(migrated.version, 5);
     assert.equal(migrated.migrations.actorLedgerV4, true);
     assert.equal(migrated.actors[0].identity.copingStyle, '受压时先核对清单');
     assert.equal(migrated.actors[0].identity.informationStyle, '');
@@ -406,6 +406,40 @@ test('migration excludes player system environment and group labels from the act
     assert.deepEqual(migrated.actors.map((item) => item.name), ['艾达']);
 });
 
+test('runtime migration removes the named player and converts player-dependent beats into constraints', () => {
+    const existing = normalizeActorLedger({
+        ...emptyActorLedger('chat-player-filter'),
+        turn: 14,
+        actors: [
+            actor('PLAYER-ROY', { name: 'Roy', currentGoals: ['Roy决定下一步行动'] }),
+            actor('GROUP', { name: '恶魔旅团' }),
+            actor('VALEN', {
+                name: '瓦伦',
+                currentGoals: ['Roy联系瓦伦后再决定如何处置'],
+            }),
+        ],
+    });
+    const migrated = migrateActorLedgerFromContinuity(existing, {
+        chatId: 'chat-player-filter',
+        turn: 30,
+        threads: [{
+            id: 'EVT-VALEN',
+            actors: ['Roy', '瓦伦', '恶魔旅团'],
+            locations: ['哈克南宅邸'],
+            knowledge: 'observed',
+            summary: '瓦伦已经回家接受治疗。',
+            nextBeat: '等待Roy主动联系瓦伦。',
+            trigger: 'Roy决定是否召唤瓦伦。',
+            seedBasis: 'synthetic-valen-branch',
+            sourceRefs: [sourceRef(30)],
+        }],
+    }, { excludedActorNames: ['Roy'] });
+    assert.deepEqual(migrated.actors.map((item) => item.name), ['瓦伦']);
+    assert.deepEqual(migrated.actors[0].currentGoals, []);
+    assert.equal(migrated.actors[0].constraints.length, 3);
+    assert.equal(migrated.actors[0].constraints.every((item) => /Roy/u.test(item)), true);
+});
+
 test('mutation lineage keeps one actor id and records forms instead of spawning a second actor', () => {
     const ledger = normalizeActorLedger({
         ...emptyActorLedger('chat-actor-ledger'),
@@ -518,6 +552,7 @@ test('local settlement blocks player sovereignty, teleportation, unknown facts a
         time: { turn: 4, window: 'now' },
         location: { from: '北港', to: '北港', travelTurns: 0 },
         action: '艾达寄出一封求助信',
+        stateChanges: [{ kind: 'commitment', summary: '求助信已经寄出，等待对方处理' }],
         knowledgeRefs: ['K1'],
         resourceCosts: [{ resourceId: 'coin', amount: 1 }],
         capabilityUsed: '交涉',
@@ -564,6 +599,7 @@ test('due actor must execute, replan, or wait on a concrete unmet condition and 
         time: { turn: 5, window: 'now' },
         location: { from: '北港', to: '北港', travelTurns: 0 },
         action: '等待',
+        stateChanges: [],
         knowledgeRefs: [],
         resourceCosts: [],
         capabilityUsed: '',
@@ -582,6 +618,7 @@ test('due actor must execute, replan, or wait on a concrete unmet condition and 
         time: { turn: 5, window: 'now' },
         location: { from: '北港', to: '北港', travelTurns: 0 },
         action: '艾达把公开告示贴到北港布告栏',
+        stateChanges: [{ kind: 'environment', summary: '北港布告栏新增一张公开告示' }],
         knowledgeRefs: [],
         resourceCosts: [{ resourceId: 'coin', amount: 1 }],
         capabilityUsed: '交涉',
@@ -709,6 +746,7 @@ test('80-turn low-attention exploration prevents starvation while receipts stay 
                     travelTurns: 0,
                 },
                 action: `${actorName}继续自己的日常事务`,
+                stateChanges: [{ kind: 'plan', summary: `${actorName}完成一项既定日常事务` }],
                 knowledgeRefs: [],
                 resourceCosts: [],
                 capabilityUsed: '',
@@ -724,4 +762,39 @@ test('80-turn low-attention exploration prevents starvation while receipts stay 
     assert.equal(ledger.actors.every((item) => item.settledActionCount > 0), true);
     assert.equal(ledger.actionReceipts.length <= 240, true);
     assert.equal(actorLedgerView(ledger).actors.some((item) => 'hidden' in item), false);
+});
+
+test('an all-worker failure advances silence and rotates the next starved actor instead of freezing the schedule', () => {
+    let ledger = normalizeActorLedger({
+        ...emptyActorLedger('chat-failed-workers'),
+        turn: 20,
+        actors: ['A', 'B', 'C'].map((id) => actor(id, {
+            name: `人物${id}`,
+            nextActionTurn: 1,
+            lastSemanticTurn: 1,
+            silenceTurns: 12,
+            lastAttemptTurn: 0,
+        })),
+    });
+    const first = scheduleActorTurns(ledger, {
+        turn: 20,
+        maxActors: 1,
+        explorationSlots: 0,
+    });
+    ledger = settleActorActionCandidates(ledger, [], {
+        turn: 20,
+        attemptedActorIds: first.selected.map((item) => item.actorId),
+    }).ledger;
+    const next = scheduleActorTurns(ledger, {
+        turn: 21,
+        maxActors: 1,
+        explorationSlots: 0,
+    });
+    assert.notEqual(next.selected[0].actorId, first.selected[0].actorId);
+    assert.equal(
+        ledger.actors.find((item) => item.id === first.selected[0].actorId)
+            .consecutiveActionFailures,
+        1,
+    );
+    assert.equal(ledger.actors.every((item) => item.silenceTurns === 13), true);
 });

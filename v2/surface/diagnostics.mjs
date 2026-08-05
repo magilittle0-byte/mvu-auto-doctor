@@ -127,6 +127,29 @@ export function createPrivacySafeDiagnosticProjection({
                     })),
                 },
             },
+            actors: {
+                actorCount: Math.max(0, Number(chat?.actors?.actorCount) || 0),
+                activeCount: Math.max(0, Number(chat?.actors?.activeCount) || 0),
+                dormantCount: Math.max(0, Number(chat?.actors?.dormantCount) || 0),
+                receiptCount: Math.max(0, Number(chat?.actors?.receiptCount) || 0),
+                semanticProgressCount: Math.max(
+                    0,
+                    Number(chat?.actors?.semanticProgressCount) || 0,
+                ),
+                maxSemanticSilence: Math.max(
+                    0,
+                    Number(chat?.actors?.maxSemanticSilence) || 0,
+                ),
+                stalledDueCount: Math.max(
+                    0,
+                    Number(chat?.actors?.stalledDueCount) || 0,
+                ),
+                consecutiveFailureCount: Math.max(
+                    0,
+                    Number(chat?.actors?.consecutiveFailureCount) || 0,
+                ),
+                privateThoughtsExposed: false,
+            },
             forum: {
                 postCount: Math.max(0, Number(chat?.forum?.postCount) || 0),
                 totalComments: Math.max(0, Number(chat?.forum?.totalComments) || 0),
@@ -139,6 +162,12 @@ export function createPrivacySafeDiagnosticProjection({
             completed: Math.max(0, Number(actorShards?.completed) || 0),
             succeeded: Math.max(0, Number(actorShards?.succeeded) || 0),
             failed: Math.max(0, Number(actorShards?.failed) || 0),
+            semanticActions: Math.max(0, Number(actorShards?.semanticActions) || 0),
+            heldActions: Math.max(0, Number(actorShards?.heldActions) || 0),
+            scheduledWithoutSemanticAction: Math.max(
+                0,
+                Number(actorShards?.scheduledWithoutSemanticAction) || 0,
+            ),
             failureCodes: [
                 ...new Set(
                     (Array.isArray(actorShards?.failureCodes)
@@ -227,6 +256,8 @@ export function createPrivacySafeDiagnosticProjection({
                 cacheHitTokens: Math.max(0, Number(entry?.cacheHitTokens) || 0),
                 cacheMissTokens: Math.max(0, Number(entry?.cacheMissTokens) || 0),
                 attempt: Math.max(0, Number(entry?.attempt) || 0),
+                routeSlotIndex: Math.max(0, Number(entry?.routeSlotIndex) || 0),
+                failover: entry?.failover === true,
                 targetIndex: Number.isInteger(Number(entry?.targetIndex))
                     ? Number(entry.targetIndex)
                     : -1,

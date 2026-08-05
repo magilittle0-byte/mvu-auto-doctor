@@ -18,7 +18,13 @@ export interface ActorShardProposal {
     travelTurns: number;
     knowledgeBasis: string[];
     currentGoal: string;
+    intent: 'execute' | 'replan' | 'wait';
     candidateAction: string;
+    stateChanges: Array<{
+        kind: 'location' | 'plan' | 'resource' | 'knowledge' | 'relationship'
+            | 'risk' | 'condition' | 'commitment' | 'environment';
+        summary: string;
+    }>;
     interactionTargets: Array<{ actorId: string; actorName: string }>;
     resourceCosts: Array<{ resourceId: string; amount: number }>;
     capabilityUsed: string;
@@ -55,8 +61,11 @@ export function userPromptSlotMetadata(value: unknown): {
 export function formatUserNarrativeInstruction(label: unknown, value: unknown): string;
 export function selectActorShardCandidates(input?: {
     continuity?: { threads?: Array<Record<string, unknown>> };
+    actorLedger?: { actors?: Array<Record<string, unknown>> };
+    schedule?: { selected?: Array<Record<string, unknown>> };
     presentText?: string;
     maxWorkers?: number;
+    excludedActorNames?: string[];
 }): ActorShardCandidate[];
 export function buildActorShardMessages(
     candidate: ActorShardCandidate,
