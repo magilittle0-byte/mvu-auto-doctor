@@ -55,6 +55,29 @@ test('one failed agent is isolated and does not suppress other candidates', asyn
     assert.equal(result.blackboard.candidates.length, 2);
 });
 
+test('one shared hard deadline aborts all stalled agents without serial waiting', async () => {
+    const startedAt = Date.now();
+    const result = await runSovereigntyAgentPool({
+        blackboard: createSovereigntyBlackboard({ turn: 8 }),
+        timeoutMs: 35,
+        jobs: [
+            { agentType: 'actor', agentId: 'actor-stalled', actorId: 'A' },
+            { agentType: 'world', agentId: 'world-stalled' },
+        ],
+        runAgent: async (job, { signal }) => new Promise((resolve, reject) => {
+            signal.addEventListener('abort', () => {
+                const error = new Error(`${job.agentId} aborted`);
+                error.code = 'AGENT_ABORTED';
+                reject(error);
+            }, { once: true });
+        }),
+    });
+    assert.ok(Date.now() - startedAt < 250, 'parallel failures must not multiply the hard deadline');
+    assert.equal(result.failed, 2);
+    assert.equal(result.succeeded, 0);
+    assert.equal(result.blackboard.failures.every((entry) => entry.isolated), true);
+});
+
 test('agents publish candidates only and deterministic local adjudicator owns final writes', () => {
     const blackboard = {
         ...createSovereigntyBlackboard({ turn: 1 }),

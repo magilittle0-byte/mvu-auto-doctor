@@ -24,9 +24,23 @@ const PROPOSAL_KEYS = Object.freeze([
     'evidence',
     'causalChain',
 ]);
-const INTERACTION_KEYS = Object.freeze(['actorId', 'actorName']);
-const RESOURCE_COST_KEYS = Object.freeze(['resourceId', 'amount']);
-const STATE_CHANGE_KEYS = Object.freeze(['kind', 'summary']);
+const OPTIONAL_PROPOSAL_KEYS = new Set([
+    'interactionTargets',
+    'resourceCosts',
+    'capabilityUsed',
+    'waitCondition',
+]);
+const PROPOSAL_WRAPPER_KEYS = Object.freeze(['proposal', 'candidate', 'result', 'data']);
+const AUTHORIZATION_KEYS = new Set([
+    'authorization',
+    'transactionauthorization',
+    'writeauthorization',
+    'commitauthorization',
+    'databasewrite',
+    'dangerconfirmed',
+    'branchoverride',
+    'barrierbypass',
+]);
 const STATE_CHANGE_KINDS = new Set([
     'location',
     'plan',
@@ -67,11 +81,28 @@ function normalizedKey(value) {
     return cleanText(value, 500).toLocaleLowerCase();
 }
 
-function exactKeys(value, keys) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const expected = new Set(keys);
-    const actual = Object.keys(value);
-    return actual.length === keys.length && actual.every((key) => expected.has(key));
+function objectRecord(value) {
+    return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasForbiddenAuthorizationField(value, depth = 0) {
+    if (!objectRecord(value) || depth > 4) return false;
+    return Object.entries(value).some(([key, entry]) => (
+        AUTHORIZATION_KEYS.has(String(key).toLocaleLowerCase())
+        || (objectRecord(entry) && hasForbiddenAuthorizationField(entry, depth + 1))
+    ));
+}
+
+function unwrapProposal(value) {
+    if (!objectRecord(value)) return { value, unwrapped: false };
+    if (Object.hasOwn(value, 'actorId')) return { value, unwrapped: false };
+    for (const key of PROPOSAL_WRAPPER_KEYS) {
+        const nested = value[key];
+        if (objectRecord(nested) && Object.hasOwn(nested, 'actorId')) {
+            return { value: nested, unwrapped: true };
+        }
+    }
+    return { value, unwrapped: false };
 }
 
 function isSubsetOfAllowed(values, allowed) {
@@ -430,38 +461,46 @@ function parseJsonObject(output) {
 export function parseActorShardProposal(output, { candidate } = {}) {
     const parsed = parseJsonObject(output);
     if (parsed.error) return parsed;
-    const value = parsed.value;
-    if (!exactKeys(value, PROPOSAL_KEYS)) {
+    if (hasForbiddenAuthorizationField(parsed.value)) {
         return { error: 'actor_shard.shape_not_whitelisted' };
     }
+    const unwrapped = unwrapProposal(parsed.value);
+    const value = unwrapped.value;
+    if (!objectRecord(value)) return { error: 'actor_shard.shape_not_whitelisted' };
+    const missingRequired = PROPOSAL_KEYS.some((key) => (
+        !OPTIONAL_PROPOSAL_KEYS.has(key) && !Object.hasOwn(value, key)
+    ));
+    if (missingRequired) return { error: 'actor_shard.shape_not_whitelisted' };
+    const droppedFields = Object.keys(value).some((key) => !PROPOSAL_KEYS.includes(key));
+    const defaultedFields = [...OPTIONAL_PROPOSAL_KEYS].some((key) => !Object.hasOwn(value, key));
     if (
         cleanText(value.actorId, 180) !== candidate?.id
         || cleanText(value.actorName, 120) !== candidate?.name
     ) {
         return { error: 'actor_shard.actor_identity_mismatch' };
     }
-    const interactionTargets = Array.isArray(value.interactionTargets)
-        ? value.interactionTargets
-        : null;
+    const interactionTargets = value.interactionTargets === undefined
+        ? []
+        : Array.isArray(value.interactionTargets) ? value.interactionTargets : null;
     if (
         !interactionTargets
         || interactionTargets.length > 8
         || interactionTargets.some((item) => (
-            !exactKeys(item, INTERACTION_KEYS)
+            !objectRecord(item)
             || !cleanText(item.actorId, 180)
             || !cleanText(item.actorName, 120)
         ))
     ) {
         return { error: 'actor_shard.interaction_targets_invalid' };
     }
-    const resourceCosts = Array.isArray(value.resourceCosts)
-        ? value.resourceCosts
-        : null;
+    const resourceCosts = value.resourceCosts === undefined
+        ? []
+        : Array.isArray(value.resourceCosts) ? value.resourceCosts : null;
     if (
         !resourceCosts
         || resourceCosts.length > 12
         || resourceCosts.some((item) => (
-            !exactKeys(item, RESOURCE_COST_KEYS)
+            !objectRecord(item)
             || !cleanText(item.resourceId, 100)
             || !Number.isFinite(Number(item.amount))
             || Number(item.amount) <= 0
@@ -500,7 +539,7 @@ export function parseActorShardProposal(output, { candidate } = {}) {
         !stateChanges
         || stateChanges.length > 8
         || stateChanges.some((item) => (
-            !exactKeys(item, STATE_CHANGE_KEYS)
+            !objectRecord(item)
             || !STATE_CHANGE_KINDS.has(cleanText(item.kind, 80))
             || cleanText(item.summary, 500).length < 4
         ))
@@ -568,8 +607,13 @@ export function parseActorShardProposal(output, { candidate } = {}) {
     }
     return {
         proposal,
-        repaired: parsed.repaired === true,
-        repairKinds: parsed.repairKinds || [],
+        repaired: parsed.repaired === true || unwrapped.unwrapped || droppedFields || defaultedFields,
+        repairKinds: [
+            ...(parsed.repairKinds || []),
+            ...(unwrapped.unwrapped ? ['unwrap-proposal-object'] : []),
+            ...(droppedFields ? ['drop-unrecognized-fields'] : []),
+            ...(defaultedFields ? ['default-optional-fields'] : []),
+        ],
     };
 }
 
@@ -742,11 +786,15 @@ export async function runActorShardBatch({
                 stale = true;
                 controller.abort('target-stale');
             } else {
+                const technicalCode = cleanText(error?.code || error?.name, 80)
+                    .replace(/[^a-zA-Z0-9_-]/gu, '_');
                 failures.push({
                     actorId: candidate.id,
                     code: workerController.signal.aborted
                         ? 'actor_shard.worker_timeout_or_cancelled'
-                        : 'actor_shard.worker_failed',
+                        : technicalCode
+                            ? `actor_shard.worker_failed.${technicalCode}`
+                            : 'actor_shard.worker_failed',
                 });
             }
         } finally {

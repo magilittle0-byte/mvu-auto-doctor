@@ -39,17 +39,17 @@ assert.equal(
 );
 assert.ok(readme.includes(repositoryUrl), 'README 必须提供在线安装仓库地址');
 assert.ok(
-    readme.includes('经本轮明确授权晋升默认 `main`')
-        && readme.includes('线上 `manifest.json` 已是 rc.10'),
-    'README 必须准确记录 rc.10 已授权晋升默认 main',
+    readme.includes('`2.0.0-rc.11`')
+        && readme.includes('只有远程 `main` 的 `manifest.json` 已是 rc.11'),
+    'README 必须准确区分 rc.11 候选与已经进入远程 main 的版本',
 );
 assert.ok(
     readme.includes('离线候选包') && readme.includes('回滚演练'),
     'README 必须在 main 发布后继续保留离线安装与回滚路径',
 );
 assert.ok(
-    rcUserGuide.includes('并已进入默认 `main`'),
-    'RC 使用说明必须准确记录当前线上发布状态',
+    rcUserGuide.includes('实际进入默认 `main` 后'),
+    'RC 使用说明必须以实际远程 main 为在线更新门',
 );
 assert.ok(
     rcUserGuide.includes('分支或标签：留空（默认 main）'),
@@ -60,7 +60,7 @@ assert.ok(
     'RC 使用说明必须记录可审阅的历史回退分支',
 );
 assert.ok(
-    rcUserGuide.includes('rc.10 离线包'),
+    rcUserGuide.includes('rc.11 离线包'),
     'RC 使用说明必须在 main 发布后继续提供离线安装路径',
 );
 

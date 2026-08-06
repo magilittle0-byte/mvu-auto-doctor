@@ -216,7 +216,7 @@ const responseStatuses = new Map();
 const report = {
     schemaVersion: 1,
     setup: {
-        sandboxRoot,
+        sandbox: path.basename(sandboxRoot),
         baselineVersion,
         baselineDigest,
         candidateVersion,
@@ -334,6 +334,12 @@ try {
             orb?.click();
             const panel = document.querySelector('#mvuad-floating-panel');
             const box = panel?.getBoundingClientRect();
+            const actorTab = panel?.querySelector(
+                '.mvuad-floating-tabs button[data-page="actors"]',
+            );
+            const actorPage = panel?.querySelector(
+                '.mvuad-floating-actor-page[data-page="actors"]',
+            );
             const controls = [...(panel?.querySelectorAll(
                 'button:not([hidden]), input:not([hidden]), select:not([hidden])',
             ) || [])].map((item) => item.getBoundingClientRect())
@@ -348,6 +354,7 @@ try {
                     && box.bottom <= innerHeight,
                 horizontalOverflow: document.documentElement.scrollWidth > innerWidth
                     || (!!panel && panel.scrollWidth > panel.clientWidth),
+                actorProfileUiReady: !!actorTab && !!actorPage,
                 minControlHeight: controls.length
                     ? Math.min(...controls.map((item) => item.height))
                     : 0,
@@ -360,6 +367,9 @@ try {
     const first = await page.evaluate(() => ({
         version: window.MvuAutoDoctorAPI
             ?.getDiagnosticProjection?.().plugin?.version || '',
+        apiVersion: window.MvuAutoDoctorAPI?.apiVersion || 0,
+        actorProfileApiReady:
+            typeof window.MvuAutoDoctorAPI?.openActorProfiles === 'function',
         apiCount: Object.keys(window.MvuAutoDoctorAPI || {}).length,
     }));
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -369,6 +379,9 @@ try {
     const reload = await page.evaluate(() => ({
         version: window.MvuAutoDoctorAPI
             ?.getDiagnosticProjection?.().plugin?.version || '',
+        apiVersion: window.MvuAutoDoctorAPI?.apiVersion || 0,
+        actorProfileApiReady:
+            typeof window.MvuAutoDoctorAPI?.openActorProfiles === 'function',
         apiCount: Object.keys(window.MvuAutoDoctorAPI || {}).length,
     }));
     report.runtime = {
@@ -384,12 +397,18 @@ try {
     if (
         first.version !== candidateVersion
         || reload.version !== candidateVersion
+        || first.apiVersion !== 8
+        || reload.apiVersion !== 8
+        || !first.actorProfileApiReady
+        || !reload.actorProfileApiReady
         || first.apiCount < 20
         || reload.apiCount !== first.apiCount
         || !desktop.panelWithinViewport
         || desktop.horizontalOverflow
+        || !desktop.actorProfileUiReady
         || !mobile.panelWithinViewport
         || mobile.horizontalOverflow
+        || !mobile.actorProfileUiReady
         || mobile.minControlHeight < 40
         || doctorErrors.length > 0
         || ['index.js', 'style.css'].some(
@@ -431,5 +450,8 @@ try {
     };
 }
 
+const reportPath = path.resolve(doctorRoot, 'qc/reports/latest-real-tauri.json');
+fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify(report, null, 2));
 if (failed || !restored) process.exitCode = 1;

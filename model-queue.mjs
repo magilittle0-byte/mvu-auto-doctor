@@ -14,6 +14,43 @@ function normalizedConcurrency(value) {
     return Math.min(8, Math.max(1, number));
 }
 
+export function countDistinctFailoverReservations({
+    maxFailovers = 0,
+    attemptedCount = 0,
+    currentSlotIndex = -1,
+    currentKey = '',
+    attemptedSlots = [],
+    attemptedKeys = [],
+    routes = [],
+    now = Date.now(),
+} = {}) {
+    const remainingLimit = Math.max(
+        0,
+        Math.floor(Number(maxFailovers) || 0)
+            - Math.max(0, Math.floor(Number(attemptedCount) || 0)),
+    );
+    if (!remainingLimit) return 0;
+    const blockedSlots = new Set(
+        (Array.isArray(attemptedSlots) ? attemptedSlots : []).map(Number),
+    );
+    const blockedKeys = new Set([
+        ...(Array.isArray(attemptedKeys) ? attemptedKeys : []).map(String),
+        String(currentKey || ''),
+    ]);
+    const healthyKeys = new Set(
+        (Array.isArray(routes) ? routes : [])
+            .filter((route) => (
+                Number(route?.slotIndex) !== Number(currentSlotIndex)
+                && !blockedSlots.has(Number(route?.slotIndex))
+                && Number(route?.openedUntil || 0) <= Number(now)
+                && !blockedKeys.has(String(route?.key || ''))
+            ))
+            .map((route) => String(route?.key || ''))
+            .filter(Boolean),
+    );
+    return Math.min(remainingLimit, healthyKeys.size);
+}
+
 export class ConnectionTaskScheduler {
     constructor() {
         this.connections = new Map();

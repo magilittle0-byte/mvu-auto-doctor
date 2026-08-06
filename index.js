@@ -99,7 +99,10 @@ import {
     forumView,
     normalizeForumState,
 } from './forum-core.mjs';
-import { ConnectionTaskScheduler } from './model-queue.mjs';
+import {
+    ConnectionTaskScheduler,
+    countDistinctFailoverReservations,
+} from './model-queue.mjs';
 import {
     actorProfileV6View,
     applyActorProfileV6Override,
@@ -157,7 +160,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.10';
+const VERSION = '2.0.0-rc.11';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 12;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -185,6 +188,7 @@ const ACTOR_ACTION_ERROR_LABELS = Object.freeze({
 });
 const MIN_MODEL_TIMEOUT_MS = 10_000;
 const MAX_MODEL_TIMEOUT_MS = 180_000;
+const CONTINUITY_MODEL_PROMPT_MAX_CHARS = 40_000;
 const DEFAULTS = Object.freeze({
     enabled: true,
     normalizeOpeningResources: true,
@@ -4579,7 +4583,7 @@ async function withTimeout(promise, milliseconds, label, {
 } = {}) {
     const timeout = Math.min(
         MAX_MODEL_TIMEOUT_MS,
-        Math.max(MIN_MODEL_TIMEOUT_MS, Number(milliseconds) || 120000),
+        Math.max(250, Number(milliseconds) || 120000),
     );
     let timer;
     let abortHandler;
@@ -5099,6 +5103,14 @@ function scopedModelMessages(messages, settings, task, channel, options = {}) {
 async function callModel(messages, options = {}) {
     const settings = getSettings();
     disableStoryOracleAutoIfNeeded();
+    const task = String(options.task || '模型任务');
+    const channel = options.channel === 'fast' ? 'fast' : 'strict';
+    const selectedConnection = selectChannelConnectionProfile(
+        settings,
+        channel,
+        options.routeSlotIndex,
+    );
+    const { profile, slotIndex } = selectedConnection;
     const maxTokens = Math.max(
         1024,
         Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
@@ -5110,6 +5122,52 @@ async function callModel(messages, options = {}) {
             Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
         ),
     );
+    const deadlineAt = Number.isFinite(Number(options.deadlineAt))
+        ? Number(options.deadlineAt)
+        : 0;
+    const attemptedCount = Array.isArray(options.attemptedRouteSlots)
+        ? options.attemptedRouteSlots.length
+        : 0;
+    const maxFailovers = Number.isFinite(Number(options.maxFailovers))
+        ? Math.max(0, Math.floor(Number(options.maxFailovers)))
+        : Number.MAX_SAFE_INTEGER;
+    const remainingFailovers = options.failover === true
+        ? countDistinctFailoverReservations({
+            maxFailovers,
+            attemptedCount,
+            currentSlotIndex: slotIndex,
+            currentKey: modelConnectionKey(profile),
+            attemptedSlots: options.attemptedRouteSlots,
+            attemptedKeys: options.attemptedRouteKeys,
+            routes: channelConnectionProfiles(settings, channel).map((item) => ({
+                slotIndex: item.slotIndex,
+                key: modelConnectionKey(item.profile),
+                openedUntil: modelRouteHealthRecord(
+                    channel,
+                    item.slotIndex,
+                    item.profile,
+                ).openedUntil,
+            })),
+        })
+        : 0;
+    const remainingOverallMs = deadlineAt ? deadlineAt - Date.now() : timeoutMs;
+    if (deadlineAt && remainingOverallMs <= 250) {
+        const error = new Error('模型任务已到达总时限，已转入后台恢复队列');
+        error.code = 'MODEL_TOTAL_DEADLINE';
+        throw error;
+    }
+    const attemptTimeoutMs = deadlineAt
+        ? Math.max(
+            250,
+            Math.min(
+                timeoutMs,
+                remainingOverallMs - Math.min(
+                    remainingOverallMs - 250,
+                    remainingFailovers * MIN_MODEL_TIMEOUT_MS,
+                ),
+            ),
+        )
+        : timeoutMs;
     const controller = new AbortController();
     const externalSignal = options.signal || null;
     const abortFromExternal = () => controller.abort(
@@ -5119,18 +5177,10 @@ async function callModel(messages, options = {}) {
     if (externalSignal?.aborted) abortFromExternal();
     activeModelControllers.add(controller);
     syncTaskCancelButtons();
-    const task = String(options.task || '模型任务');
-    const channel = options.channel === 'fast' ? 'fast' : 'strict';
     const effectiveMessages = scopedModelMessages(messages, settings, task, channel, options);
     const diagnosticTargetIndex = Number.isInteger(Number(options.targetIndex))
         ? Number(options.targetIndex)
         : -1;
-    const selectedConnection = selectChannelConnectionProfile(
-        settings,
-        channel,
-        options.routeSlotIndex,
-    );
-    const { profile, slotIndex } = selectedConnection;
     const parallelLane = String(options.parallelLane || '')
         .replace(/[^a-zA-Z0-9_-]/gu, '')
         .slice(0, 40);
@@ -5194,7 +5244,7 @@ async function callModel(messages, options = {}) {
                                 providerUsage = usage;
                             },
                         }),
-                        timeoutMs,
+                        attemptTimeoutMs,
                         `${channel === 'fast' ? '轻量' : '严格'}独立 API`,
                         {
                             signal: controller.signal,
@@ -5216,7 +5266,7 @@ async function callModel(messages, options = {}) {
                         }
                         const output = await withTimeout(
                             api.run(effectiveMessages, runOptions),
-                            timeoutMs,
+                            attemptTimeoutMs,
                             '故事神谕连接',
                             {
                                 signal: controller.signal,
@@ -5244,7 +5294,7 @@ async function callModel(messages, options = {}) {
                 }
                 const output = await withTimeout(
                     context.generateRaw(rawOptions),
-                    timeoutMs,
+                    attemptTimeoutMs,
                     '酒馆当前连接',
                     {
                         signal: controller.signal,
@@ -5299,6 +5349,8 @@ async function callModel(messages, options = {}) {
             ];
             const nextRoute = options.failover === true
                 && !externalSignal?.aborted
+                && attemptedRouteSlots.length <= maxFailovers
+                && (!deadlineAt || deadlineAt - Date.now() > 250)
                 ? channelConnectionProfiles(settings, channel).find((item) => (
                     !attemptedRouteSlots.includes(item.slotIndex)
                     && !attemptedRouteKeys.includes(modelConnectionKey(item.profile))
@@ -8665,7 +8717,7 @@ function buildContinuityMessages({
             || Number(right.urgency || 0) - Number(left.urgency || 0)
             || String(left.id || '').localeCompare(String(right.id || ''))
         ))
-        .slice(0, 18)
+        .slice(0, 12)
         .map((thread) => ({
             ...thread,
             sourceRefs: (thread.sourceRefs || []).slice(-4),
@@ -8707,7 +8759,7 @@ function buildContinuityMessages({
             || Number(left.lastSemanticTurn || 0) - Number(right.lastSemanticTurn || 0)
             || String(left.id || '').localeCompare(String(right.id || ''))
         ))
-        .slice(0, 16)
+        .slice(0, 10)
         .map((actor) => ({
             actorId: actor.id,
             name: actor.name,
@@ -8733,30 +8785,32 @@ function buildContinuityMessages({
         `目标回复身份：chat=${captured.chatId} index=${captured.index} swipe=${captured.swipeId}`,
         '',
         '=== 更新前支线账本 ===',
-        safeJson(promptBase),
+        cropText(safeJson(promptBase), 5500, '支线账本'),
         '',
         '=== 本回合可识别的预设/缝合怪记录 ===',
         cropText(
             markerText || '无结构化记录；仍可依据下方世界设定低频维护自主事件。',
-            6000,
+            1600,
             '预设事件记录',
         ),
         '',
         '=== 内置论坛的公共信号（普通水帖已过滤，仍不等于事实）===',
-        forumSignals.length ? safeJson(forumSignals) : '无达到事件候选门槛的论坛信号。',
+        forumSignals.length
+            ? cropText(safeJson(forumSignals), 1200, '论坛公共信号')
+            : '无达到事件候选门槛的论坛信号。',
         '',
         '=== 当前MVU主线锚点（时间/地点/人物/势力/任务/资源，只读）===',
-        cropText(stateAnchors, 8000, 'MVU主线锚点'),
+        cropText(stateAnchors, 2600, 'MVU主线锚点'),
         '',
         '=== 当前人物档案（增量补全；hidden只供幕后连续性，不得写成公开事实）===',
-        safeJson(promptActors),
+        cropText(safeJson(promptActors), 4000, '人物档案'),
         ...(actorShardCandidates
             ? [
                 '',
                 '=== 持久人物账本的本轮调度与行动收据 ===',
                 'proposals仍是无写权限候选；acceptedActions与worldEvents已经通过本地身份、知识、时间、地点、资源、能力、因果和玩家主权校验，可结算为人物实际行动与世界后果。',
                 'rejectedActions必须保持拒绝，禁止模型绕过本地原因重新采用。后台行动可以永不进入主线；只有worldEvents中的可观察后果或主动接触才可进入事件/世界表面，且仍受汇流门槛和注入预算限制。',
-                safeJson(actorShardCandidates),
+                cropText(safeJson(actorShardCandidates), 3000, '人物行动收据'),
             ]
             : []),
         ...(worldLaneSchedule?.selected?.length
@@ -8765,12 +8819,12 @@ function buildContinuityMessages({
                 '=== 本轮非人物结构世界轨（独立预算）===',
                 '这些候选来自势力、环境、经济、趋势、公共信号或因果余波的本地有界调度；它们不依赖人物候选，也不得被人物行动覆盖。',
                 '只有due=true且mode=settlement的候选才需要在本轮产生合法变化、结束/冷却，或给出具体尚未满足条件；due=false的exploration候选允许安静保留，绝不能伪装成已结算。未进入该列表的世界条目继续保留，不代表删除。',
-                safeJson(worldLaneSchedule),
+                cropText(safeJson(worldLaneSchedule), 1600, '结构世界轨'),
             ]
             : []),
         '',
         `=== 角色卡与当前世界书取材池（${worldContext.sourceCount}项）===`,
-        cropText(worldContext.text, 16000, '世界设定取材池'),
+        cropText(worldContext.text, 3800, '世界设定取材池'),
         '',
         '=== 最近剧情（含本轮回复）===',
         cropText(
@@ -8780,74 +8834,46 @@ function buildContinuityMessages({
                 settings.continuityContextMessages,
                 new Set(excludedSourceIndexes),
             ),
-            12000,
+            3500,
             '支线剧情上下文',
         ),
         '',
         '输出格式：',
         jsonOnly ? '' : '<ContinuityState>',
-        '{',
-        '  "turn": 1,',
-        '  "lastTick": {"turn": 1, "action": "advanced", "threadId": "稳定ID", "reason": "本轮调度的具体事实依据"},',
-        '  "actorProfiles": [{',
-        '    "actorId": "必须来自当前人物档案的稳定ID", "name": "同一人物名",',
-        '    "evidence": ["角色卡/世界书/已发生正文中的具体短证据"],',
-        '    "identity": {',
-        '      "role": "社会或剧情角色，不是人格标签", "traits": ["有证据的长期倾向"],',
-        '      "desires": ["不围着玩家转的现实欲望"], "boundaries": ["边界与愿付代价"],',
-        '      "socialStyle": "与人相处的办法", "decisionStyle": "做决定的办法",',
-        '      "speechStyle": "说话密度/句长/停顿与回避方式", "copingStyle": "旧版兼容字段；无既有值可留空",',
-        '      "informationStyle": "如何取样和判断信息", "typicalMisread": "有重复证据的典型误读；没有则留空",',
-        '      "relationshipDistancePattern": "对具体对象如何靠近、试探、守界或撤退，不写依恋型标签",',
-        '      "selfImageGap": "自我形象与已观察行为的吻合或缝隙；没有双侧证据则留空",',
-        '      "learnedCounterDisposition": "因训练/职责/经验习得的逆倾向能力；偏好不等于能力上限",',
-        '      "pressureResponse": "压力上升时首先采用的办法", "recoveryPath": "条件缓解后如何恢复",',
-        '      "everydayHabits": ["小而稳定的日常习惯"], "blindSpots": ["能力之外的盲点"]',
-        '    },',
-        '    "longTermGoals": ["可持续目标"], "capabilities": ["已有证据的能力"],',
-        '    "hidden": {"emotionalInertia": ["情绪惯性"], "innerConflicts": ["可共存矛盾"], "privateIntentions": ["仅供幕后连续性的私人打算"]}',
-        '  }],',
-        '  "threads": [{',
-        '    "id": "稳定ID", "title": "短标题", "kind": "parallel",',
-        '    "eventType": "conflict", "level": 2,',
-        '    "origin": "setting_independent", "relation": "independent",',
-        '    "stage": "seeded", "stageProgress": 3, "evolveResult": "hold", "stalled": false, "outcome": "",',
-        '    "summary": "目前已成立的事实", "offscreenBeat": "本轮幕后实际变化或空字符串",',
-        '    "nextBeat": "下次自然推进的一拍", "trigger": "事件自身的可验证推进条件",',
-        '    "intersection": "本轮重算后的汇流条件；无交集可明确写无",',
-        '    "convergence": {"score": 0, "channels": [], "evidence": [], "entryBeat": "", "lastCheckedTurn": 1},',
-        '    "propagation": ["由本地按world.sourceThreads反向补齐的世界表面ID；模型可省略"],',
-        '    "seedBasis": "引用的角色卡/世界书设定依据",',
-        '    "causedBy": ["因果父事件ID"], "effects": ["已经成立且会持续的后果"],',
-        '    "rumors": ["有来源与传播范围的流言"], "resolution": "结束方式；未结束留空",',
-        '    "actors": [], "locations": [], "knowledge": "hidden",',
-        '    "urgency": 1, "createdTurn": 1, "lastAdvancedTurn": 1',
-        '  }],',
-        '  "scenarioPlan": {',
-        '    "status": "active", "instanceId": "SCN-稳定ID", "title": "副本/场景名",',
-        '    "baselineEvidence": ["当前任务锚点或已发生正文的明确证据"],',
-        '    "baseline": {',
-        '      "goal": "原始主目标", "completion": "可验证完成条件", "failure": "失败边界",',
-        '      "activeApex": "原生终局冲突/最高威胁；没有则空", "route": "可选路线结构",',
-        '      "timeLimit": "明确时限；没有则空", "stakes": "代价与赌注",',
-        '      "phase": "setup", "closure": "open", "closureReason": ""',
-        '    },',
-        '    "amendments": []',
-        '  },',
-        '  "world": {',
-        '    "digest": "只概括本轮真正变化；没有变化可省略",',
-        '    "trends": [{"id": null, "name": "长期趋势", "status": "active", "summary": "持续约束", "scope": "范围", "source": "明确来源", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "设定或已发生事实"}],',
-        '    "factions": [{"id": "FAC-01", "name": "组织", "relation": "neutral", "condition": "stable", "goal": "当前目标", "summary": "实质变化", "pillars": [], "scope": "范围", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "依据", "lastChange": "本轮变化"}],',
-        '    "winds": [{"id": null, "topic": "信息主题", "type": "report", "strength": 1, "content": "传播中的说法", "source": "来源→传播节点", "scope": "已覆盖范围", "sourceThreads": ["来源事件ID"], "knowledge": "rumor", "basis": "本轮公开事实"}],',
-        '    "reputation": {"public": {"level": 1, "summary": "圈层总体评价变化", "basis": "已覆盖该圈层的风声ID"}},',
-        '    "environment": {"economy": "stable", "summary": "已发生的环境或市场变化", "basis": "事件/风声依据", "incidents": []},',
-        '    "shadows": {"enemies": [], "secrets": []},',
-        '    "influences": [{"id": null, "trigger": "风声或事件ID", "impact": "已造成的跨类别影响", "fallout": "仍可能延续的余波", "sourceThreads": ["来源事件ID"], "knowledge": "observed", "basis": "因果依据"}]',
-        '  }',
-        '}',
+        '{"turn":本轮整数,"lastTick":{"turn":本轮整数,"action":"created|advanced|manifested|resolved|dormant|held","threadId":"稳定ID或WORLD","reason":"不少于8字的具体依据"},',
+        '"actorProfiles":[{"actorId":"现有稳定ID","name":"同一人物名","evidence":["逐字短证据"],"identity":{"role":"角色","traits":[],"desires":[],"boundaries":[],"socialStyle":"","decisionStyle":"","speechStyle":"","copingStyle":"","informationStyle":"","typicalMisread":"","relationshipDistancePattern":"","selfImageGap":"","learnedCounterDisposition":"","pressureResponse":"","recoveryPath":"","everydayHabits":[],"blindSpots":[]},"longTermGoals":[],"capabilities":[],"hidden":{"emotionalInertia":[],"innerConflicts":[],"privateIntentions":[]}}],',
+        '"threads":[{"id":"旧ID或null","title":"短标题","kind":"parallel|personal|promise|enemy|mystery","eventType":"conflict|progress","level":2,"origin":"main_derivative|setting_linked|setting_independent|ambient","relation":"linked|latent|independent|converging","stage":"seeded|advancing|manifested|resolved|dormant","stageProgress":3,"evolveResult":"success|hold|setback","stalled":false,"outcome":"","summary":"已成立事实","offscreenBeat":"本轮实际变化或空","nextBeat":"未来可能的一拍","trigger":"可验证条件","intersection":"交联复核","convergence": {"score": 0,"channels":[],"evidence":[],"entryBeat":"","lastCheckedTurn":1},"seedBasis":"依据","causedBy":[],"effects":[],"rumors":[],"resolution":"","actors":[],"locations":[],"knowledge":"hidden|rumor|observed","urgency":1,"createdTurn":1,"lastAdvancedTurn":1}],',
+        '"scenarioPlan":{"baselineEvidence":[],"amendments":[]},',
+        '"world":{"digest":"本轮变化或空","trends":[{"id":null,"sourceThreads": ["来源事件ID"]}],"factions":[],"winds":[],"reputation":{},"environment":{},"shadows":{"enemies":[],"secrets":[]},"influences":[]}}',
+        '只返回本轮有实质变化的旧条目和必要新条目；没有某类变化就返回空数组/空对象，禁止复制整本旧账。',
         jsonOnly ? '' : '</ContinuityState>',
     ].filter(Boolean).join('\n');
-    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+    const promptBudget = Math.max(12_000, CONTINUITY_MODEL_PROMPT_MAX_CHARS - system.length);
+    const boundedUser = cropText(user, promptBudget, '活世界输入');
+    return [{ role: 'system', content: system }, { role: 'user', content: boundedUser }];
+}
+
+function buildContinuityRepairMessages(output, error) {
+    return [
+        {
+            role: 'system',
+            content: [
+                '你只负责把上一条活世界候选修成一个完整、可解析的增量 JSON 对象。',
+                '保留原候选中有依据的内容，不新增事实、不补造人物行动、不替玩家决定。',
+                '根对象只允许 turn、lastTick、actorProfiles、threads、scenarioPlan、world。',
+                '缺少变化时使用空数组或空对象；lastTick 必须指向已有稳定ID或 WORLD，并写不少于8字的具体 held 理由。',
+                '只输出 JSON 对象，不要围栏、解释或前后文字。',
+            ].join('\n'),
+        },
+        {
+            role: 'user',
+            content: [
+                `原校验错误=${String(error || 'invalid-continuity').slice(0, 500)}`,
+                '待修复候选：',
+                cropText(String(output || ''), 10_000, '待修复候选'),
+            ].join('\n'),
+        },
+    ];
 }
 
 function actorShardLeaseFingerprint(captured) {
@@ -8870,6 +8896,7 @@ async function collectActorShardProposals(captured, {
     messageText,
     token,
     excludedActorNames = [],
+    signal = null,
 } = {}) {
     const settings = getSettings();
     if (settings.actorShardMode === 'off') {
@@ -8926,6 +8953,7 @@ async function collectActorShardProposals(captured, {
         `世界连续性：NPC分片 0/${candidates.length}（最多 ${settings.actorShardMaxWorkers} 次额外轻量调用）`,
         'busy',
     );
+    const actorDeadlineAt = Date.now() + settings.actorShardTimeoutMs;
     const result = await runActorShardBatch({
         candidates,
         maxConcurrency: Math.min(
@@ -8933,6 +8961,7 @@ async function collectActorShardProposals(captured, {
             settings.fastChannelConcurrency,
         ),
         timeoutMs: settings.actorShardTimeoutMs,
+        signal,
         isCurrent: () => continuityTargetIsCurrent(captured, token).ok,
         onProgress(progress) {
             latestActorShardDiagnostics = {
@@ -8962,6 +8991,8 @@ async function collectActorShardProposals(captured, {
                 signal,
                 parallelLane: candidate.id,
                 failover: true,
+                maxFailovers: 1,
+                deadlineAt: actorDeadlineAt,
             },
         ),
         repairWorker: async (output, candidate, { signal, error }) => callModel([
@@ -8992,7 +9023,9 @@ async function collectActorShardProposals(captured, {
             jsonMode: true,
             signal,
             parallelLane: `${candidate.id}-repair`,
-            failover: true,
+            failover: false,
+            maxFailovers: 0,
+            deadlineAt: actorDeadlineAt,
         }),
     });
     latestActorShardDiagnostics = {
@@ -9261,8 +9294,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         turn: tickTurn,
         sourceRef: sovereigntySourceRefOf(captured),
     });
+    const sovereigntyDeadlineAt = Date.now() + settings.sovereigntyHardTimeoutMs;
     const sovereigntyAgentPool = await runSovereigntyAgentPool({
         blackboard: sovereigntyBlackboard,
+        timeoutMs: settings.sovereigntyHardTimeoutMs,
         limits: { profile: 1, actor: 1, world: 1 },
         jobs: [
             {
@@ -9281,7 +9316,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 input: { lanes: provisionalWorldLaneSchedule.selected.length },
             },
         ],
-        runAgent: async (job) => {
+        runAgent: async (job, { signal } = {}) => {
             if (job.agentType === 'profile') {
                 return {
                     coverage: profilePreparation.coverage,
@@ -9297,6 +9332,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                     messageText: acceptedNarrative,
                     token,
                     excludedActorNames,
+                    signal,
                 });
             }
             const messages = buildContinuityMessages({
@@ -9322,6 +9358,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 targetIndex: captured.index,
                 jsonMode: true,
                 failover: true,
+                maxFailovers: 1,
+                deadlineAt: sovereigntyDeadlineAt,
+                signal,
                 parallelLane: 'world-agent',
             });
         },
@@ -9568,6 +9607,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     let progressed = false;
     let modelValidated = false;
     let modelFailure = '';
+    let previousInvalidOutput = '';
     const maxAttempts = force ? 2 : 1;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (attempt > 0) {
@@ -9576,20 +9616,22 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 'busy',
             );
         }
-        const messages = buildContinuityMessages({
-            context,
-            captured,
-            base: scheduledBase,
-            director,
-            markers,
-            worldContext,
-            stateAnchors,
-            retryReason,
-            excludedSourceIndexes: sourcePlan.skippedIndexes,
-            actorShardCandidates,
-            actorLedger,
-            worldLaneSchedule,
-        });
+        const messages = attempt === 0
+            ? buildContinuityMessages({
+                context,
+                captured,
+                base: scheduledBase,
+                director,
+                markers,
+                worldContext,
+                stateAnchors,
+                retryReason,
+                excludedSourceIndexes: sourcePlan.skippedIndexes,
+                actorShardCandidates,
+                actorLedger,
+                worldLaneSchedule,
+            })
+            : buildContinuityRepairMessages(previousInvalidOutput, retryReason);
         let output = '';
         let validOutput = false;
         if (attempt === 0) {
@@ -9601,14 +9643,16 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         } else {
             try {
                 output = await callModel(messages, {
-                    maxTokens: settings.continuityMaxTokens,
-                    timeoutMs: settings.sovereigntyHardTimeoutMs,
-                    task: '活世界整理',
+                    maxTokens: Math.min(1800, settings.continuityMaxTokens),
+                    timeoutMs: Math.min(12_000, settings.sovereigntyHardTimeoutMs),
+                    task: '活世界整理 JSON 短修复',
                     channel: 'fast',
                     instructionModule: 'world',
                     targetIndex: captured.index,
                     jsonMode: true,
-                    failover: true,
+                    failover: false,
+                    maxFailovers: 0,
+                    deadlineAt: sovereigntyDeadlineAt,
                 });
             } catch (error) {
                 modelFailure = String(error.message || error);
@@ -9686,6 +9730,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             }
             else {
                 retryReason = parsed.error;
+                previousInvalidOutput = String(output || '');
                 recordModelDiagnostic({
                     phase: 'parse',
                     task: '活世界整理',
@@ -9742,6 +9787,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             modelValidated = true;
             break;
         }
+        previousInvalidOutput ||= String(output || '');
         if (localStateChanged) {
             // The deterministic clocks are authoritative enough to keep the
             // living-world ledger moving. A 429, timeout, empty response, or
@@ -9760,36 +9806,18 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             : '没有新建事件，也没有产生有依据的分类世界变化';
     }
     if (!progressed) {
-        let stateCommitted = true;
-        if (
-            settings.sovereigntyMode !== 'shadow'
-            && (actorLedgerChanged || worldPressureChanged)
-        ) {
-            namespace.actorLedger = actorLedger;
-            namespace.worldPressure = worldPressure;
-            stateCommitted = await writeChatNamespace(namespace, captured.chatId, {
-                fields: ['actorLedger', 'worldPressure'],
-            });
-        }
-        sovereigntyRuntime = await completeSovereigntyCycle({
-            runtime: sovereigntyRuntime,
-            tasks: sovereigntyTasks,
-            captured,
+        const heldThread = scheduledBase.threads.find((thread) => thread.stage !== 'resolved');
+        next = deepClone(scheduledBase);
+        next.turn = tickTurn;
+        next.lastTick = {
             turn: tickTurn,
-            profilePreparation,
-            actorSettlement,
-            actorFailure: actorTechnicalFailure,
-            worldSuccess: false,
-            worldFailure: modelFailure
-                ? 'world.transport_failed'
-                : 'world.output_not_committed',
-            persistenceSuccess: stateCommitted,
-            actorLedger,
-            continuity: scheduledBase,
-            worldPressure,
-        });
-        setContinuityStatus('世界连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
-        return { status: 'stalled', reason: retryReason || '账本无实质变化' };
+            action: 'held',
+            threadId: heldThread?.id || 'WORLD',
+            reason: modelFailure
+                ? '世界模型本轮不可用；本地仅保存观察与稳定时钟，未生成或补造新的世界事实'
+                : '世界候选未通过结构或因果校验；本地保留已确认状态，等待后台自动重试',
+        };
+        progressed = true;
     }
     const degradedModelReason = modelFailure
         ? '模型调用失败'
@@ -9970,11 +9998,13 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     applyContinuityInjection();
     const active = next.threads.filter((thread) => thread.stage !== 'resolved').length;
     const held = next.lastTick?.action === 'held';
-    if (!modelValidated && localStateChanged) {
+    if (!modelValidated) {
         setContinuityStatus(
             localProgressed
                 ? `世界连续性：宏观模型未通过，但已提交 ${actorSettlement.accepted.filter((item) => item.semanticProgress).length} 项NPC语义行动；本轮降级，不计为完整通过`
-                : `世界连续性：${degradedModelReason}；仅保存 ${clockPlan.changedThreadIds.length || 1} 项时钟变化，没有语义推进`,
+                : clockOnlyProgressed
+                    ? `世界连续性：${degradedModelReason}；仅保存 ${clockPlan.changedThreadIds.length || 1} 项时钟变化，没有语义推进，已排队自动恢复`
+                    : `世界连续性：${degradedModelReason}；已保留全部确认状态，没有补造新事实，已排队自动恢复`,
             'warn',
         );
     } else {
@@ -9986,11 +10016,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         );
     }
     return {
-        status: !modelValidated && localStateChanged ? 'degraded' : 'applied',
+        status: !modelValidated ? 'degraded' : 'applied',
         active,
         director,
         held,
-        degraded: !modelValidated && localStateChanged,
+        degraded: !modelValidated,
         clockOnly: !modelValidated && clockOnlyProgressed && !localProgressed,
         actorActions: actorSettlement.accepted.filter(
             (item) => item.semanticProgress === true,
@@ -11192,7 +11222,550 @@ function renderLedgerSurface(surface, view, namespace, settings, context) {
     }
 }
 
+const ACTOR_PROFILE_MODULE_LABELS = Object.freeze({
+    identity: '身份',
+    personality: '人格',
+    relationships: '关系',
+    goals: '个人目标与计划',
+    knowledge: '知识',
+    resourcesCapabilities: '资源与能力',
+    dynamicState: '动态状态',
+    actionHistory: '行动历史',
+    physiology: '生理',
+});
+
+const ACTOR_PROFILE_SOURCE_LABELS = Object.freeze({
+    confirmed: '已确认',
+    designed_seed: '医生设计',
+    hypothesis: '待确认假设',
+    deprecated: '已弃用',
+});
+
+const ACTOR_PROFILE_STATUS_LABELS = Object.freeze({
+    active: '活跃',
+    dormant: '休眠',
+    departed: '离场',
+    deceased: '已故',
+    missing: '缺失',
+    queued: '排队补全',
+    ready: '可用',
+    deferred: '延期补全',
+});
+
+const ACTOR_PROFILE_FIELD_LABELS = Object.freeze({
+    name: '姓名',
+    role: '身份/职责',
+    aliases: '别名',
+    lineage: '谱系',
+    species: '物种',
+    traits: '稳定特征',
+    desires: '现实欲望',
+    boundaries: '个人边界',
+    socialStyle: '社交方式',
+    decisionStyle: '决策方式',
+    speechStyle: '说话方式',
+    copingStyle: '应对方式',
+    pressureResponse: '受压反应',
+    recoveryPath: '恢复路径',
+    everydayHabits: '日常习惯',
+    blindSpots: '盲点',
+    entries: '记录',
+    noConfirmedRelationshipMeans: '无已确认关系的含义',
+    longTerm: '长期目标',
+    current: '当前目标',
+    priority: '优先级',
+    plan: '计划',
+    summary: '摘要',
+    steps: '步骤',
+    status: '状态',
+    nextWindow: '下一行动窗口',
+    deadlineTurn: '期限回合',
+    commitments: '承诺',
+    obstacles: '阻碍',
+    costs: '代价',
+    alternatives: '替代路线',
+    unknownRemainsUnknown: '未知信息保持未知',
+    resources: '资源',
+    capabilities: '能力',
+    noUnconfirmedAbilityGranted: '不授予未确认能力',
+    location: '位置',
+    stateFacts: '状态事实',
+    stimuli: '外部刺激',
+    constraints: '约束',
+    lastAction: '最近行动',
+    historicalActionsInvented: '是否补造历史行动',
+    enabled: '启用生理模块',
+    adultEnabled: '启用成人生理',
+    source: '来源',
+    appearance: '外观',
+    visibleFeatures: '可见特征',
+    proportions: '形态比例',
+    measurements: '尺寸',
+    reproductiveAnatomy: '生殖构造',
+    external: '外部构造',
+    internal: '内部构造',
+    morphology: '形态',
+    form: '当前形态',
+    dimorphism: '形态差异',
+    sensitivity: '敏感度',
+    physiologicalResponses: '生理反应',
+    secretionCycle: '分泌周期',
+    fertility: '生育能力',
+    specialSpecies: '特殊物种特征',
+    forms: '多形态',
+    currentBodyState: '当前身体状态',
+    freeform: '自由描述',
+    personalityInferenceAllowed: '允许反推人格',
+    actorId: '人物 ID',
+    evidence: '证据',
+    attempt: '行动尝试',
+    resultStatus: '结果状态',
+    route: '行动路由',
+    visibility: '可见性',
+    disclosure: '披露状态',
+    cost: '实际代价',
+    risk: '风险',
+    durationTurns: '耗时回合',
+});
+
+const ACTOR_PROFILE_ACTION_LABELS = Object.freeze({
+    prepare: '准备档案',
+    manual_override: '手工覆盖',
+    regenerate: '模块重生成',
+});
+
+function actorProfileFieldLabel(parts) {
+    const key = parts.at(-1) || '';
+    if (/^\d+$/u.test(key)) return `第 ${Number(key) + 1} 项`;
+    return ACTOR_PROFILE_FIELD_LABELS[key] || key;
+}
+
+function actorProfileValueText(value) {
+    if (value === true) return '是';
+    if (value === false) return '否';
+    if (value === null || value === undefined || value === '') return '未登记';
+    if (Array.isArray(value)) {
+        if (!value.length) return '未登记';
+        return value.map((entry) => actorProfileValueText(entry)).join('；');
+    }
+    if (typeof value === 'object') {
+        if (!Object.keys(value).length) return '未登记';
+        return Object.entries(value)
+            .map(([key, entry]) => `${ACTOR_PROFILE_FIELD_LABELS[key] || key}：${actorProfileValueText(entry)}`)
+            .join('；');
+    }
+    return String(value);
+}
+
+function actorProfileLeafEntries(value, parts = []) {
+    if (Array.isArray(value)) {
+        if (!value.length || value.every((entry) => (
+            entry === null || ['string', 'number', 'boolean'].includes(typeof entry)
+        ))) {
+            return [{ parts, value }];
+        }
+        return value.flatMap((entry, index) => actorProfileLeafEntries(entry, [...parts, String(index)]));
+    }
+    if (value && typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (!entries.length) return [{ parts, value }];
+        return entries.flatMap(([key, entry]) => actorProfileLeafEntries(entry, [...parts, key]));
+    }
+    return [{ parts, value }];
+}
+
+function actorProfileEditorText(value) {
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+}
+
+function parseActorProfileEditorValue(text, previousValue) {
+    if (typeof previousValue === 'string') return String(text ?? '').trim();
+    if (typeof previousValue === 'number') {
+        const value = Number(text);
+        if (!Number.isFinite(value)) throw new Error('请输入有效数字');
+        return value;
+    }
+    if (typeof previousValue === 'boolean') {
+        const normalized = String(text || '').trim().toLocaleLowerCase();
+        if (['true', '是', '1', 'yes'].includes(normalized)) return true;
+        if (['false', '否', '0', 'no'].includes(normalized)) return false;
+        throw new Error('布尔值请输入“是/否”或 true/false');
+    }
+    try {
+        return JSON.parse(String(text || '').trim() || 'null');
+    } catch {
+        throw new Error('列表或结构字段需要保持有效 JSON 格式');
+    }
+}
+
+async function applyActorProfileUiMutation(actorId, mutate, successMessage) {
+    const result = await mutateActorProfileV6(actorId, mutate);
+    if (!result?.applied) {
+        const reason = {
+            actor_missing: '人物已经不在当前档案中',
+            actor_locked: '人物档案已锁定',
+            field_locked: '该字段或模块已锁定',
+            module_locked: '该模块已锁定',
+            module_invalid: '档案模块无效',
+            profile_invalid: '档案结构无效',
+            chat_missing: '当前聊天尚未就绪',
+        }[result?.reason] || result?.reason || '修改未保存';
+        toast('warning', reason);
+        renderActorProfiles();
+        return result;
+    }
+    toast('success', successMessage);
+    renderActorProfiles();
+    return result;
+}
+
+function buildActorProfileField(actor, profile, moduleKey, module, leaf) {
+    const fullParts = ['modules', moduleKey, 'data', ...leaf.parts];
+    const path = fullParts.join('.');
+    const field = document.createElement('div');
+    field.className = 'mvuad-profile-field';
+    field.dataset.path = path;
+
+    const heading = document.createElement('div');
+    heading.className = 'mvuad-profile-field-heading';
+    const label = document.createElement('b');
+    label.textContent = actorProfileFieldLabel(leaf.parts);
+    const badges = document.createElement('span');
+    badges.className = 'mvuad-profile-field-badges';
+    const source = profile.fieldSources[path] || module.source;
+    const sourceBadge = document.createElement('span');
+    sourceBadge.className = `mvuad-profile-source mvuad-profile-source-${source}`;
+    sourceBadge.textContent = ACTOR_PROFILE_SOURCE_LABELS[source] || source;
+    badges.appendChild(sourceBadge);
+    const actorLocked = profile.locks.actor === true;
+    const moduleLocked = profile.locks[moduleKey] === true
+        || profile.locks[`modules.${moduleKey}`] === true;
+    const fieldLocked = profile.locks[path] === true;
+    if (actorLocked || moduleLocked || fieldLocked) {
+        const lockBadge = document.createElement('span');
+        lockBadge.className = 'mvuad-profile-lock-badge';
+        lockBadge.textContent = actorLocked ? '人物锁定' : moduleLocked ? '模块锁定' : '字段锁定';
+        badges.appendChild(lockBadge);
+    }
+    heading.append(label, badges);
+
+    const value = document.createElement('div');
+    value.className = 'mvuad-profile-field-value';
+    value.textContent = actorProfileValueText(leaf.value);
+
+    const controls = document.createElement('div');
+    controls.className = 'mvuad-profile-field-controls';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'menu_button mvuad-profile-field-edit';
+    edit.textContent = '手工覆盖';
+    edit.disabled = actorLocked || moduleLocked || fieldLocked;
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.className = 'menu_button mvuad-profile-field-lock';
+    lock.textContent = fieldLocked ? '解锁字段' : '锁定字段';
+    lock.disabled = actorLocked || moduleLocked;
+    controls.append(edit, lock);
+
+    const editor = document.createElement('div');
+    editor.className = 'mvuad-profile-field-editor';
+    editor.hidden = true;
+    const textarea = document.createElement('textarea');
+    textarea.rows = 3;
+    textarea.value = actorProfileEditorText(leaf.value);
+    textarea.setAttribute('aria-label', `覆盖${actorProfileFieldLabel(leaf.parts)}`);
+    const editorActions = document.createElement('div');
+    editorActions.className = 'mvuad-profile-field-editor-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'menu_button';
+    save.textContent = '保存覆盖';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'menu_button';
+    cancel.textContent = '取消';
+    editorActions.append(save, cancel);
+    editor.append(textarea, editorActions);
+
+    edit.addEventListener('click', () => {
+        editor.hidden = false;
+        textarea.focus();
+    });
+    cancel.addEventListener('click', () => {
+        textarea.value = actorProfileEditorText(leaf.value);
+        editor.hidden = true;
+    });
+    save.addEventListener('click', async () => {
+        let nextValue;
+        try {
+            nextValue = parseActorProfileEditorValue(textarea.value, leaf.value);
+        } catch (error) {
+            toast('warning', error?.message || '覆盖值格式无效');
+            return;
+        }
+        await applyActorProfileUiMutation(
+            actor.id,
+            (currentProfile) => applyActorProfileV6Override(currentProfile, {
+                path,
+                value: nextValue,
+                turn: normalizeActorLedger(readChatNamespace().actorLedger).turn,
+            }),
+            `${actor.name}的${actorProfileFieldLabel(leaf.parts)}已覆盖并记入版本历史`,
+        );
+    });
+    lock.addEventListener('click', async () => {
+        await applyActorProfileUiMutation(
+            actor.id,
+            (currentProfile) => ({
+                profile: setActorProfileV6Lock(currentProfile, { path, locked: !fieldLocked }),
+                applied: true,
+            }),
+            `${actor.name}的${actorProfileFieldLabel(leaf.parts)}已${fieldLocked ? '解锁' : '锁定'}`,
+        );
+    });
+
+    field.append(heading, value, controls, editor);
+    return field;
+}
+
+function buildActorProfileModule(actor, profile, moduleKey, module, { open = false } = {}) {
+    const details = document.createElement('details');
+    details.className = 'mvuad-profile-module';
+    details.dataset.module = moduleKey;
+    details.open = open;
+    const summary = document.createElement('summary');
+    const title = document.createElement('b');
+    title.textContent = ACTOR_PROFILE_MODULE_LABELS[moduleKey] || moduleKey;
+    const meta = document.createElement('span');
+    meta.className = 'mvuad-profile-module-meta';
+    const moduleIsLocked = profile.locks.actor === true
+        || profile.locks[moduleKey] === true
+        || profile.locks[`modules.${moduleKey}`] === true;
+    meta.textContent = [
+        ACTOR_PROFILE_STATUS_LABELS[module.status] || module.status,
+        ACTOR_PROFILE_SOURCE_LABELS[module.source] || module.source,
+        `v${module.version}`,
+        moduleIsLocked ? '已锁定' : '',
+    ].filter(Boolean).join(' · ');
+    summary.append(title, meta);
+
+    const body = document.createElement('div');
+    body.className = 'mvuad-profile-module-body';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'mvuad-profile-module-toolbar';
+    const lock = document.createElement('button');
+    lock.type = 'button';
+    lock.className = 'menu_button mvuad-profile-module-lock';
+    lock.textContent = moduleIsLocked && !profile.locks.actor ? '解锁模块' : '锁定模块';
+    lock.disabled = profile.locks.actor === true;
+    const regenerate = document.createElement('button');
+    regenerate.type = 'button';
+    regenerate.className = 'menu_button mvuad-profile-module-regenerate';
+    regenerate.textContent = '重生成本模块';
+    regenerate.disabled = moduleIsLocked;
+    toolbar.append(lock, regenerate);
+    body.appendChild(toolbar);
+
+    const fields = document.createElement('div');
+    fields.className = 'mvuad-profile-fields';
+    const leaves = actorProfileLeafEntries(module.data);
+    for (const leaf of leaves) {
+        fields.appendChild(buildActorProfileField(actor, profile, moduleKey, module, leaf));
+    }
+    body.appendChild(fields);
+
+    if (module.unknownFields?.length || module.evidence?.length) {
+        const provenance = document.createElement('details');
+        provenance.className = 'mvuad-profile-provenance';
+        const provenanceSummary = document.createElement('summary');
+        provenanceSummary.textContent = '未知字段与证据';
+        const provenanceBody = document.createElement('div');
+        provenanceBody.className = 'mvuad-profile-provenance-body';
+        appendLedgerField(provenanceBody, '仍未知', module.unknownFields?.join('、'));
+        appendLedgerField(provenanceBody, '依据', module.evidence?.join('；'));
+        provenance.append(provenanceSummary, provenanceBody);
+        body.appendChild(provenance);
+    }
+
+    lock.addEventListener('click', async () => {
+        const path = `modules.${moduleKey}`;
+        const currentlyLocked = profile.locks[moduleKey] === true || profile.locks[path] === true;
+        await applyActorProfileUiMutation(
+            actor.id,
+            (currentProfile) => ({
+                profile: setActorProfileV6Lock(currentProfile, {
+                    path,
+                    locked: !currentlyLocked,
+                }),
+                applied: true,
+            }),
+            `${actor.name}的${ACTOR_PROFILE_MODULE_LABELS[moduleKey] || moduleKey}模块已${currentlyLocked ? '解锁' : '锁定'}`,
+        );
+    });
+    regenerate.addEventListener('click', async () => {
+        await applyActorProfileUiMutation(
+            actor.id,
+            (currentProfile, currentActor, ledger) => {
+                const result = regenerateActorProfileV6Module(currentProfile, currentActor, {
+                    module: moduleKey,
+                    mode: getSettings().actorProfileCompletionMode,
+                    turn: ledger.turn,
+                });
+                return { ...result, applied: result.regenerated === true };
+            },
+            `${actor.name}的${ACTOR_PROFILE_MODULE_LABELS[moduleKey] || moduleKey}模块已重生成`,
+        );
+    });
+
+    details.append(summary, body);
+    return details;
+}
+
+function buildActorProfileHistory(profile) {
+    const details = document.createElement('details');
+    details.className = 'mvuad-profile-history';
+    const summary = document.createElement('summary');
+    summary.textContent = `版本历史（${profile.history.length}）`;
+    const list = document.createElement('div');
+    list.className = 'mvuad-profile-history-list';
+    if (!profile.history.length) {
+        const empty = document.createElement('div');
+        empty.className = 'mvuad-profile-empty-note';
+        empty.textContent = '尚无档案版本记录。';
+        list.appendChild(empty);
+    }
+    for (const entry of [...profile.history].reverse()) {
+        const item = document.createElement('div');
+        item.className = 'mvuad-profile-history-item';
+        const heading = document.createElement('b');
+        heading.textContent = `${ACTOR_PROFILE_ACTION_LABELS[entry.action] || entry.action} · ${ACTOR_PROFILE_MODULE_LABELS[entry.module] || entry.module}`;
+        const meta = document.createElement('span');
+        meta.textContent = `账本第 ${entry.turn} 轮 · ${formatLedgerTime(entry.at)}`;
+        item.append(heading, meta);
+        list.appendChild(item);
+    }
+    details.append(summary, list);
+    return details;
+}
+
+function renderActorProfiles(namespace = null) {
+    if (!ui?.floatingActorPage) return;
+    const context = getContext();
+    const state = namespace || readChatNamespace(context);
+    const ledger = normalizeActorLedger(state.actorLedger, { chatId: context?.chatId || '' });
+    const actors = ledger.actors;
+    if (ui.floatingActorTabCount) ui.floatingActorTabCount.textContent = String(actors.length);
+    if (ui.floatingActorSummary) {
+        const ready = actors.filter((actor) => actor.profileV6?.preparedForAction).length;
+        const coverage = actors.length
+            ? Math.round(actors.reduce((sum, actor) => sum + Number(actor.profileV6?.coverage || 0), 0) / actors.length)
+            : 100;
+        ui.floatingActorSummary.textContent = actors.length
+            ? `${actors.length} 人 · ${ready} 人行动前档案已就绪 · 平均覆盖 ${coverage}% · 账本第 ${ledger.turn} 轮`
+            : '当前聊天还没有登记人物。人物被正文、角色卡或世界书识别后会出现在这里。';
+    }
+
+    const select = ui.floatingActorSelect;
+    const previousSelection = ui.selectedActorId || select?.value || '';
+    select?.replaceChildren();
+    for (const actor of actors) {
+        const option = document.createElement('option');
+        option.value = actor.id;
+        option.textContent = `${actor.name} · ${ACTOR_PROFILE_STATUS_LABELS[actor.status] || actor.status} · ${actor.profileV6.coverage}%`;
+        select.appendChild(option);
+    }
+    const selectedActor = actors.find((actor) => actor.id === previousSelection) || actors[0] || null;
+    ui.selectedActorId = selectedActor?.id || '';
+    if (select && selectedActor) select.value = selectedActor.id;
+    if (select) select.disabled = actors.length === 0;
+    if (ui.floatingActorEmpty) ui.floatingActorEmpty.hidden = actors.length > 0;
+    const host = ui.floatingActorCard;
+    host.replaceChildren();
+    host.hidden = !selectedActor;
+    if (!selectedActor) return;
+
+    const profile = selectedActor.profileV6;
+    const header = document.createElement('div');
+    header.className = 'mvuad-profile-header';
+    const identity = document.createElement('div');
+    const name = document.createElement('b');
+    name.textContent = selectedActor.name;
+    const id = document.createElement('span');
+    id.textContent = selectedActor.id;
+    identity.append(name, id);
+    const badges = document.createElement('div');
+    badges.className = 'mvuad-profile-header-badges';
+    for (const text of [
+        ACTOR_PROFILE_STATUS_LABELS[selectedActor.status] || selectedActor.status,
+        `覆盖 ${profile.coverage}%`,
+        profile.preparedForAction ? '行动前已就绪' : '后台补全中',
+        `V${profile.version}`,
+    ]) {
+        const badge = document.createElement('span');
+        badge.textContent = text;
+        badges.appendChild(badge);
+    }
+    header.append(identity, badges);
+
+    const progress = document.createElement('div');
+    progress.className = 'mvuad-profile-progress';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-valuemin', '0');
+    progress.setAttribute('aria-valuemax', '100');
+    progress.setAttribute('aria-valuenow', String(profile.coverage));
+    const progressBar = document.createElement('span');
+    progressBar.style.setProperty('--mvuad-profile-progress', `${profile.coverage}%`);
+    const progressText = document.createElement('b');
+    progressText.textContent = `档案覆盖 ${profile.coverage}%`;
+    progress.append(progressBar, progressText);
+
+    const overview = document.createElement('div');
+    overview.className = 'mvuad-profile-overview';
+    appendLedgerField(overview, '当前位置', selectedActor.location?.name, '未知');
+    appendLedgerField(overview, '当前计划', selectedActor.plan?.summary, '尚无有效个人计划');
+    appendLedgerField(
+        overview,
+        '下一行动窗口',
+        selectedActor.plan?.nextWindow || `账本第 ${selectedActor.nextActionTurn} 轮`,
+    );
+    appendLedgerField(overview, '最近行动', selectedActor.lastAction?.summary, '尚无已结算行动');
+
+    const actorToolbar = document.createElement('div');
+    actorToolbar.className = 'mvuad-profile-actor-toolbar';
+    const actorLock = document.createElement('button');
+    actorLock.type = 'button';
+    actorLock.className = 'menu_button mvuad-profile-actor-lock';
+    actorLock.textContent = profile.locks.actor ? '解锁整个人物' : '锁定整个人物';
+    actorToolbar.appendChild(actorLock);
+    actorLock.addEventListener('click', async () => {
+        const locked = profile.locks.actor === true;
+        await applyActorProfileUiMutation(
+            selectedActor.id,
+            (currentProfile) => ({
+                profile: setActorProfileV6Lock(currentProfile, { path: 'actor', locked: !locked }),
+                applied: true,
+            }),
+            `${selectedActor.name}的整个人物档案已${locked ? '解锁' : '锁定'}`,
+        );
+    });
+
+    const modules = document.createElement('div');
+    modules.className = 'mvuad-profile-modules';
+    Object.entries(profile.modules).forEach(([moduleKey, module], index) => {
+        modules.appendChild(buildActorProfileModule(
+            selectedActor,
+            profile,
+            moduleKey,
+            module,
+            { open: index === 0 || moduleKey === 'personality' },
+        ));
+    });
+
+    host.append(header, progress, overview, actorToolbar, modules, buildActorProfileHistory(profile));
+}
+
 function renderContinuityLedger() {
+    renderActorProfiles();
     if (!ui?.ledgerSurfaces?.length) {
         updateFloatingOrb();
         return;
@@ -11366,7 +11939,7 @@ function hideFloatingPanel() {
 }
 
 function switchFloatingPage(page, { persist = true } = {}) {
-    const allowed = new Set(['world', 'threads', 'forum', 'tools']);
+    const allowed = new Set(['world', 'actors', 'threads', 'forum', 'tools']);
     const selected = allowed.has(page) ? page : 'world';
     for (const button of ui?.floatingTabs || []) {
         const active = button.dataset.page === selected;
@@ -12098,7 +12671,7 @@ function updateFloatingOrb(view = null) {
                 ? 'ok'
                 : '';
     orb.dataset.kind = kind;
-    orb.title = `MVU 自动医生：${count} 条未结事件；点击打开世界动态`;
+    orb.title = `MVU 自动医生：${count} 条未结事件；点击打开世界、人物与事件`;
     orb.setAttribute('aria-label', orb.title);
 }
 
@@ -12129,20 +12702,21 @@ function buildFloatingUi() {
     panel.hidden = true;
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'MVU 自动医生与世界动态');
+    panel.setAttribute('aria-label', 'MVU 自动医生：世界、人物与事件');
     panel.innerHTML = `
         <div class="mvuad-floating-header">
-            <div><b>MVU 医生 · 世界动态</b><span>v${VERSION}</span></div>
+            <div><b>MVU 医生 · 世界、人物与事件</b><span>v${VERSION}</span></div>
             <button class="mvuad-floating-close" type="button" aria-label="关闭">×</button>
         </div>
         <div class="mvuad-floating-body">
-            <div class="mvuad-floating-tabs" role="tablist" aria-label="世界动态分页">
+            <div class="mvuad-floating-tabs" role="tablist" aria-label="世界、人物与事件分页">
                 <button type="button" role="tab" data-page="world"><span>世界</span><b class="mvuad-floating-world-tab-count">0</b></button>
+                <button type="button" role="tab" data-page="actors"><span>人物</span><b class="mvuad-floating-actor-tab-count">0</b></button>
                 <button type="button" role="tab" data-page="threads"><span>事件</span><b class="mvuad-floating-thread-tab-count">0</b></button>
                 <button type="button" role="tab" data-page="forum"><span>论坛</span><b class="mvuad-floating-forum-tab-count">0</b></button>
                 <button type="button" role="tab" data-page="tools"><span>工具</span></button>
             </div>
-            <div class="mvuad-ledger mvuad-floating-pages" aria-label="世界动态分页内容">
+            <div class="mvuad-ledger mvuad-floating-pages" aria-label="世界、人物与事件分页内容">
                 <section class="mvuad-floating-page" data-page="world">
                     <div class="mvuad-floating-page-heading"><b>分类世界态势</b><span>同一次世界整理 · 按因果增量更新</span></div>
                     <div class="mvuad-world-digest"></div>
@@ -12166,6 +12740,16 @@ function buildFloatingUi() {
                             </details>
                         `).join('')}
                     </div>
+                </section>
+                <section class="mvuad-floating-page mvuad-floating-actor-page" data-page="actors" hidden>
+                    <div class="mvuad-floating-page-heading"><b>人物档案</b><span>V6 持久档案 · 来源、锁定与版本历史</span></div>
+                    <div class="mvuad-actor-profile-summary" role="status"></div>
+                    <label class="mvuad-actor-profile-picker">
+                        <span>查看人物</span>
+                        <select class="text_pole mvuad-actor-profile-select" aria-label="选择人物档案"></select>
+                    </label>
+                    <div class="mvuad-actor-profile-empty">当前聊天还没有登记人物。人物被正文、角色卡或世界书识别后会出现在这里。</div>
+                    <article class="mvuad-actor-profile-card" hidden></article>
                 </section>
                 <section class="mvuad-floating-page" data-page="threads" hidden>
                     <div class="mvuad-ledger-header"><b>事件账本</b><button class="menu_button mvuad-ledger-refresh" type="button">刷新显示</button></div>
@@ -12222,6 +12806,12 @@ function buildFloatingUi() {
         floatingForumStatus: panel.querySelector('.mvuad-floating-forum-status'),
         floatingCount: orb.querySelector('.mvuad-orb-count'),
         floatingWorldTabCount: panel.querySelector('.mvuad-floating-world-tab-count'),
+        floatingActorPage: panel.querySelector('.mvuad-floating-actor-page'),
+        floatingActorTabCount: panel.querySelector('.mvuad-floating-actor-tab-count'),
+        floatingActorSummary: panel.querySelector('.mvuad-actor-profile-summary'),
+        floatingActorSelect: panel.querySelector('.mvuad-actor-profile-select'),
+        floatingActorEmpty: panel.querySelector('.mvuad-actor-profile-empty'),
+        floatingActorCard: panel.querySelector('.mvuad-actor-profile-card'),
         floatingThreadTabCount: panel.querySelector('.mvuad-floating-thread-tab-count'),
         floatingWorldDigest: panel.querySelector('.mvuad-world-digest'),
         floatingWorldSummary: panel.querySelector('.mvuad-world-summary'),
@@ -12252,6 +12842,10 @@ function buildFloatingUi() {
     for (const tab of ui.floatingTabs) {
         tab.addEventListener('click', () => switchFloatingPage(tab.dataset.page));
     }
+    ui.floatingActorSelect.addEventListener('change', () => {
+        ui.selectedActorId = ui.floatingActorSelect.value;
+        renderActorProfiles();
+    });
     panel.querySelector('.mvuad-floating-repair').addEventListener('click', () => {
         const repair = enqueue(null, { manual: true });
         repair.then(() => enqueueOpeningResourceSync(null, { manual: true }));
@@ -13276,7 +13870,7 @@ function buildSettingsPanel() {
                             </details>
                             <div class="mvuad-continuity-options"></div>
                             <div class="mvuad-actions">
-                                <button class="menu_button mvuad-continuity-open" type="button">打开世界与事件面板</button>
+                                <button class="menu_button mvuad-continuity-open" type="button">打开世界、人物与事件面板</button>
                                 <button class="menu_button mvuad-continuity-run" type="button">立即整理世界</button>
                                 <button class="menu_button mvuad-continuity-clear mvuad-danger" type="button">清空世界账本</button>
                             </div>
@@ -14349,6 +14943,7 @@ async function mutateActorProfileV6(actorId, mutate) {
         fields: ['actorLedger'],
         durable: true,
     });
+    if (saved) renderActorProfiles(namespace);
     return { ...result, applied: result.applied !== false && saved, saved };
 }
 
@@ -14373,8 +14968,8 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 7,
-        isCompatible: (required = 1) => Number(required) <= 7,
+        apiVersion: 8,
+        isCompatible: (required = 1) => Number(required) <= 8,
         waitForTargetSettled,
         runAfterTargetSettled,
         registerBarrierProtocolClient,
@@ -14411,6 +15006,11 @@ function initialize() {
             const actor = normalizeActorLedger(readChatNamespace().actorLedger).actors
                 .find((entry) => entry.id === String(actorId || ''));
             return actor ? deepClone(actorProfileV6View(actor)) : null;
+        },
+        openActorProfiles: () => {
+            showFloatingPanel();
+            switchFloatingPage('actors');
+            renderActorProfiles();
         },
         setActorProfileV6Lock: (actorId, path, locked = true) => mutateActorProfileV6(
             actorId,

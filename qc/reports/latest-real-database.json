@@ -1,0 +1,304 @@
+{
+  "schemaVersion": 1,
+  "targetDatabaseVersion": "spv8.7.4",
+  "host": {
+    "version": "1.18.0",
+    "port": 8011,
+    "headless": true,
+    "sterileDataRoot": true
+  },
+  "setup": {
+    "authorImportSha256": "01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65",
+    "cleanAuthorLoaderSha256": "c4f7bd25f6096534cc45ff6055e541ce0e846685c91f0ee505cf8d2b432b26c1",
+    "cleanAuthorLoaderChars": 73,
+    "privateSettingsCopied": false,
+    "privateChatsCopied": false,
+    "privateCharactersCopied": false,
+    "credentialsCopied": false,
+    "originalUserDataModified": false,
+    "legacyPublicRuntimeTemporarilyReplaced": true,
+    "legacyPublicOriginalIndexSha256": "68b01608a360fb1fc875e2491a6f930eabe522f79959ed9a969d09ed283ab8f5",
+    "doctorSourceInstalledInSterileRoot": true,
+    "candidateVersion": "2.0.0-rc.11",
+    "candidateIndexSha256": "5cf8b3a0371d855d68e037a4406b25071177c2608ea841ef1e6d61b62dc9e11d",
+    "tavernHelperRuntimeInstalledInSterileRoot": true,
+    "independentBridgeInstalledInSterileRoot": false
+  },
+  "runtime": {
+    "hostHttpStatus": 200,
+    "serverFailureDigest": "93049d378def2fa7ed2eb66897d3b52186158567d1ac2995bd3f7c9c68123687",
+    "bootState": {
+      "contextReady": true,
+      "chatLoaded": false,
+      "characterSelected": false,
+      "tavernHelperReady": false,
+      "activeHelperScriptFrames": 0
+    },
+    "doctorVersion": "2.0.0-rc.11",
+    "environmentStatus": "error",
+    "actorLedgerApi": {
+      "version": 6,
+      "publicActorCount": 0,
+      "receiptCount": 0,
+      "privateStateExcluded": true
+    },
+    "legacyPatchCheck": null,
+    "databaseCheck": {
+      "kind": "info",
+      "label": "TavernDB 可选协作",
+      "detail": "检测到外部 TavernDB，但未观察到可选协作协议；医生正常运行，外部写入时序为未知/非托管"
+    },
+    "uiProbe": {
+      "result": "pass",
+      "mobile": {
+        "width": 390,
+        "height": 844,
+        "panelLeft": 6,
+        "panelRight": 384,
+        "panelTop": 141.234375,
+        "panelBottom": 780,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false,
+        "tabs": [
+          {
+            "page": "world",
+            "text": "世界0"
+          },
+          {
+            "page": "actors",
+            "text": "人物0"
+          },
+          {
+            "page": "threads",
+            "text": "事件0"
+          },
+          {
+            "page": "forum",
+            "text": "论坛0"
+          },
+          {
+            "page": "tools",
+            "text": "工具"
+          }
+        ],
+        "narrativeRewriteControlCount": 0,
+        "worldInterfaceLimit": {
+          "value": "2",
+          "min": "0",
+          "max": "4"
+        },
+        "actorControls": {
+          "actorsPerTurn": {
+            "value": "2",
+            "min": "1",
+            "max": "5"
+          },
+          "explorationSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "2"
+          },
+          "collisionIntensity": {
+            "value": "2",
+            "min": "",
+            "max": ""
+          },
+          "factionSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          },
+          "environmentSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          },
+          "recoveryCadence": {
+            "value": "balanced",
+            "min": "",
+            "max": ""
+          },
+          "pressureCap": {
+            "value": "3",
+            "min": "0",
+            "max": "6"
+          },
+          "bossCap": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          }
+        }
+      },
+      "desktop": {
+        "width": 1280,
+        "height": 720,
+        "panelLeft": 788,
+        "panelRight": 1268,
+        "panelTop": 84.40625,
+        "panelBottom": 646,
+        "panelWithinViewport": true,
+        "horizontalOverflow": false,
+        "tabs": [
+          {
+            "page": "world",
+            "text": "世界0"
+          },
+          {
+            "page": "actors",
+            "text": "人物0"
+          },
+          {
+            "page": "threads",
+            "text": "事件0"
+          },
+          {
+            "page": "forum",
+            "text": "论坛0"
+          },
+          {
+            "page": "tools",
+            "text": "工具"
+          }
+        ],
+        "narrativeRewriteControlCount": 0,
+        "worldInterfaceLimit": {
+          "value": "2",
+          "min": "0",
+          "max": "4"
+        },
+        "actorControls": {
+          "actorsPerTurn": {
+            "value": "2",
+            "min": "1",
+            "max": "5"
+          },
+          "explorationSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "2"
+          },
+          "collisionIntensity": {
+            "value": "2",
+            "min": "",
+            "max": ""
+          },
+          "factionSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          },
+          "environmentSlots": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          },
+          "recoveryCadence": {
+            "value": "balanced",
+            "min": "",
+            "max": ""
+          },
+          "pressureCap": {
+            "value": "3",
+            "min": "0",
+            "max": "6"
+          },
+          "bossCap": {
+            "value": "1",
+            "min": "0",
+            "max": "3"
+          }
+        }
+      },
+      "forumTabIndependent": true,
+      "actorProfileTabVisible": true,
+      "worldEngineTabVisible": true
+    },
+    "databaseBundleRequestCount": 6,
+    "databaseBundleResponses": [
+      {
+        "status": 200,
+        "sha256": "bb27c0936cbb719184b83890d4f2e6738895e04ec027ebc5618ed01ad29f1efb",
+        "version": "spv8.7.4",
+        "contentLength": 1771475
+      },
+      {
+        "status": 404,
+        "sha256": "eae218aa52f000203f559512244ce1d01b01fb019c673de0432b8f6ae8f9690e",
+        "version": "",
+        "contentLength": 78
+      },
+      {
+        "status": 404,
+        "sha256": "d2064b8569c286f775c5221e8e2200334da1be8643aefa4bf68adf61f90ba340",
+        "version": "",
+        "contentLength": 85
+      },
+      {
+        "status": 200,
+        "sha256": "bb27c0936cbb719184b83890d4f2e6738895e04ec027ebc5618ed01ad29f1efb",
+        "version": "spv8.7.4",
+        "contentLength": 1771475
+      },
+      {
+        "status": 404,
+        "sha256": "eae218aa52f000203f559512244ce1d01b01fb019c673de0432b8f6ae8f9690e",
+        "version": "",
+        "contentLength": 78
+      },
+      {
+        "status": 404,
+        "sha256": "d2064b8569c286f775c5221e8e2200334da1be8643aefa4bf68adf61f90ba340",
+        "version": "",
+        "contentLength": 85
+      }
+    ],
+    "databaseApiReady": true,
+    "databaseApiMethodCount": 116,
+    "databaseUpdate": {
+      "status": "returned",
+      "resultType": "object",
+      "truthy": true
+    },
+    "independentBridgeInstalled": false,
+    "independentBridgeAbsent": true,
+    "databaseUiSurfaceCount": 7,
+    "socialStatus": "stale",
+    "socialModelCallDelta": 0,
+    "socialAttemptCount": 0,
+    "socialLocalRepairAttempted": false,
+    "reload": {
+      "doctorVersion": "2.0.0-rc.11",
+      "databaseApiMethodCount": 116,
+      "environmentStatus": "error",
+      "legacyPatchDetected": false,
+      "databaseUiSurfaceCount": 3,
+      "independentBridgeAbsent": true,
+      "databaseResponseDelta": 3
+    },
+    "errorCounts": {
+      "doctor": 0,
+      "database": 0,
+      "tavern-helper": 0,
+      "host-or-other": 11
+    },
+    "errorClasses": {
+      "network-or-resource": 9,
+      "other": 2
+    },
+    "errorDigests": [
+      "c8b256e54a85a0224f568dd5588a324ee329015d77c023cff784dab9466426fa",
+      "90156edd616af88e8e6a244ddc8047fa34f3c1f0b639517f8d4f985865771d72",
+      "f157f677347e07fc9d67275e6709a6a025ddfed5bf5bc4ff4ff6e5b5ffeb2bf4",
+      "be3180416310eb750f5ff396974c2445881cabb1073f8851f9e3562cf6a387de"
+    ]
+  },
+  "cleanup": {
+    "browserClosed": true,
+    "serverStopped": true,
+    "portClosed": true,
+    "temporaryDataRemoved": true,
+    "legacyPublicRuntimeRestored": true,
+    "originalUserDataModified": false
+  }
+}

@@ -1,6 +1,38 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ConnectionTaskScheduler } from '../model-queue.mjs';
+import {
+    ConnectionTaskScheduler,
+    countDistinctFailoverReservations,
+} from '../model-queue.mjs';
+
+test('deadline reservation counts only distinct healthy failover connections', () => {
+    const duplicateOnly = countDistinctFailoverReservations({
+        maxFailovers: 1,
+        currentSlotIndex: 0,
+        currentKey: 'same-api',
+        routes: [
+            { slotIndex: 0, key: 'same-api', openedUntil: 0 },
+            { slotIndex: 1, key: 'same-api', openedUntil: 0 },
+            { slotIndex: 2, key: 'same-api', openedUntil: 0 },
+        ],
+        now: 100,
+    });
+    assert.equal(duplicateOnly, 0);
+
+    const distinctHealthy = countDistinctFailoverReservations({
+        maxFailovers: 2,
+        currentSlotIndex: 0,
+        currentKey: 'primary',
+        routes: [
+            { slotIndex: 0, key: 'primary', openedUntil: 0 },
+            { slotIndex: 1, key: 'backup-a', openedUntil: 0 },
+            { slotIndex: 2, key: 'backup-a', openedUntil: 0 },
+            { slotIndex: 3, key: 'backup-b', openedUntil: 200 },
+        ],
+        now: 100,
+    });
+    assert.equal(distinctHealthy, 1);
+});
 
 function deferred() {
     let resolve;

@@ -122,6 +122,54 @@ test('manual overrides, locks, module regeneration and version history are durab
     assert.equal(profile.history.length > 0, true);
 });
 
+test('field, module and actor locks survive later automatic profile preparation', () => {
+    const ada = actor();
+    let profile = prepareActorProfileV6(ada, { mode: 'full', turn: 1, now: 100 });
+    const overridden = applyActorProfileV6Override(profile, {
+        path: 'modules.personality.data.speechStyle',
+        value: '先核实来源，再用一句话回答',
+        turn: 2,
+        now: 200,
+    });
+    profile = setActorProfileV6Lock(overridden.profile, {
+        path: 'modules.personality.data.speechStyle',
+        locked: true,
+    });
+    profile = setActorProfileV6Lock(profile, {
+        path: 'modules.personality',
+        locked: true,
+    });
+    const preparedAgain = prepareActorProfileV6({ ...ada, profileV6: profile }, {
+        mode: 'full_adult',
+        turn: 3,
+        now: 300,
+    });
+    assert.equal(
+        preparedAgain.modules.personality.data.speechStyle,
+        '先核实来源，再用一句话回答',
+    );
+    assert.equal(
+        preparedAgain.manualOverrides['modules.personality.data.speechStyle'],
+        '先核实来源，再用一句话回答',
+    );
+    assert.equal(preparedAgain.locks['modules.personality'], true);
+
+    const actorLocked = setActorProfileV6Lock(preparedAgain, { path: 'actor', locked: true });
+    const rejectedOverride = applyActorProfileV6Override(actorLocked, {
+        path: 'modules.identity.data.role',
+        value: '越权改写',
+        turn: 4,
+    });
+    assert.equal(rejectedOverride.applied, false);
+    assert.equal(rejectedOverride.reason, 'field_locked');
+    const rejectedRegeneration = regenerateActorProfileV6Module(actorLocked, ada, {
+        module: 'identity',
+        turn: 4,
+    });
+    assert.equal(rejectedRegeneration.regenerated, false);
+    assert.equal(rejectedRegeneration.reason, 'module_locked');
+});
+
 test('diagnostic view exposes source and counts without profile prose', () => {
     const ada = actor();
     ada.profileV6 = prepareActorProfileV6(ada, { mode: 'full', turn: 1 });

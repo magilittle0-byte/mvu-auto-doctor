@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "setup": {
+    "sandbox": "real-tauritavern-qc",
+    "baselineVersion": "1.8.10",
+    "baselineDigest": "a9c17b33df300f203544c35e5e03e122328dde5ff00dbc661f2cab5df7694fcf",
+    "candidateVersion": "2.0.0-rc.11",
+    "suspendedLaunch": true,
+    "startupWindowHidden": true,
+    "hiddenWatchdogBeforeResume": true,
+    "portableRuntime": true,
+    "isolatedAppData": true,
+    "cdpLoopbackOnly": true
+  },
+  "runtime": {
+    "targetPid": 47984,
+    "first": {
+      "version": "2.0.0-rc.11",
+      "apiVersion": 8,
+      "actorProfileApiReady": true,
+      "apiCount": 55
+    },
+    "reload": {
+      "version": "2.0.0-rc.11",
+      "apiVersion": 8,
+      "actorProfileApiReady": true,
+      "apiCount": 55
+    },
+    "desktop": {
+      "width": 1280,
+      "height": 720,
+      "panelWithinViewport": true,
+      "horizontalOverflow": false,
+      "actorProfileUiReady": true,
+      "minControlHeight": 36
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "panelWithinViewport": true,
+      "horizontalOverflow": false,
+      "actorProfileUiReady": true,
+      "minControlHeight": 42
+    },
+    "responseStatuses": {
+      "manifest.json": 200,
+      "style.css": 200,
+      "index.js": 200
+    },
+    "doctorErrorCount": 0,
+    "doctorErrorDigests": []
+  },
+  "cleanup": {
+    "browserClosed": true,
+    "processTreeStopped": true,
+    "cdpPortClosed": true,
+    "temporaryDataRemoved": true,
+    "baselineRestored": true,
+    "restoredVersion": "1.8.10",
+    "restoredDigest": "a9c17b33df300f203544c35e5e03e122328dde5ff00dbc661f2cab5df7694fcf"
+  }
+}
