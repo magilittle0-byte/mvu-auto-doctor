@@ -1,6 +1,16 @@
 import { fingerprint } from './core.mjs';
+import {
+    actorProfileReadyForAction,
+    normalizeActorProfileV6,
+} from './actor-profile-v6-core.mjs';
+import {
+    actorActionNarrativeInjection,
+    adjudicateActorActionAttempt,
+    createActorActionAttempt,
+    worldEventFromSettledActionReceipt,
+} from './actor-authority-core.mjs';
 
-export const ACTOR_LEDGER_VERSION = 5;
+export const ACTOR_LEDGER_VERSION = 6;
 export const ACTOR_LEDGER_MAX_ACTORS = 96;
 export const ACTOR_LEDGER_MAX_RECEIPTS = 240;
 
@@ -214,6 +224,25 @@ function normalizeActor(value, index, turn) {
         longTermGoals: cleanList(value.longTermGoals, 12, 400),
         currentGoals: cleanList(value.currentGoals, 8, 400),
         constraints: cleanList(value.constraints, 12, 500),
+        stimuli: (Array.isArray(value.stimuli) ? value.stimuli : [])
+            .filter((item) => item && typeof item === 'object')
+            .map((item, stimulusIndex) => ({
+                id: cleanText(item.id, 120)
+                    || `STIM-${fingerprint(`${id}|${item.kind}|${item.summary}|${stimulusIndex}`).slice(0, 16)}`,
+                kind: ['observation', 'opportunity', 'risk'].includes(item.kind)
+                    ? item.kind
+                    : 'observation',
+                summary: cleanText(item.summary, 500),
+                sourceThreadId: cleanText(item.sourceThreadId, 120),
+                status: ['unreviewed', 'adopted', 'ignored', 'misread', 'used', 'opposed']
+                    .includes(item.status)
+                    ? item.status
+                    : 'unreviewed',
+                observedTurn: integer(item.observedTurn, 0, Number.MAX_SAFE_INTEGER, turn),
+                evidence: cleanList(item.evidence, 8, 240),
+            }))
+            .filter((item) => item.summary)
+            .slice(-48),
         stateFacts: (Array.isArray(value.stateFacts) ? value.stateFacts : [])
             .filter((item) => item && typeof item === 'object')
             .map((item, factIndex) => ({
@@ -258,6 +287,13 @@ function normalizeActor(value, index, turn) {
             status: ['active', 'blocked', 'completed', 'abandoned'].includes(plan.status)
                 ? plan.status
                 : 'active',
+            priority: ['low', 'normal', 'high', 'critical'].includes(plan.priority)
+                ? plan.priority
+                : 'normal',
+            nextWindow: cleanText(plan.nextWindow, 180),
+            obstacles: cleanList(plan.obstacles, 12, 300),
+            costs: cleanList(plan.costs, 12, 300),
+            alternatives: cleanList(plan.alternatives, 12, 300),
         },
         lastAction: value.lastAction && typeof value.lastAction === 'object'
             ? {
@@ -267,6 +303,28 @@ function normalizeActor(value, index, turn) {
                 outcome: cleanText(value.lastAction.outcome, 120),
             }
             : null,
+        actionHistory: (Array.isArray(value.actionHistory) ? value.actionHistory : [])
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => ({
+                id: cleanText(item.id, 160),
+                turn: integer(item.turn, 0, Number.MAX_SAFE_INTEGER, turn),
+                route: ['foreground_offer', 'foreground_attempt', 'background_private', 'background_public']
+                    .includes(item.route)
+                    ? item.route
+                    : 'background_private',
+                attempt: cleanText(item.attempt, 700),
+                resultStatus: cleanText(item.resultStatus, 80),
+                resultId: cleanText(item.resultId, 160),
+                visibility: cleanText(item.visibility, 80),
+                disclosure: cleanText(item.disclosure, 80),
+                cost: cleanList(item.cost, 8, 240),
+                risk: cleanText(item.risk, 80),
+                durationTurns: integer(item.durationTurns, 0, 10_000, 0),
+                evidence: cleanList(item.evidence, 8, 240),
+            }))
+            .filter((item) => item.id && item.attempt)
+            .slice(-80),
+        profileV6: normalizeActorProfileV6(value.profileV6, { id, actorId: id, name }),
         nextActionTurn: integer(value.nextActionTurn, 0, Number.MAX_SAFE_INTEGER, turn + 1),
         deadlineTurn: integer(value.deadlineTurn, 0, Number.MAX_SAFE_INTEGER, 0),
         lastSemanticTurn: integer(
@@ -309,11 +367,19 @@ function normalizeReceipt(value) {
         receiptId,
         actionId: cleanText(value.actionId, 160),
         actorId: cleanText(value.actorId, 120),
-        stage: ['planned', 'executed', 'world_settled', 'injected', 'response_settled']
+        stage: ['planned', 'attempted', 'executed', 'world_settled', 'injected', 'response_settled']
             .includes(value.stage)
             ? value.stage
             : 'planned',
         status: cleanText(value.status, 80) || 'pending',
+        route: ['foreground_offer', 'foreground_attempt', 'background_private', 'background_public']
+            .includes(value.route)
+            ? value.route
+            : 'background_private',
+        resultId: cleanText(value.resultId, 160),
+        visibility: cleanText(value.visibility, 80),
+        disclosure: cleanText(value.disclosure, 80),
+        technicalFailure: false,
         observableConsequence: cleanText(value.observableConsequence, 500),
         createdTurn: integer(value.createdTurn, 0, Number.MAX_SAFE_INTEGER, 0),
         target: value.target && typeof value.target === 'object'
@@ -343,6 +409,8 @@ export function emptyActorLedger(chatId = '') {
             actorLedgerV3: true,
             actorLedgerV4: true,
             actorLedgerV5: true,
+            actorLedgerV6: true,
+            actorProfileV6: true,
         },
         updatedAt: 0,
     };
@@ -385,6 +453,8 @@ export function normalizeActorLedger(value, {
             actorLedgerV3: true,
             actorLedgerV4: true,
             actorLedgerV5: true,
+            actorLedgerV6: true,
+            actorProfileV6: source.migrations?.actorProfileV6 === true,
         },
         updatedAt: integer(source.updatedAt, 0, Number.MAX_SAFE_INTEGER, 0),
     };
@@ -392,6 +462,30 @@ export function normalizeActorLedger(value, {
 
 function mergeEvidence(current, additions, limit = 24) {
     return cleanList([...(current || []), ...(additions || [])], limit, 300);
+}
+
+function continuityStimulusKind(thread) {
+    const text = cleanText([
+        thread?.kind,
+        thread?.eventType,
+        thread?.summary,
+        thread?.nextBeat,
+        thread?.trigger,
+    ].filter(Boolean).join(' '), 1200);
+    if (/(?:敌|威胁|风险|危险|追捕|损失|危机|attack|threat|risk)/iu.test(text)) return 'risk';
+    if (/(?:机会|资源|邀请|窗口|线索|交易|opportunity|chance)/iu.test(text)) return 'opportunity';
+    return 'observation';
+}
+
+function mergeActorStimuli(current, additions, limit = 48) {
+    const result = Array.isArray(current) ? clone(current) : [];
+    const seen = new Set(result.map((item) => item.id));
+    for (const item of Array.isArray(additions) ? additions : []) {
+        if (!item?.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        result.push(item);
+    }
+    return result.slice(-limit);
 }
 
 export function migrateActorLedgerFromContinuity(value, continuity, {
@@ -432,12 +526,20 @@ export function migrateActorLedgerFromContinuity(value, continuity, {
             const publicHints = thread?.knowledge === 'hidden'
                 ? []
                 : cleanList([thread?.nextBeat, thread?.trigger], 4, 400);
-            const autonomousGoals = publicHints.filter(
-                (item) => !playerDependentGoal(item, excluded),
-            );
-            const directiveConstraints = publicHints.filter(
-                (item) => playerDependentGoal(item, excluded),
-            );
+            const directiveConstraints = [];
+            const stimuli = publicHints.map((summary, stimulusIndex) => ({
+                id: `STIM-${fingerprint(`${id}|${thread?.id}|${summary}|${stimulusIndex}`).slice(0, 16)}`,
+                kind: continuityStimulusKind(thread),
+                summary,
+                sourceThreadId: cleanText(thread?.id, 120),
+                status: 'unreviewed',
+                observedTurn: turn,
+                evidence: cleanList([
+                    thread?.id,
+                    thread?.seedBasis,
+                    ...(thread?.sourceRefs || []).map((ref) => ref?.hash),
+                ], 8, 240),
+            }));
             const current = byId.get(id) || byName.get(nameKey) || normalizeActor({
                 id,
                 name: actorName,
@@ -447,8 +549,9 @@ export function migrateActorLedgerFromContinuity(value, continuity, {
                     sinceTurn: turn,
                     evidence: cleanList([thread?.id, thread?.seedBasis], 8, 240),
                 },
-                currentGoals: autonomousGoals,
+                currentGoals: [],
                 constraints: directiveConstraints,
+                stimuli,
                 nextActionTurn: turn + 1,
                 evidence: cleanList([
                     thread?.id,
@@ -464,14 +567,14 @@ export function migrateActorLedgerFromContinuity(value, continuity, {
                 ...(thread?.sourceRefs || []).map((ref) => ref?.hash),
             ]);
             if (thread?.knowledge !== 'hidden') {
-                current.currentGoals = mergeEvidence(current.currentGoals, [
-                    ...autonomousGoals,
-                ], 8);
-                current.constraints = mergeEvidence(
-                    current.constraints,
-                    directiveConstraints,
-                    12,
+                const eventGoalHints = new Set(publicHints.map((item) => item.toLocaleLowerCase()));
+                current.currentGoals = current.currentGoals.filter(
+                    (item) => !eventGoalHints.has(item.toLocaleLowerCase()),
                 );
+                current.constraints = current.constraints.filter(
+                    (item) => !eventGoalHints.has(item.toLocaleLowerCase()),
+                );
+                current.stimuli = mergeActorStimuli(current.stimuli, stimuli);
                 const claim = cleanText(thread?.summary, 700);
                 if (claim) {
                     const knowledge = normalizeKnowledge({
@@ -496,7 +599,12 @@ export function migrateActorLedgerFromContinuity(value, continuity, {
         ...ledger,
         turn: Math.max(ledger.turn, turn),
         actors: [...byId.values()],
-        migrations: { ...ledger.migrations, continuityV5: true, actorLedgerV5: true },
+        migrations: {
+            ...ledger.migrations,
+            continuityV5: true,
+            actorLedgerV5: true,
+            actorLedgerV6: true,
+        },
         updatedAt: Date.now(),
     }, {
         chatId: ledger.chatId || continuity?.chatId,
@@ -1135,6 +1243,7 @@ export function scheduleActorTurns(value, {
     maxActors = 2,
     explorationSlots = 1,
     excludedActorNames = [],
+    requireProfileReady = false,
 } = {}) {
     const excluded = normalizeExcludedActorNames(excludedActorNames);
     const ledger = normalizeActorLedger(value, { excludedActorNames });
@@ -1145,7 +1254,10 @@ export function scheduleActorTurns(value, {
         integer(explorationSlots, 0, 2, 1),
     );
     const scored = ledger.actors
-        .filter((actor) => isActorName(actor.name, excluded))
+        .filter((actor) => (
+            isActorName(actor.name, excluded)
+            && (!requireProfileReady || actorProfileReadyForAction(actor))
+        ))
         .map((actor) => ({ actor, ...schedulingScore(actor, currentTurn) }))
         .filter((item) => Number.isFinite(item.score))
         .sort((left, right) => (
@@ -1277,7 +1389,8 @@ export function mergeActorWorldEventsIntoContinuity(continuity, worldEvents) {
         const id = `ACTOR-${cleanText(event?.id, 90)}`;
         if (!event?.id || existing.has(id)) continue;
         existing.add(id);
-        const observable = cleanText(event.observableConsequence, 500);
+        const disclosed = event.disclosure === 'disclosed' || event.visibility === 'observed';
+        const observable = disclosed ? cleanText(event.observableConsequence, 500) : '';
         state.threads.push({
             id,
             title: `${cleanText(event.actorName, 120)}的主动行动`,
@@ -1292,7 +1405,7 @@ export function mergeActorWorldEventsIntoContinuity(continuity, worldEvents) {
             nextBeat: '等待可观察后果自然进入场景或在后台继续',
             trigger: observable || '等待行动留下可传播或可观察后果',
             intersection: observable,
-            seedBasis: cleanText(event.id, 300),
+            seedBasis: cleanText(event.sourceReceiptId || event.id, 300),
             causedBy: [],
             effects: [observable].filter(Boolean),
             rumors: [],
@@ -1307,6 +1420,12 @@ export function mergeActorWorldEventsIntoContinuity(continuity, worldEvents) {
                 lastCheckedTurn: Number(event.turn) || Number(state.turn) || 0,
             },
             knowledge: observable ? 'observed' : 'hidden',
+            actionRoute: ['foreground_offer', 'foreground_attempt', 'background_private', 'background_public']
+                .includes(event.route)
+                ? event.route
+                : 'background_private',
+            sourceReceiptId: cleanText(event.sourceReceiptId, 160),
+            disclosure: observable ? 'disclosed' : 'pending',
             urgency: observable ? 2 : 1,
             stageProgress: 1,
             evolveResult: '',
@@ -1449,6 +1568,7 @@ function updateTier(actor) {
 export function settleActorActionCandidates(value, candidates, {
     turn = null,
     attemptedActorIds = [],
+    playerNames = [],
 } = {}) {
     const ledger = normalizeActorLedger(value);
     const currentTurn = integer(turn, 0, Number.MAX_SAFE_INTEGER, ledger.turn);
@@ -1457,12 +1577,11 @@ export function settleActorActionCandidates(value, candidates, {
     const rejected = [];
     const worldEvents = [];
     const receipts = [];
+    const attempts = [];
+    const results = [];
     const semanticAcceptedIds = new Set();
-    const attemptedIds = new Set(cleanList(attemptedActorIds, 96, 120));
     for (const raw of Array.isArray(candidates) ? candidates : []) {
         const candidate = clone(raw);
-        const candidateActorId = cleanText(candidate?.actorId, 120);
-        if (candidateActorId) attemptedIds.add(candidateActorId);
         const actor = byId.get(cleanText(candidate?.actorId, 120));
         const reasons = validateCandidate(actor, candidate, currentTurn);
         if (reasons.length) {
@@ -1472,34 +1591,46 @@ export function settleActorActionCandidates(value, candidates, {
             });
             continue;
         }
-        const actionId = `ACT-${fingerprint(JSON.stringify([
-            actor.id,
-            currentTurn,
-            candidate.intent,
-            candidate.action,
-            candidate.location,
-        ])).slice(0, 18)}`;
+        const attempt = createActorActionAttempt(candidate, {
+            actor,
+            turn: currentTurn,
+            playerNames,
+        });
+        const adjudicated = adjudicateActorActionAttempt(attempt, {
+            actor,
+            risk: candidate.contact ? 'contact' : 'ordinary',
+            cost: (candidate.resourceCosts || []).map((item) => (
+                `${item.resourceId}:${item.amount}`
+            )),
+            durationTurns: integer(candidate.location?.travelTurns, 0, 10_000, 0),
+        });
+        const actionId = attempt.id;
+        const result = adjudicated.result;
+        attempts.push(attempt);
+        results.push(result);
         const next = clone(actor);
         next.lastAttemptTurn = currentTurn;
-        for (const cost of Array.isArray(candidate.resourceCosts) ? candidate.resourceCosts : []) {
-            const resource = next.resources.find(
-                (item) => item.id === cleanText(cost.resourceId, 100),
-            );
-            if (resource) resource.amount -= number(cost.amount, 0, resource.amount, 0);
-        }
-        if (candidate.intent === 'execute' && candidate.location.to !== next.location.name) {
-            next.location = {
-                name: cleanText(candidate.location.to, 180),
-                sinceTurn: currentTurn + integer(candidate.location.travelTurns, 0, 10_000, 0),
-                evidence: mergeEvidence(next.location.evidence, candidate.evidence, 8),
-            };
+        if (result.status === 'settled') {
+            for (const cost of result.resourceCosts) {
+                const resource = next.resources.find(
+                    (item) => item.id === cleanText(cost.resourceId, 100),
+                );
+                if (resource) resource.amount -= number(cost.amount, 0, resource.amount, 0);
+            }
+            if (candidate.intent === 'execute' && candidate.location.to !== next.location.name) {
+                next.location = {
+                    name: cleanText(candidate.location.to, 180),
+                    sinceTurn: currentTurn + integer(candidate.location.travelTurns, 0, 10_000, 0),
+                    evidence: mergeEvidence(next.location.evidence, candidate.evidence, 8),
+                };
+            }
         }
         const planUpdate = cleanText(candidate.planUpdate, 500);
         if (planUpdate) next.plan.summary = planUpdate;
         if (candidate.intent === 'wait') next.plan.status = 'blocked';
         else if (candidate.intent === 'replan') next.plan.status = 'active';
-        const stateChanges = (Array.isArray(candidate.stateChanges)
-            ? candidate.stateChanges
+        const stateChanges = (Array.isArray(result.appliedStateChanges)
+            ? result.appliedStateChanges
             : [])
             .filter((item) => item && typeof item === 'object')
             .map((item) => ({
@@ -1507,12 +1638,14 @@ export function settleActorActionCandidates(value, candidates, {
                 summary: cleanText(item.summary, 500),
             }))
             .filter((item) => item.kind && item.summary);
-        const semanticProgress = candidate.intent !== 'wait' && stateChanges.length > 0;
+        const semanticProgress = ['settled', 'pending_player'].includes(result.status)
+            && candidate.intent !== 'wait'
+            && stateChanges.length > 0;
         next.lastAction = {
             id: actionId,
             turn: currentTurn,
             summary: cleanText(candidate.action, 700),
-            outcome: candidate.intent,
+            outcome: result.status,
         };
         next.nextActionTurn = currentTurn + Math.max(
             1,
@@ -1538,53 +1671,93 @@ export function settleActorActionCandidates(value, candidates, {
                 })),
             ].slice(-48);
             semanticAcceptedIds.add(next.id);
+        } else if (result.status === 'rejected') {
+            next.consecutiveActionFailures = Math.min(
+                10_000,
+                next.consecutiveActionFailures + 1,
+            );
         }
+        next.actionHistory = [
+            ...next.actionHistory,
+            {
+                id: actionId,
+                turn: currentTurn,
+                route: attempt.route,
+                attempt: attempt.action,
+                resultStatus: result.status,
+                resultId: result.id,
+                visibility: result.visibility,
+                disclosure: result.disclosure,
+                cost: result.costs,
+                risk: result.risk,
+                durationTurns: result.durationTurns,
+                evidence: result.evidence,
+            },
+        ].slice(-80);
         next.tier = updateTier(next);
         next.status = 'active';
         next.updatedTurn = currentTurn;
         next.version += 1;
         byId.set(next.id, next);
-        const event = semanticProgress
-            ? contactWorldEvent(next, candidate, actionId, currentTurn)
+        const authorityEvent = worldEventFromSettledActionReceipt(adjudicated.receipt, {
+            result,
+        });
+        const event = authorityEvent
+            ? {
+                ...authorityEvent,
+                actorName: next.name,
+                summary: cleanText(candidate.action, 700),
+                location: next.location.name,
+                observableConsequence: result.disclosure === 'disclosed'
+                    ? cleanText(result.publicSummary, 500)
+                    : '',
+                turn: currentTurn,
+            }
             : null;
-        accepted.push({ ...candidate, actionId, semanticProgress });
+        accepted.push({
+            ...candidate,
+            actionId,
+            route: attempt.route,
+            attempt,
+            result,
+            semanticProgress,
+        });
         receipts.push(stageReceipt(actionId, next.id, 'planned', currentTurn, {
             summary: cleanText(candidate.planUpdate || next.plan.summary, 500),
+            route: attempt.route,
         }));
-        receipts.push(stageReceipt(actionId, next.id, 'executed', currentTurn, {
+        receipts.push(stageReceipt(actionId, next.id, 'attempted', currentTurn, {
             summary: cleanText(candidate.action, 700),
+            route: attempt.route,
             semanticProgress,
+            playerActionSettled: false,
+            playerConsentSettled: false,
+            playerFeelingSettled: false,
         }));
-        receipts.push(stageReceipt(actionId, next.id, 'world_settled', currentTurn, {
+        receipts.push({
+            ...adjudicated.receipt,
             worldEventId: event?.id || '',
             observableConsequence: event?.observableConsequence || '',
             semanticProgress,
-            status: semanticProgress ? 'settled' : 'held',
-        }));
+        });
         if (event) worldEvents.push(event);
-        if (event?.observableConsequence) {
+        const injection = actorActionNarrativeInjection(attempt, result);
+        if (injection.text) {
             receipts.push(stageReceipt(actionId, next.id, 'injected', currentTurn, {
-                worldEventId: event.id,
-                observableConsequence: event.observableConsequence,
+                worldEventId: event?.id || '',
+                route: attempt.route,
+                observableConsequence: injection.text,
+                includesResult: injection.includesResult,
+                playerActionSettled: false,
+                playerConsentSettled: false,
+                playerFeelingSettled: false,
             }));
         }
     }
     ledger.turn = Math.max(ledger.turn, currentTurn);
     ledger.actors = ledger.actors.map((actor) => {
         const next = byId.get(actor.id) || actor;
-        if (!semanticAcceptedIds.has(actor.id)) {
-            if (attemptedIds.has(actor.id)) {
-                next.lastAttemptTurn = currentTurn;
-                if (!accepted.some((item) => item.actorId === actor.id)) {
-                    next.consecutiveActionFailures = Math.min(
-                        10_000,
-                        next.consecutiveActionFailures + 1,
-                    );
-                }
-            }
-            if (!accepted.some((item) => item.actorId === actor.id)) {
-            next.silenceTurns = Math.min(10_000, next.silenceTurns + 1);
-            }
+        if (!semanticAcceptedIds.has(actor.id) && accepted.some((item) => item.actorId === actor.id)) {
             if (
                 next.status === 'active'
                 && next.silenceTurns >= 12
@@ -1598,7 +1771,7 @@ export function settleActorActionCandidates(value, candidates, {
     ledger.actionReceipts = [...ledger.actionReceipts, ...receipts]
         .slice(-ACTOR_LEDGER_MAX_RECEIPTS);
     ledger.updatedAt = Date.now();
-    return { ledger, accepted, rejected, worldEvents, receipts };
+    return { ledger, accepted, rejected, worldEvents, receipts, attempts, results };
 }
 
 export function settleActorInjectionReceipts(value, {

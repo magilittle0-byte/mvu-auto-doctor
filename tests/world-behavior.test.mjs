@@ -140,7 +140,8 @@ test('an offscreen NPC keeps producing constrained semantic facts when the playe
     assert.equal(ledger.actors.length, 1);
     assert.equal(valen.name, '瓦伦');
     assert.equal(valen.currentGoals.some((item) => /Roy/u.test(item)), false);
-    assert.equal(valen.constraints.some((item) => /Roy/u.test(item)), true);
+    assert.equal(valen.constraints.some((item) => /Roy/u.test(item)), false);
+    assert.equal(valen.stimuli.some((item) => /Roy/u.test(item.summary)), true);
     assert.equal(valen.semanticProgressCount, 11);
     assert.equal(valen.stateFacts.length, 11);
     assert.equal(valen.location.name, '哈克南宅邸');

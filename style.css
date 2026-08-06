@@ -215,6 +215,55 @@
     color: var(--mvuad-err);
 }
 
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) :is(
+    .mvuad-sovereignty-health,
+    .mvuad-floating-sovereignty-health
+) {
+    min-height: 34px;
+    padding: 8px 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-left-width: 5px;
+    border-radius: var(--mvuad-control-radius);
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
+    font-size: 0.84em;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) [data-health-color="green"] {
+    border-left-color: #2e9e5b;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) [data-health-color="yellow"] {
+    border-left-color: #d1aa2f;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) [data-health-color="orange"] {
+    border-left-color: #d47a27;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) [data-health-color="red"] {
+    border-left-color: #d04545;
+}
+
+:is(#mvu-auto-doctor-settings, #mvuad-floating-panel) [data-health-color="blue"] {
+    border-left-color: #388fd1;
+}
+
+#mvu-auto-doctor-settings .mvuad-global-instruction,
+#mvu-auto-doctor-settings :is(.mvuad-continuity-prompt-addon, .mvuad-actor-shard-prompt-addon) {
+    width: 100%;
+    padding: 9px 10px;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+#mvu-auto-doctor-settings .mvuad-global-instruction-scopes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 10px;
+}
+
 #mvu-auto-doctor-settings .mvuad-health-list {
     display: grid;
     gap: 7px;

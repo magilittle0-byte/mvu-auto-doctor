@@ -103,7 +103,8 @@ test('legacy continuity migration creates stable actors only from attributable n
     assert.deepEqual(migrated.actors.map((item) => item.name), ['艾达', '贝拉']);
     const ada = migrated.actors.find((item) => item.name === '艾达');
     const bella = migrated.actors.find((item) => item.name === '贝拉');
-    assert.equal(ada.currentGoals.includes('在第八日出发'), true);
+    assert.equal(ada.currentGoals.includes('在第八日出发'), false);
+    assert.equal(ada.stimuli.some((item) => item.summary === '在第八日出发'), true);
     assert.equal(ada.knowledge.some((item) => item.claim.includes('护送任务')), true);
     assert.equal(ada.knowledge.some((item) => item.claim.includes('卧底')), false);
     assert.equal(bella.knowledge.some((item) => item.claim.includes('卧底')), false);
@@ -159,7 +160,7 @@ test('evidence-backed profile patches persist character DNA without overwriting 
     });
     assert.equal(merged.accepted.length, 1);
     assert.equal(merged.rejected.length, 0);
-    assert.equal(merged.ledger.version, 5);
+    assert.equal(merged.ledger.version, 6);
     const ada = merged.ledger.actors[0];
     assert.equal(ada.identity.role, '商人', 'established role is not overwritten');
     assert.equal(ada.identity.socialStyle, '先保持礼貌距离，再用具体问题试探');
@@ -229,7 +230,7 @@ test('profile patches reject fabricated evidence and do not persist generic extr
     assert.equal(filtered.ledger.actors[0].identity.decisionStyle, '先核对事实，再为撤离保留余地');
 });
 
-test('v3 actor ledgers migrate to v5 semantic evidence fields without inventing personality', () => {
+test('v3 actor ledgers migrate to v6 semantic evidence fields without inventing personality', () => {
     const legacy = {
         ...emptyActorLedger('chat-actor-ledger'),
         version: 3,
@@ -247,7 +248,7 @@ test('v3 actor ledgers migrate to v5 semantic evidence fields without inventing 
         })],
     };
     const migrated = normalizeActorLedger(legacy);
-    assert.equal(migrated.version, 5);
+    assert.equal(migrated.version, 6);
     assert.equal(migrated.migrations.actorLedgerV4, true);
     assert.equal(migrated.actors[0].identity.copingStyle, '受压时先核对清单');
     assert.equal(migrated.actors[0].identity.informationStyle, '');
@@ -406,7 +407,7 @@ test('migration excludes player system environment and group labels from the act
     assert.deepEqual(migrated.actors.map((item) => item.name), ['艾达']);
 });
 
-test('runtime migration removes the named player and converts player-dependent beats into constraints', () => {
+test('runtime migration removes the named player and converts event beats into stimuli instead of goals', () => {
     const existing = normalizeActorLedger({
         ...emptyActorLedger('chat-player-filter'),
         turn: 14,
@@ -436,8 +437,10 @@ test('runtime migration removes the named player and converts player-dependent b
     }, { excludedActorNames: ['Roy'] });
     assert.deepEqual(migrated.actors.map((item) => item.name), ['瓦伦']);
     assert.deepEqual(migrated.actors[0].currentGoals, []);
-    assert.equal(migrated.actors[0].constraints.length, 3);
+    assert.equal(migrated.actors[0].constraints.length, 1);
     assert.equal(migrated.actors[0].constraints.every((item) => /Roy/u.test(item)), true);
+    assert.equal(migrated.actors[0].stimuli.length, 2);
+    assert.equal(migrated.actors[0].stimuli.every((item) => /Roy/u.test(item.summary)), true);
 });
 
 test('mutation lineage keeps one actor id and records forms instead of spawning a second actor', () => {
@@ -635,7 +638,7 @@ test('due actor must execute, replan, or wait on a concrete unmet condition and 
     assert.equal(executed.worldEvents.length, 1);
     assert.deepEqual(
         executed.receipts.map((item) => item.stage),
-        ['planned', 'executed', 'world_settled', 'injected'],
+        ['planned', 'attempted', 'world_settled', 'injected'],
     );
     assert.equal(executed.ledger.actors[0].resources[0].amount, 4);
 });
@@ -764,7 +767,7 @@ test('80-turn low-attention exploration prevents starvation while receipts stay 
     assert.equal(actorLedgerView(ledger).actors.some((item) => 'hidden' in item), false);
 });
 
-test('an all-worker failure advances silence and rotates the next starved actor instead of freezing the schedule', () => {
+test('an all-worker technical failure leaves character silence plans and failure counters untouched', () => {
     let ledger = normalizeActorLedger({
         ...emptyActorLedger('chat-failed-workers'),
         turn: 20,
@@ -790,11 +793,11 @@ test('an all-worker failure advances silence and rotates the next starved actor 
         maxActors: 1,
         explorationSlots: 0,
     });
-    assert.notEqual(next.selected[0].actorId, first.selected[0].actorId);
+    assert.equal(next.selected[0].actorId, first.selected[0].actorId);
     assert.equal(
         ledger.actors.find((item) => item.id === first.selected[0].actorId)
             .consecutiveActionFailures,
-        1,
+        0,
     );
-    assert.equal(ledger.actors.every((item) => item.silenceTurns === 13), true);
+    assert.equal(ledger.actors.every((item) => item.silenceTurns === 12), true);
 });

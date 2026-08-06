@@ -40,8 +40,8 @@ assert.equal(
 assert.ok(readme.includes(repositoryUrl), 'README 必须提供在线安装仓库地址');
 assert.ok(
     readme.includes('经本轮明确授权晋升默认 `main`')
-        && readme.includes('线上 `manifest.json` 已是 rc.9'),
-    'README 必须准确记录 rc.9 已授权晋升默认 main',
+        && readme.includes('线上 `manifest.json` 已是 rc.10'),
+    'README 必须准确记录 rc.10 已授权晋升默认 main',
 );
 assert.ok(
     readme.includes('离线候选包') && readme.includes('回滚演练'),
@@ -60,7 +60,7 @@ assert.ok(
     'RC 使用说明必须记录可审阅的历史回退分支',
 );
 assert.ok(
-    rcUserGuide.includes('rc.9 离线包'),
+    rcUserGuide.includes('rc.10 离线包'),
     'RC 使用说明必须在 main 发布后继续提供离线安装路径',
 );
 

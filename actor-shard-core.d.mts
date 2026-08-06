@@ -5,6 +5,13 @@ export interface ActorShardCandidate {
     locations: string[];
     knowledgeBasis: string[];
     goals: string[];
+    stimuli: Array<{
+        id: string;
+        kind: string;
+        summary: string;
+        status: string;
+        sourceThreadId: string;
+    }>;
     sourceThreads: string[];
     evidence: string[];
     causalChain: string[];
@@ -97,6 +104,11 @@ export function runActorShardBatch(options: {
     callWorker: (
         candidate: ActorShardCandidate,
         context: { signal: AbortSignal },
+    ) => Promise<unknown>;
+    repairWorker?: (
+        output: unknown,
+        candidate: ActorShardCandidate,
+        context: { signal: AbortSignal; error?: string },
     ) => Promise<unknown>;
     isCurrent?: () => boolean;
     onProgress?: (progress: {

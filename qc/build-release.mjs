@@ -11,19 +11,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const candidate = '2.0.0-rc.9';
+const candidate = '2.0.0-rc.10';
 const artifactName = `05_MVU自动医生_v${candidate}_离线候选.zip`;
 const artifactPath = path.join(root, 'dist', artifactName);
 const sumsPath = path.join(root, 'dist', 'SHA256SUMS.txt');
 
 const rootFiles = [
+    'actor-authority-core.d.mts',
+    'actor-authority-core.mjs',
     'actor-ledger-core.d.mts',
     'actor-ledger-core.mjs',
+    'actor-profile-v6-core.d.mts',
+    'actor-profile-v6-core.mjs',
     'actor-shard-core.d.mts',
     'actor-shard-core.mjs',
     'CHANGELOG.md',
     'continuity-core.mjs',
     'core.mjs',
+    'custom-instruction-core.d.mts',
+    'custom-instruction-core.mjs',
     'forum-core.mjs',
     'index.js',
     'LICENSE',
@@ -35,10 +41,15 @@ const rootFiles = [
     'serendipity-core.d.mts',
     'serendipity-core.mjs',
     'social-core.mjs',
+    'sovereignty-orchestrator-core.d.mts',
+    'sovereignty-orchestrator-core.mjs',
+    'sovereignty-runtime-core.d.mts',
+    'sovereignty-runtime-core.mjs',
     'style.css',
     'world-pressure-core.d.mts',
     'world-pressure-core.mjs',
     'docs/2.0/MIGRATION_ROLLBACK_GUIDE.md',
+    'docs/2.0/ACTOR_SOVEREIGNTY_ENGINE.md',
     'docs/2.0/USER_GUIDE_2.0_RC.md',
     'docs/2.0/RELEASE_CHECKLIST.md',
     'docs/2.0/2.1_OPEN_ITEMS.md',

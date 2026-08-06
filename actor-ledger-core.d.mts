@@ -52,6 +52,15 @@ export interface ActorLedgerActor {
     longTermGoals: string[];
     currentGoals: string[];
     constraints: string[];
+    stimuli: Array<{
+        id: string;
+        kind: 'observation' | 'opportunity' | 'risk';
+        summary: string;
+        sourceThreadId: string;
+        status: 'new' | 'adopted' | 'ignored' | 'misread' | 'used' | 'opposed';
+        createdTurn: number;
+        evidence: string[];
+    }>;
     stateFacts: Array<{
         id: string;
         kind: string;
@@ -81,8 +90,15 @@ export interface ActorLedgerActor {
         summary: string;
         steps: string[];
         status: 'active' | 'blocked' | 'completed' | 'abandoned';
+        priority: 'low' | 'normal' | 'high' | 'critical';
+        nextWindow: string;
+        obstacles: string[];
+        costs: string[];
+        alternatives: string[];
     };
     lastAction: null | { id: string; turn: number; summary: string; outcome: string };
+    actionHistory: Array<Record<string, unknown>>;
+    profileV6: Record<string, unknown>;
     nextActionTurn: number;
     deadlineTurn: number;
     lastSemanticTurn: number;
@@ -113,6 +129,8 @@ export interface ActorLedger {
         actorLedgerV3: boolean;
         actorLedgerV4: boolean;
         actorLedgerV5: boolean;
+        actorLedgerV6: boolean;
+        actorProfileV6: boolean;
     };
     updatedAt: number;
 }
@@ -183,6 +201,7 @@ export function scheduleActorTurns(
         maxActors?: number;
         explorationSlots?: number;
         excludedActorNames?: string[];
+        requireProfileReady?: boolean;
     },
 ): {
     turn: number;
@@ -203,13 +222,19 @@ export function actorActionCandidatesFromShard(
 export function settleActorActionCandidates(
     value: unknown,
     candidates: unknown[],
-    options?: { turn?: number | null; attemptedActorIds?: string[] },
+    options?: {
+        turn?: number | null;
+        attemptedActorIds?: string[];
+        playerNames?: string[];
+    },
 ): {
     ledger: ActorLedger;
     accepted: unknown[];
     rejected: Array<{ actorId: string; reasons: string[] }>;
     worldEvents: unknown[];
     receipts: unknown[];
+    attempts: unknown[];
+    results: unknown[];
 };
 export function mergeActorWorldEventsIntoContinuity(
     continuity: unknown,

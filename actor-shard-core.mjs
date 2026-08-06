@@ -1,4 +1,6 @@
 import { fingerprint } from './core.mjs';
+import { ACTOR_SOVEREIGNTY_DIVERSITY_CONTRACT } from './actor-profile-v6-core.mjs';
+import { extractFirstBalancedJsonObject } from './sovereignty-runtime-core.mjs';
 
 export const ACTOR_SHARD_MAX_WORKERS = 5;
 export const ACTOR_SHARD_PROMPT_MAX_CHARS = 6000;
@@ -170,7 +172,6 @@ export function selectActorShardCandidates({
             || !name
             || excludedNames.has(normalizedKey(name))
             || GROUP_NAME.test(name)
-            || actorNameAppears(presentText, name)
             || (scheduledIds.size && !scheduledIds.has(id))
             || !['active', 'dormant'].includes(actor?.status)
             || (actor?.status === 'dormant' && actor?.inactiveReason === 'sleep')
@@ -185,6 +186,16 @@ export function selectActorShardCandidates({
             actor?.plan?.summary,
             ...(actor?.currentGoals || []),
         ], 4, 400);
+        const stimuli = (Array.isArray(actor?.stimuli) ? actor.stimuli : [])
+            .filter((item) => item?.status === 'unreviewed')
+            .map((item) => ({
+                id: cleanText(item?.id, 180),
+                kind: cleanText(item?.kind, 40),
+                summary: cleanText(item?.summary, 400),
+                sourceThreadId: cleanText(item?.sourceThreadId, 120),
+            }))
+            .filter((item) => item.id && item.summary)
+            .slice(0, 8);
         const evidence = cleanList([
             ...(actor?.evidence || []),
             ...knowledge.map((item) => item.id),
@@ -210,6 +221,7 @@ export function selectActorShardCandidates({
                 actor?.plan?.summary,
                 ...(actor?.longTermGoals || []),
             ], 6, 400),
+            stimuli,
             sourceThreads: cleanList([
                 ...(actor?.evidence || []).filter(
                     (item) => /^(?:PT|EV|ACTOR|WORLD|T)[-:]/iu.test(item),
@@ -254,7 +266,6 @@ export function selectActorShardCandidates({
                 || GROUP_NAME.test(name)
                 || excludedNames.has(normalizedKey(name))
             ) continue;
-            if (actorNameAppears(presentText, name)) continue;
             const id = stableActorId(name);
             const current = byActor.get(id) || {
                 id,
@@ -263,6 +274,7 @@ export function selectActorShardCandidates({
                 locations: [],
                 knowledgeBasis: [],
                 goals: [],
+                stimuli: [],
                 sourceThreads: [],
                 evidence: [],
                 causalChain: [],
@@ -274,10 +286,15 @@ export function selectActorShardCandidates({
                 thread.summary,
                 ...(thread.knowledge === 'hidden' ? [] : (thread.rumors || [])),
             ], 8, 400));
-            current.goals.push(...cleanList([
+            current.stimuli.push(...cleanList([
                 thread.nextBeat,
                 thread.trigger,
-            ], 4, 400));
+            ], 4, 400).map((summary, stimulusIndex) => ({
+                id: `STIM-${fingerprint(`${id}|${thread.id}|${summary}|${stimulusIndex}`).slice(0, 16)}`,
+                kind: 'observation',
+                summary,
+                sourceThreadId: cleanText(thread.id, 120),
+            })));
             current.sourceThreads.push(cleanText(thread.id, 90));
             current.evidence.push(...cleanList([
                 thread.seedBasis,
@@ -298,13 +315,23 @@ export function selectActorShardCandidates({
             locations: cleanList(candidate.locations, 6, 120),
             knowledgeBasis: cleanList(candidate.knowledgeBasis, 8, 400),
             goals: cleanList(candidate.goals, 4, 400),
+            stimuli: (Array.isArray(candidate.stimuli) ? candidate.stimuli : [])
+                .filter((item) => item && typeof item === 'object')
+                .map((item) => ({
+                    id: cleanText(item.id, 180),
+                    kind: cleanText(item.kind, 40),
+                    summary: cleanText(item.summary, 400),
+                    sourceThreadId: cleanText(item.sourceThreadId, 120),
+                }))
+                .filter((item) => item.id && item.summary)
+                .slice(0, 8),
             sourceThreads: cleanList(candidate.sourceThreads, 8, 90),
             evidence: cleanList(candidate.evidence, 8, 300),
             causalChain: cleanList(candidate.causalChain, 8, 120),
         }))
         .filter((candidate) => (
             candidate.evidence.length
-            && (candidate.knowledgeBasis.length || candidate.goals.length)
+            && (candidate.knowledgeBasis.length || candidate.goals.length || candidate.stimuli.length)
         ))
         .sort((left, right) => (
             right.score - left.score
@@ -319,7 +346,7 @@ export function buildActorShardMessages(candidate, {
 } = {}) {
     const instruction = formatUserNarrativeInstruction('NPC分片', customPrompt);
     const system = [
-        '你是隔离运行的NPC幕后模拟worker，只为一个不在场角色生成一份结构化候选提案。',
+        '你是隔离运行的NPC幕后模拟worker，只为一个角色生成一份结构化候选提案；角色是否在场不影响其拥有下一行动窗口。',
         '你没有任何写权限：禁止修改MVU、世界书、论坛、聊天正文、数据库、任务、关系或事实账本。',
         '只能使用提供的有限认知依据。未知就保持未知；不得读取玩家私密信息，不得替玩家行动、说话、移动、消费或授权。',
         '角色拥有持久状态与到期行动窗口。必须提出可执行行动、具体改计划，或说明一个可核验且尚未满足的时间/地点/资源/能力条件；禁止空泛等待。',
@@ -328,10 +355,12 @@ export function buildActorShardMessages(candidate, {
         'persistentActorState.identity与hidden是证据化人物档案：行动应体现该角色自己的社交与决策办法、现实欲望、边界、习惯、盲点、信息取样、典型误读、具体关系距离、受压反应与恢复路径，以及训练形成的逆倾向能力，而不是仅由职业或本轮情绪驱动。强烈情绪不能抹掉其长期目标与日常行为；自我形象与行为有缝隙时用选择体现，不要写成旁白诊断。',
         '不得用MBTI、九型、Tritype、依恋型、病娇等类型标签推演行动，也不得把偏好当能力上限。若档案字段仍为空，只按已有证据行动，不自行套入“冷酷、暴躁、绝望、怯懦、狂热”默认模板，不为补反差发明创伤或秘密。',
         '角色可以主动寻找、来访、寄信、悬赏、跟踪、求助、袭击、取走其有权取得的物品，或制造交通、价格、舆论、势力与环境后果；仍不得替玩家接受、服从、支付或决定。',
+        'worldStimuli只是观察、机会或风险，不是角色目标。角色可采纳、忽略、误读、利用或反对；禁止把刺激原句复制为currentGoal。',
         'resourceCosts只能逐项引用persistentActorState.resources中的现有资源ID；没有消耗或资源列表为空时必须输出[]。capabilityUsed只能逐字引用persistentActorState.capabilities中的现有能力ID或名称；不需要能力或能力列表为空时必须输出空字符串，禁止用自然语言自造能力。',
         'interactionTargets中的每一项只能包含actorId与actorName，且两者都必须来自输入中明确给出的同一个已知人物；输入没有提供可核验目标ID时必须输出[]，不要把地点、组织、职位、陌生人或玩家写成人物目标。',
         'hidden人物内心只用于维持行为连续性。不得把内心旁白当成公开事实，不得让其他人物凭空得知。',
         '提案尚未发生，也不是事实。它之后仍须经过确定性汇合、宏观连续性策略、完整目标身份复核和原有写入流程。',
+        ACTOR_SOVEREIGNTY_DIVERSITY_CONTRACT,
         instruction,
         '只输出一个合法JSON对象；不得输出标签、代码围栏、解释或额外字段。',
     ].filter(Boolean).join('\n\n');
@@ -357,6 +386,7 @@ export function buildActorShardMessages(candidate, {
             limitedKnowledgeBasis: candidate?.knowledgeBasis || [],
             limitedKnowledgeRefs: candidate?.knowledgeRefs || [],
             currentGoalHints: candidate?.goals || [],
+            worldStimuli: candidate?.stimuli || [],
             sourceThreads: candidate?.sourceThreads || [],
             evidence: candidate?.evidence || [],
             causalChain: candidate?.causalChain || [],
@@ -369,9 +399,9 @@ export function buildActorShardMessages(candidate, {
             location: candidate?.locations?.[0] || 'unknown',
             travelTurns: 0,
             knowledgeBasis: candidate?.knowledgeBasis || [],
-            currentGoal: candidate?.goals?.[0] || '继续既定目标',
+            currentGoal: candidate?.goals?.[0] || '自行评估外部刺激并选择符合人物目标的下一步',
             intent: 'execute',
-            candidateAction: `围绕“${candidate?.goals?.[0] || '既定目标'}”继续行动（候选，尚未发生）`,
+            candidateAction: `围绕“${candidate?.goals?.[0] || '人物自己的目标'}”继续行动（候选，尚未发生）`,
             stateChanges: [{ kind: 'plan', summary: '完成一个可核验的具体准备步骤' }],
             interactionTargets: [],
             resourceCosts: [],
@@ -386,21 +416,15 @@ export function buildActorShardMessages(candidate, {
 }
 
 function parseJsonObject(output) {
+    const extracted = extractFirstBalancedJsonObject(output);
+    if (extracted.error) return { error: 'actor_shard.json_missing' };
     const text = String(output ?? '').trim();
-    const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu);
-    const source = fenced ? fenced[1].trim() : text;
-    if (!source.startsWith('{') || !source.endsWith('}')) {
-        return { error: 'actor_shard.json_missing' };
-    }
-    try {
-        return {
-            value: JSON.parse(source),
-            repaired: Boolean(fenced),
-            repairKinds: fenced ? ['strip-json-code-fence'] : [],
-        };
-    } catch {
-        return { error: 'actor_shard.json_invalid' };
-    }
+    const exact = extracted.start === 0 && extracted.end === text.length;
+    return {
+        value: extracted.value,
+        repaired: !exact,
+        repairKinds: exact ? [] : ['extract-first-balanced-json-object'],
+    };
 }
 
 export function parseActorShardProposal(output, { candidate } = {}) {
@@ -636,6 +660,7 @@ export async function runActorShardBatch({
     maxConcurrency = 2,
     timeoutMs = 30000,
     callWorker,
+    repairWorker = null,
     isCurrent = () => true,
     onProgress = () => undefined,
     signal = null,
@@ -683,8 +708,34 @@ export async function runActorShardBatch({
                 controller.abort('target-stale');
                 throw abortError('target-stale');
             }
-            const parsed = parseActorShardProposal(output, { candidate });
-            if (parsed.proposal) proposals.push(parsed.proposal);
+            let parsed = parseActorShardProposal(output, { candidate });
+            if (!parsed.proposal && typeof repairWorker === 'function') {
+                try {
+                    const repairedOutput = await repairWorker(output, candidate, {
+                        signal: workerController.signal,
+                        error: parsed.error,
+                    });
+                    parsed = parseActorShardProposal(repairedOutput, { candidate });
+                    if (parsed.proposal) {
+                        parsed = {
+                            ...parsed,
+                            repaired: true,
+                            repairKinds: [
+                                ...(parsed.repairKinds || []),
+                                'single-short-model-repair',
+                            ],
+                        };
+                    }
+                } catch {
+                    // The original technical failure is retained below.
+                }
+            }
+            if (parsed.proposal) proposals.push({
+                ...parsed.proposal,
+                repairMetadata: parsed.repaired
+                    ? { repaired: true, kinds: parsed.repairKinds || [] }
+                    : null,
+            });
             else failures.push({ actorId: candidate.id, code: parsed.error });
         } catch (error) {
             if (!isCurrent()) {

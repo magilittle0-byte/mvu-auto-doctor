@@ -902,7 +902,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.9');
+    assert.equal(continuity.version, '2.0.0-rc.10');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2129,7 +2129,7 @@ try {
         };
     });
     assert.equal(floatingToolControls.hiddenCancel, true);
-    assert.equal(floatingToolControls.visibleCount, 4);
+    assert.equal(floatingToolControls.visibleCount, 6);
     assert.ok(
         floatingToolControls.close.width >= 42
         && floatingToolControls.close.height >= 42,
@@ -2570,7 +2570,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.9');
+    assert.equal(lifecycle.version, '2.0.0-rc.10');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -5693,6 +5693,7 @@ try {
     await actorIntegrationPage.waitForFunction(() => (
         window.__TEST__.calls.actorRuns === 2
         && window.__TEST__.calls.continuityRuns === 1
+        && window.MvuAutoDoctorAPI.getDiagnosticProjection().actorShards.status === 'completed'
     ), null, { timeout: 30000 });
     const actorIntegration = await actorIntegrationPage.evaluate(() => ({
         calls: structuredClone(window.__TEST__.calls),
@@ -5728,15 +5729,17 @@ try {
     assert.match(actorIntegration.calls.actorSystem, /PHASE9-ACTOR-CANARY/u);
     assert.doesNotMatch(actorIntegration.calls.actorUser, /PHASE9-ACTOR-CANARY/u);
     assert.match(actorIntegration.calls.continuitySystem, /PHASE9-CONTINUITY-CANARY/u);
-    assert.match(actorIntegration.calls.continuityUser, /持久人物账本的本轮调度与行动收据/u);
-    assert.match(actorIntegration.calls.continuityUser, /acceptedActions/u);
-    assert.match(actorIntegration.calls.continuityUser, /沿已知传播链继续调查/u);
+    assert.doesNotMatch(
+        actorIntegration.calls.continuityUser,
+        /持久人物账本的本轮调度与行动收据|acceptedActions|沿已知传播链继续调查/u,
+        '单轮并行世界 Agent 不读取同轮人物 Agent 输出；本地裁决器在两者完成后合并候选',
+    );
     assert.match(actorIntegration.calls.continuitySystem, /世界采用双轨调度/u);
     assert.match(actorIntegration.calls.continuityUser, /本轮非人物结构世界轨/u);
     assert.equal(actorIntegration.settings.actorShardMode, 'on');
     assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
-    assert.equal(actorIntegration.settings.actorShardTimeoutMs, 90000);
-    assert.equal(actorIntegration.settings.actorShardSettingsVersion, 3);
+    assert.equal(actorIntegration.settings.actorShardTimeoutMs, 30000);
+    assert.equal(actorIntegration.settings.actorShardSettingsVersion, 4);
     assert.equal(actorIntegration.settings.strictChannelConcurrency, 2);
     assert.equal(actorIntegration.settings.fastChannelConcurrency, 4);
     assert.equal(actorIntegration.settings.modelConcurrencySettingsVersion, 2);
