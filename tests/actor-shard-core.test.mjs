@@ -52,7 +52,7 @@ function proposal(candidate, overrides = {}) {
     };
 }
 
-test('deterministic selector handles 0/1/3/5 limits and excludes present actors', () => {
+test('deterministic selector handles 0/1/3/5 limits without excluding present actors', () => {
     const continuity = {
         threads: [
             thread('T1', '艾达', { urgency: 3 }),
@@ -113,14 +113,14 @@ test('strict proposal parser rejects extra fields and identity/evidence escape',
         parseActorShardProposal(JSON.stringify({ ...valid, authorization: true }), { candidate }).error,
         'actor_shard.shape_not_whitelisted',
     );
-    assert.equal(
-        parseActorShardProposal(`说明：${JSON.stringify(valid)}`, { candidate }).error,
-        'actor_shard.json_missing',
+    assert.deepEqual(
+        parseActorShardProposal(`说明：${JSON.stringify(valid)}`, { candidate }).proposal,
+        valid,
     );
     const fenced = parseActorShardProposal(`\`\`\`json\n${JSON.stringify(valid)}\n\`\`\``, { candidate });
     assert.deepEqual(fenced.proposal, valid);
     assert.equal(fenced.repaired, true);
-    assert.deepEqual(fenced.repairKinds, ['strip-json-code-fence']);
+    assert.deepEqual(fenced.repairKinds, ['extract-first-balanced-json-object']);
     assert.equal(
         parseActorShardProposal(
             JSON.stringify({ ...valid, sourceThreads: ['UNRELATED'] }),

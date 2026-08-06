@@ -101,6 +101,35 @@ import {
 } from './forum-core.mjs';
 import { ConnectionTaskScheduler } from './model-queue.mjs';
 import {
+    actorProfileV6View,
+    applyActorProfileV6Override,
+    prepareActorLedgerProfilesV6,
+    regenerateActorProfileV6Module,
+    setActorProfileV6Lock,
+} from './actor-profile-v6-core.mjs';
+import {
+    claimNextSovereigntyTask,
+    commitSovereigntyTask,
+    emptySovereigntyRuntime,
+    failSovereigntyTask,
+    normalizeSovereigntyRuntime,
+    observeSovereigntyTurn,
+    recoverOrphanedSovereigntyTasks,
+    restoreSovereigntyCheckpoint,
+    retrySovereigntyTaskNow,
+    sovereigntyHealthView,
+} from './sovereignty-runtime-core.mjs';
+import {
+    composeScopedModelInstruction,
+    customInstructionDiagnosticProjection,
+    normalizeGlobalInstructionConfig,
+} from './custom-instruction-core.mjs';
+import {
+    adjudicateSovereigntyBlackboard,
+    createSovereigntyBlackboard,
+    runSovereigntyAgentPool,
+} from './sovereignty-orchestrator-core.mjs';
+import {
     auditHardContracts,
 } from './protocol-core.mjs';
 import {
@@ -128,9 +157,9 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.9';
+const VERSION = '2.0.0-rc.10';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
-const CHAT_NAMESPACE_VERSION = 11;
+const CHAT_NAMESPACE_VERSION = 12;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
 const CONTINUITY_INJECTION_SENTINEL = '【MVU医生·活世界注入】';
 const SOCIAL_INJECTION_NAME = 'mvu-auto-doctor-social-contract';
@@ -192,7 +221,12 @@ const DEFAULTS = Object.freeze({
     variableRetryLimit: 3,
     variablePromptAddon: '',
     variableAuditSettingsVersion: 3,
-    modelTimeoutMs: 120000,
+    modelTimeoutMs: 30000,
+    sovereigntyMode: 'active',
+    sovereigntyForegroundWaitMs: 3000,
+    sovereigntySoftTimeoutMs: 12000,
+    sovereigntyHardTimeoutMs: 30000,
+    sovereigntySettingsVersion: 1,
     mvuIdleTimeoutMs: 8000,
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
@@ -226,13 +260,19 @@ const DEFAULTS = Object.freeze({
     actorShardMode: 'auto',
     actorShardMaxWorkers: 2,
     actorShardMaxTokens: 1200,
-    actorShardTimeoutMs: 90000,
+    actorShardTimeoutMs: 30000,
     actorShardPromptAddon: '',
-    actorShardSettingsVersion: 3,
+    actorShardSettingsVersion: 4,
     actorLedgerMaxActorsPerTurn: 2,
     actorLedgerExplorationSlots: 1,
     actorLedgerCollisionIntensity: 2,
     actorLedgerSettingsVersion: 2,
+    actorProfileCompletionMode: 'full',
+    actorProfileSettingsVersion: 1,
+    globalModelInstructionEnabled: false,
+    globalModelInstruction: '',
+    globalModelInstructionScopes: ['all'],
+    globalModelInstructionSettingsVersion: 1,
     builtInForumEnabled: true,
     forumAutoRefresh: false,
     forumRefreshMode: 'manual',
@@ -299,6 +339,7 @@ let latestForumKind = '';
 // 最近操作时间线：内存即时渲染，并按聊天防抖保存，刷新后仍可追溯。
 const operationLog = [];
 const modelDiagnostics = [];
+const customInstructionInjectionRecords = [];
 let pendingOperationLogSaveTimer = null;
 let modelCallStats = {
     version: 2,
@@ -402,6 +443,11 @@ function getSettings() {
     const previousSocialAuditSettingsVersion = Number(settings.socialAuditSettingsVersion) || 0;
     const previousActorShardSettingsVersion = Number(settings.actorShardSettingsVersion) || 0;
     const previousActorLedgerSettingsVersion = Number(settings.actorLedgerSettingsVersion) || 0;
+    const previousSovereigntySettingsVersion = Number(settings.sovereigntySettingsVersion) || 0;
+    const previousActorProfileSettingsVersion = Number(settings.actorProfileSettingsVersion) || 0;
+    const previousGlobalInstructionSettingsVersion = Number(
+        settings.globalModelInstructionSettingsVersion,
+    ) || 0;
     let changed = false;
     for (const [key, value] of Object.entries(DEFAULTS)) {
         if (settings[key] === undefined) {
@@ -481,8 +527,8 @@ function getSettings() {
         Math.max(768, Math.floor(Number(settings.actorShardMaxTokens) || 1200)),
     );
     settings.actorShardTimeoutMs = Math.min(
-        120000,
-        Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 90000)),
+        35000,
+        Math.max(10000, Math.floor(Number(settings.actorShardTimeoutMs) || 30000)),
     );
     settings.actorLedgerMaxActorsPerTurn = Math.min(
         5,
@@ -532,6 +578,13 @@ function getSettings() {
         settings.actorShardSettingsVersion = 3;
         changed = true;
     }
+    if (previousActorShardSettingsVersion < 4) {
+        if (settings.actorShardTimeoutMs === 90000) {
+            settings.actorShardTimeoutMs = DEFAULTS.actorShardTimeoutMs;
+        }
+        settings.actorShardSettingsVersion = 4;
+        changed = true;
+    }
     if (previousActorLedgerSettingsVersion < 1) {
         settings.actorLedgerMaxActorsPerTurn = 2;
         settings.actorLedgerExplorationSlots = 1;
@@ -541,6 +594,67 @@ function getSettings() {
     }
     if (previousActorLedgerSettingsVersion < 2) {
         settings.actorLedgerSettingsVersion = 2;
+        changed = true;
+    }
+    if (!['legacy', 'shadow', 'active'].includes(settings.sovereigntyMode)) {
+        settings.sovereigntyMode = DEFAULTS.sovereigntyMode;
+        changed = true;
+    }
+    const normalizedModelTimeoutMs = Math.min(
+        35000,
+        Math.max(25000, Math.floor(Number(settings.modelTimeoutMs) || 30000)),
+    );
+    if (settings.modelTimeoutMs !== normalizedModelTimeoutMs) {
+        settings.modelTimeoutMs = normalizedModelTimeoutMs;
+        changed = true;
+    }
+    for (const [key, minimum, maximum, fallback] of [
+        ['sovereigntyForegroundWaitMs', 2000, 5000, 3000],
+        ['sovereigntySoftTimeoutMs', 10000, 15000, 12000],
+        ['sovereigntyHardTimeoutMs', 25000, 35000, 30000],
+    ]) {
+        const normalized = Math.min(
+            maximum,
+            Math.max(minimum, Math.floor(Number(settings[key]) || fallback)),
+        );
+        if (settings[key] !== normalized) {
+            settings[key] = normalized;
+            changed = true;
+        }
+    }
+    if (previousSovereigntySettingsVersion < 1) {
+        settings.sovereigntyMode = 'active';
+        settings.sovereigntySettingsVersion = 1;
+        changed = true;
+    }
+    if (!['off', 'basic', 'full', 'full_adult'].includes(settings.actorProfileCompletionMode)) {
+        settings.actorProfileCompletionMode = DEFAULTS.actorProfileCompletionMode;
+        changed = true;
+    }
+    if (previousActorProfileSettingsVersion < 1) {
+        settings.actorProfileSettingsVersion = 1;
+        changed = true;
+    }
+    const globalInstruction = normalizeGlobalInstructionConfig({
+        enabled: settings.globalModelInstructionEnabled,
+        text: settings.globalModelInstruction,
+        scopes: settings.globalModelInstructionScopes,
+    });
+    if (settings.globalModelInstructionEnabled !== globalInstruction.enabled) {
+        settings.globalModelInstructionEnabled = globalInstruction.enabled;
+        changed = true;
+    }
+    if (settings.globalModelInstruction !== globalInstruction.text) {
+        settings.globalModelInstruction = globalInstruction.text;
+        changed = true;
+    }
+    if (JSON.stringify(settings.globalModelInstructionScopes)
+        !== JSON.stringify(globalInstruction.scopes)) {
+        settings.globalModelInstructionScopes = globalInstruction.scopes;
+        changed = true;
+    }
+    if (previousGlobalInstructionSettingsVersion < 1) {
+        settings.globalModelInstructionSettingsVersion = 1;
         changed = true;
     }
     if (!['all', 'warnings', 'silent'].includes(settings.notificationLevel)) {
@@ -1028,6 +1142,99 @@ function renderModelCallStats() {
     }
 }
 
+function renderSovereigntyHealth(value = readChatNamespace()?.sovereigntyRuntime) {
+    const health = sovereigntyHealthView(value);
+    const colorLabels = {
+        green: '绿色·正常',
+        yellow: '黄色·有待办',
+        orange: '橙色·等待恢复',
+        red: '红色·尚未成功',
+        blue: '蓝色·处理中',
+    };
+    const text = [
+        colorLabels[health.color] || health.color,
+        `观察 ${health.observedThrough.turn}`,
+        `结算 ${health.simulatedThrough.turn}`,
+        `积压 ${health.backlog}`,
+        health.lastSuccessTurn ? `最后成功 ${health.lastSuccessTurn}` : '尚无成功回合',
+        health.failingModules.length
+            ? `失败模块 ${health.failingModules.join('、')}`
+            : '',
+        health.nextRetryTurn ? `下次重试 ${health.nextRetryTurn}` : '',
+    ].filter(Boolean).join(' · ');
+    for (const root of [ui?.sovereigntyHealth, ui?.floatingSovereigntyHealth]) {
+        if (!root) continue;
+        root.textContent = text;
+        root.dataset.healthColor = health.color;
+        root.dataset.kind = health.color === 'green'
+            ? 'ok'
+            : health.color === 'blue'
+                ? 'busy'
+                : health.color === 'yellow' ? '' : 'error';
+    }
+    for (const button of [ui?.sovereigntyRetry, ui?.floatingSovereigntyRetry]) {
+        if (button) button.disabled = health.retryableFailed + health.deferred === 0;
+    }
+    for (const button of [ui?.sovereigntyRestore, ui?.floatingSovereigntyRestore]) {
+        if (button) button.disabled = health.checkpointCount === 0;
+    }
+    return health;
+}
+
+async function retrySovereigntyNow() {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId) return { status: 'blocked' };
+    const namespace = readChatNamespace(context);
+    const retried = retrySovereigntyTaskNow(
+        sovereigntyRuntimeFromNamespace(namespace),
+    );
+    await persistSovereigntyRuntime(retried.runtime, chatId, { durable: true });
+    const latest = latestAiMessage(context);
+    const captured = captureTarget(context, latest.index);
+    if (captured && retried.retried.length) {
+        enqueueContinuity(latest.index, { force: true, expectedTarget: captured });
+    }
+    toast(
+        retried.retried.length ? 'success' : 'info',
+        retried.retried.length
+            ? `已将 ${retried.retried.length} 项技术任务加入立即恢复。`
+            : '当前没有可立即重试的失败任务。',
+    );
+    return { status: 'completed', retried: retried.retried };
+}
+
+async function restoreLatestSovereigntyCheckpoint() {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId) return { status: 'blocked' };
+    const namespace = readChatNamespace(context);
+    const restored = restoreSovereigntyCheckpoint(
+        sovereigntyRuntimeFromNamespace(namespace),
+    );
+    if (!restored.restored) {
+        toast('info', '当前没有可恢复的稳定检查点。');
+        return { status: 'nochange' };
+    }
+    namespace.sovereigntyRuntime = restored.runtime;
+    for (const field of ['continuity', 'actorLedger', 'worldPressure']) {
+        if (restored.payload?.[field]) namespace[field] = restored.payload[field];
+    }
+    const saved = await writeChatNamespace(namespace, chatId, {
+        fields: ['sovereigntyRuntime', 'continuity', 'actorLedger', 'worldPressure'],
+        durable: true,
+    });
+    renderSovereigntyHealth(namespace.sovereigntyRuntime);
+    if (saved) {
+        applyContinuityInjection();
+        renderContinuityLedger();
+    }
+    toast(saved ? 'success' : 'warning', saved
+        ? `已恢复检查点 ${restored.checkpoint.id}。`
+        : '检查点恢复未能耐久保存。');
+    return { status: saved ? 'completed' : 'failed' };
+}
+
 function resetCurrentModelCallStats(type = 'normal') {
     const stats = normalizedModelCallStats(modelCallStats);
     stats.currentRun = {
@@ -1096,6 +1303,21 @@ function loadOperationLogFromChat(context = getContext()) {
         modelDiagnostics.length,
         ...normalizedModelDiagnostics(namespace.modelDiagnostics),
     );
+    customInstructionInjectionRecords.splice(
+        0,
+        customInstructionInjectionRecords.length,
+        ...(Array.isArray(namespace.customInstructionInjections)
+            ? namespace.customInstructionInjections
+                .filter((entry) => entry && typeof entry === 'object')
+                .map((entry) => ({
+                    at: Math.max(0, Number(entry.at) || 0),
+                    module: String(entry.module || ''),
+                    channel: String(entry.channel || ''),
+                    injected: entry.injected === true,
+                }))
+                .slice(-80)
+            : []),
+    );
     renderOperationLog();
     renderModelCallStats();
 }
@@ -1116,8 +1338,16 @@ function scheduleOperationLogSave() {
         namespace.operationLog = deepClone(operationLog.slice(0, 30));
         namespace.modelCallStats = normalizedModelCallStats(modelCallStats);
         namespace.modelDiagnostics = normalizedModelDiagnostics(modelDiagnostics);
+        namespace.customInstructionInjections = deepClone(
+            customInstructionInjectionRecords.slice(-80),
+        );
         await writeChatNamespace(namespace, chatId, {
-            fields: ['operationLog', 'modelCallStats', 'modelDiagnostics'],
+            fields: [
+                'operationLog',
+                'modelCallStats',
+                'modelDiagnostics',
+                'customInstructionInjections',
+            ],
         });
     }, 700);
 }
@@ -1868,6 +2098,12 @@ function diagnosticPayload() {
             environment: lastEnvironmentReport,
             barrierProtocol: databaseBarrier,
             actorShards: latestActorShardDiagnostics,
+            sovereignty: sovereigntyHealthView(namespace.sovereigntyRuntime),
+            customInstruction: customInstructionDiagnosticProjection({
+                enabled: settings.globalModelInstructionEnabled,
+                text: settings.globalModelInstruction,
+                scopes: settings.globalModelInstructionScopes,
+            }, customInstructionInjectionRecords),
             userPrompts: {
                 continuity: userPromptSlotMetadata(settings.continuityPromptAddon),
                 actorShard: userPromptSlotMetadata(settings.actorShardPromptAddon),
@@ -2117,6 +2353,10 @@ function readChatNamespace(context = getContext()) {
             continuityCheckpoint: null,
             actorLedger: emptyActorLedger(context?.chatId || ''),
             actorLedgerCheckpoint: null,
+            sovereigntyRuntime: emptySovereigntyRuntime(context?.chatId || '', {
+                mode: getSettings().sovereigntyMode,
+            }),
+            customInstructionInjections: [],
             worldPressure: emptyWorldPressureState(),
             serendipity: emptySerendipityLedger(context?.chatId || ''),
             forum: emptyForumState(context?.chatId || ''),
@@ -3284,6 +3524,226 @@ function sourceRefOf(captured) {
         branchId: captured.branchId,
         hash: captured.fingerprint,
     };
+}
+
+function sovereigntySourceRefOf(captured) {
+    if (!captured) return null;
+    return {
+        chatId: captured.chatId,
+        logicalIndex: captured.index,
+        messageId: captured.messageId,
+        swipeId: captured.swipeId,
+        generation: captured.generationSerial,
+        branchId: captured.branchId,
+        contentHash: captured.contentFingerprint || captured.fingerprint,
+    };
+}
+
+function sovereigntyRuntimeFromNamespace(namespace, settings = getSettings()) {
+    const runtime = normalizeSovereigntyRuntime(namespace?.sovereigntyRuntime, {
+        chatId: namespace?.chatId || getContext()?.chatId || '',
+    });
+    runtime.mode = settings.sovereigntyMode;
+    return runtime;
+}
+
+async function persistSovereigntyRuntime(runtime, expectedChatId, { durable = true } = {}) {
+    const namespace = readChatNamespace();
+    namespace.sovereigntyRuntime = normalizeSovereigntyRuntime(runtime, {
+        chatId: expectedChatId,
+    });
+    let saved = await writeChatNamespace(namespace, expectedChatId, {
+        fields: ['sovereigntyRuntime'],
+        durable,
+    });
+    if (!saved && durable) {
+        saved = await writeChatNamespace(namespace, expectedChatId, {
+            fields: ['sovereigntyRuntime'],
+        });
+    }
+    renderSovereigntyHealth(namespace.sovereigntyRuntime);
+    return saved;
+}
+
+async function observeSovereigntyTarget(captured) {
+    const settings = getSettings();
+    const namespace = readChatNamespace();
+    let runtime = sovereigntyRuntimeFromNamespace(namespace, settings);
+    const recovered = recoverOrphanedSovereigntyTasks(runtime, {
+        staleAfterMs: settings.sovereigntyHardTimeoutMs + 5_000,
+    });
+    runtime = recovered.runtime;
+    const modules = settings.sovereigntyMode === 'legacy'
+        ? []
+        : ['profile', 'actor', 'world'];
+    if (
+        settings.sovereigntyMode !== 'legacy'
+        && settings.actorProfileCompletionMode === 'full_adult'
+    ) modules.push('physiology');
+    const observed = observeSovereigntyTurn(runtime, {
+        sourceRef: sovereigntySourceRefOf(captured),
+        modules,
+    });
+    runtime = observed.runtime;
+    await persistSovereigntyRuntime(runtime, captured.chatId, { durable: true });
+    if (observed.observed) {
+        recordOperation(
+            '人物主权',
+            `已本地观察正文回合 ${observed.turn}；待结算 ${sovereigntyHealthView(runtime).backlog} 项`,
+            'ok',
+        );
+    }
+    return { ...observed, recovered: recovered.recovered, runtime };
+}
+
+async function recoverSovereigntyOnChatLoad() {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId) return { recovered: [], scheduled: false };
+    const settings = getSettings();
+    const namespace = readChatNamespace(context);
+    const recovered = recoverOrphanedSovereigntyTasks(
+        sovereigntyRuntimeFromNamespace(namespace, settings),
+        { staleAfterMs: settings.sovereigntyHardTimeoutMs + 5_000 },
+    );
+    await persistSovereigntyRuntime(recovered.runtime, chatId, { durable: true });
+    const health = sovereigntyHealthView(recovered.runtime);
+    const due = recovered.runtime.backlog.some((task) => (
+        ['pending', 'retryable_failed', 'deferred'].includes(task.status)
+        && task.nextRetryTurn <= recovered.runtime.observedThrough.turn
+    ));
+    const latest = latestAiMessage(context);
+    const captured = captureTarget(context, latest.index);
+    const scheduled = Boolean(
+        captured
+        && settings.sovereigntyMode !== 'legacy'
+        && due
+        && health.running === 0
+    );
+    if (scheduled) enqueueContinuity(latest.index, { force: true, expectedTarget: captured });
+    return { recovered: recovered.recovered, scheduled };
+}
+
+async function claimSovereigntyModules(namespace, captured, modules) {
+    let runtime = sovereigntyRuntimeFromNamespace(namespace);
+    const claimed = {};
+    for (const module of modules) {
+        const result = claimNextSovereigntyTask(runtime, {
+            module,
+            currentTurn: runtime.observedThrough.turn,
+        });
+        runtime = result.runtime;
+        if (result.task) claimed[module] = result.task;
+    }
+    namespace.sovereigntyRuntime = runtime;
+    if (Object.keys(claimed).length) {
+        await persistSovereigntyRuntime(runtime, captured.chatId, { durable: true });
+    }
+    return { runtime, claimed };
+}
+
+function settleSovereigntyModule(runtime, task, {
+    success,
+    payload = null,
+    commitRef = '',
+    failureCode = 'technical_failure',
+    currentTurn = 0,
+} = {}) {
+    if (!task) return runtime;
+    const result = success
+        ? commitSovereigntyTask(runtime, {
+            taskId: task.id,
+            payload,
+            commitRef,
+        })
+        : failSovereigntyTask(runtime, {
+            taskId: task.id,
+            failureCode,
+            retryable: true,
+            nextRetryTurn: Math.max(1, Number(currentTurn) + 1),
+        });
+    return result.runtime;
+}
+
+async function completeSovereigntyCycle({
+    runtime,
+    tasks,
+    captured,
+    turn,
+    profilePreparation,
+    actorSettlement,
+    actorFailure = '',
+    worldSuccess = false,
+    worldFailure = '',
+    persistenceSuccess = true,
+    actorLedger = null,
+    continuity = null,
+    worldPressure = null,
+}) {
+    let next = normalizeSovereigntyRuntime(runtime, { chatId: captured.chatId });
+    const profileReady = getSettings().actorProfileCompletionMode === 'off'
+        || (profilePreparation?.deferred?.length || 0) === 0;
+    next = settleSovereigntyModule(next, tasks.profile, {
+        success: profileReady && persistenceSuccess,
+        payload: {
+            coverage: profilePreparation?.coverage ?? 100,
+            prepared: profilePreparation?.prepared?.length || 0,
+            deferred: profilePreparation?.deferred?.length || 0,
+            actorLedger,
+        },
+        commitRef: `PROFILE-${turn}`,
+        failureCode: persistenceSuccess
+            ? 'profile.preparation_incomplete'
+            : 'profile.persistence_failed',
+        currentTurn: turn,
+    });
+    next = settleSovereigntyModule(next, tasks.physiology, {
+        success: profileReady && persistenceSuccess,
+        payload: {
+            enabled: getSettings().actorProfileCompletionMode === 'full_adult',
+            prepared: profilePreparation?.prepared?.length || 0,
+            actorLedger,
+        },
+        commitRef: `PHYSIOLOGY-${turn}`,
+        failureCode: persistenceSuccess
+            ? 'physiology.preparation_incomplete'
+            : 'physiology.persistence_failed',
+        currentTurn: turn,
+    });
+    next = settleSovereigntyModule(next, tasks.actor, {
+        success: !actorFailure && persistenceSuccess,
+        payload: {
+            attempts: actorSettlement?.attempts?.length || 0,
+            results: actorSettlement?.results?.length || 0,
+            accepted: actorSettlement?.accepted?.length || 0,
+            rejected: actorSettlement?.rejected?.length || 0,
+            receiptIds: (actorSettlement?.receipts || []).map((entry) => entry.receiptId),
+            actorLedger,
+            worldPressure,
+        },
+        commitRef: `ACTOR-${turn}`,
+        failureCode: persistenceSuccess
+            ? actorFailure || 'actor.technical_failure'
+            : 'actor.persistence_failed',
+        currentTurn: turn,
+    });
+    next = settleSovereigntyModule(next, tasks.world, {
+        success: worldSuccess && persistenceSuccess,
+        payload: {
+            turn,
+            settled: worldSuccess,
+            continuity,
+            actorLedger,
+            worldPressure,
+        },
+        commitRef: `WORLD-${turn}`,
+        failureCode: persistenceSuccess
+            ? worldFailure || 'world.output_not_committed'
+            : 'world.persistence_failed',
+        currentTurn: turn,
+    });
+    await persistSovereigntyRuntime(next, captured.chatId, { durable: true });
+    return next;
 }
 
 function stripMechanism(text) {
@@ -4587,6 +5047,55 @@ function modelTaskPriority(task, explicitPriority) {
     return 20;
 }
 
+function modelInstructionModule(task, explicitModule = '') {
+    if (explicitModule) return String(explicitModule);
+    const text = String(task || '');
+    if (/生理/iu.test(text)) return 'physiology';
+    if (/档案/iu.test(text)) return 'profile';
+    if (/NPC|人物行动|人物分片/iu.test(text)) return 'actor';
+    if (/人物|关系二审|社会语义/iu.test(text)) return 'social';
+    if (/变量|MVU/iu.test(text)) return 'variable';
+    if (/论坛|帖子/iu.test(text)) return 'forum';
+    if (/世界|连续|事件/iu.test(text)) return 'world';
+    return 'world';
+}
+
+function scopedModelMessages(messages, settings, task, channel, options = {}) {
+    if (options.scopedInstructionApplied === true) {
+        return (Array.isArray(messages) ? messages : []).map((message) => ({
+            role: String(message?.role || ''),
+            content: String(message?.content || ''),
+        }));
+    }
+    const module = modelInstructionModule(task, options.instructionModule);
+    const config = normalizeGlobalInstructionConfig({
+        enabled: settings.globalModelInstructionEnabled,
+        text: settings.globalModelInstruction,
+        scopes: settings.globalModelInstructionScopes,
+    });
+    const scoped = composeScopedModelInstruction(config, { module, channel });
+    const output = (Array.isArray(messages) ? messages : []).map((message) => ({
+        role: String(message?.role || ''),
+        content: String(message?.content || ''),
+    }));
+    if (scoped.text) {
+        const systemIndex = output.findIndex((message) => message.role === 'system');
+        if (systemIndex >= 0) output[systemIndex].content += `\n\n${scoped.text}`;
+        else output.unshift({ role: 'system', content: scoped.text });
+    }
+    customInstructionInjectionRecords.push({
+        at: Date.now(),
+        module,
+        channel,
+        injected: scoped.globalInjected,
+    });
+    if (customInstructionInjectionRecords.length > 80) {
+        customInstructionInjectionRecords.splice(0, customInstructionInjectionRecords.length - 80);
+    }
+    scheduleOperationLogSave();
+    return output;
+}
+
 async function callModel(messages, options = {}) {
     const settings = getSettings();
     disableStoryOracleAutoIfNeeded();
@@ -4612,6 +5121,7 @@ async function callModel(messages, options = {}) {
     syncTaskCancelButtons();
     const task = String(options.task || '模型任务');
     const channel = options.channel === 'fast' ? 'fast' : 'strict';
+    const effectiveMessages = scopedModelMessages(messages, settings, task, channel, options);
     const diagnosticTargetIndex = Number.isInteger(Number(options.targetIndex))
         ? Number(options.targetIndex)
         : -1;
@@ -4630,7 +5140,7 @@ async function callModel(messages, options = {}) {
     const queuedAt = Date.now();
     const callGenerationSerial = generationSerial;
     let providerUsage = null;
-    const messageCopies = (Array.isArray(messages) ? messages : []).map((message) => ({
+    const messageCopies = effectiveMessages.map((message) => ({
         role: String(message?.role || ''),
         content: String(message?.content || ''),
     }));
@@ -4674,7 +5184,7 @@ async function callModel(messages, options = {}) {
             try {
                 if (profile.provider === 'direct') {
                     const output = await withTimeout(
-                        callDirectModel(messages, {
+                        callDirectModel(effectiveMessages, {
                             channel,
                             maxTokens,
                             signal: controller.signal,
@@ -4705,7 +5215,7 @@ async function callModel(messages, options = {}) {
                             runOptions.signal = controller.signal;
                         }
                         const output = await withTimeout(
-                            api.run(messages, runOptions),
+                            api.run(effectiveMessages, runOptions),
                             timeoutMs,
                             '故事神谕连接',
                             {
@@ -4723,8 +5233,8 @@ async function callModel(messages, options = {}) {
                     throw new Error('酒馆当前模型连接不可用');
                 }
                 const rawOptions = {
-                    systemPrompt: messages[0].content,
-                    prompt: messages[1].content,
+                    systemPrompt: effectiveMessages[0]?.content || '',
+                    prompt: effectiveMessages[1]?.content || '',
                     responseLength: maxTokens,
                     trimNames: false,
                 };
@@ -4805,8 +5315,9 @@ async function callModel(messages, options = {}) {
                 `${task} 的槽位 ${slotIndex + 1} 失败，已转交槽位 ${nextRoute.slotIndex + 1}`,
                 'warn',
             );
-            return await callModel(messages, {
+            return await callModel(effectiveMessages, {
                 ...options,
+                scopedInstructionApplied: true,
                 routeSlotIndex: nextRoute.slotIndex,
                 attemptedRouteSlots,
                 attemptedRouteKeys,
@@ -8453,6 +8964,36 @@ async function collectActorShardProposals(captured, {
                 failover: true,
             },
         ),
+        repairWorker: async (output, candidate, { signal, error }) => callModel([
+            {
+                role: 'system',
+                content: [
+                    '你只负责把上一条 NPC 人物分片结果修成一个完整 JSON 对象。',
+                    '不要续写剧情、不要补造行动、不要改变 actorId；无法确定的可选值留空。',
+                    '只输出 JSON 对象，不要围栏、解释或前后文字。',
+                ].join('\n'),
+            },
+            {
+                role: 'user',
+                content: [
+                    `actorId=${candidate.id}`,
+                    `原校验错误=${error || 'json_invalid'}`,
+                    '待修复输出：',
+                    String(output || '').slice(0, 12_000),
+                ].join('\n'),
+            },
+        ], {
+            maxTokens: 700,
+            timeoutMs: Math.min(12_000, settings.actorShardTimeoutMs),
+            task: '活世界 NPC 分片 JSON 修复',
+            channel: 'fast',
+            instructionModule: 'actor',
+            targetIndex: captured.index,
+            jsonMode: true,
+            signal,
+            parallelLane: `${candidate.id}-repair`,
+            failover: true,
+        }),
     });
     latestActorShardDiagnostics = {
         status: result.status,
@@ -8515,6 +9056,45 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
     }
     let namespace = readChatNamespace(context);
+    let sovereigntyRuntime = sovereigntyRuntimeFromNamespace(namespace, settings);
+    let sovereigntyTasks = {};
+    if (settings.sovereigntyMode !== 'legacy') {
+        const sourceRef = sovereigntySourceRefOf(captured);
+        const alreadyObserved = sovereigntyRuntime.observations.some((entry) => (
+            entry.sourceRef?.chatId === sourceRef?.chatId
+            && entry.sourceRef?.messageId === sourceRef?.messageId
+            && entry.sourceRef?.contentHash === sourceRef?.contentHash
+        ));
+        if (!alreadyObserved) {
+            const observed = observeSovereigntyTurn(sovereigntyRuntime, {
+                sourceRef,
+                modules: [
+                    'profile',
+                    'actor',
+                    'world',
+                    ...(settings.actorProfileCompletionMode === 'full_adult'
+                        ? ['physiology']
+                        : []),
+                ],
+            });
+            sovereigntyRuntime = observed.runtime;
+            await persistSovereigntyRuntime(sovereigntyRuntime, captured.chatId, {
+                durable: true,
+            });
+            namespace = readChatNamespace(context);
+        }
+        const claimed = await claimSovereigntyModules(namespace, captured, [
+            'profile',
+            ...(settings.actorProfileCompletionMode === 'full_adult'
+                ? ['physiology']
+                : []),
+            'actor',
+            'world',
+        ]);
+        sovereigntyRuntime = claimed.runtime;
+        sovereigntyTasks = claimed.claimed;
+        namespace.sovereigntyRuntime = sovereigntyRuntime;
+    }
     const checkpointBase = continuityBase(namespace, captured);
     let base = checkpointBase;
     base = mergeMarkerRecords(base, markers.records, {
@@ -8535,7 +9115,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     }
     guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
-    if (!continuityFeatureActive(settings, markers, base, worldContext, force)) {
+    if (
+        settings.sovereigntyMode === 'legacy'
+        && !continuityFeatureActive(settings, markers, base, worldContext, force)
+    ) {
         applyContinuityInjection();
         return { status: 'disabled' };
     }
@@ -8649,12 +9232,118 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         sourceRef: sourceRefOf(captured),
         observerActorIds,
     });
+    const profilePreparation = prepareActorLedgerProfilesV6(actorLedger, {
+        mode: settings.actorProfileCompletionMode,
+        turn: tickTurn,
+    });
+    actorLedger = profilePreparation.ledger;
     const actorSchedule = scheduleActorTurns(actorLedger, {
         turn: tickTurn,
         maxActors: settings.actorLedgerMaxActorsPerTurn,
         explorationSlots: settings.actorLedgerExplorationSlots,
         excludedActorNames,
+        requireProfileReady: true,
     });
+    const provisionalWorldLaneSchedule = scheduleWorldLanes(scheduledBase, {
+        turn: tickTurn,
+        maxLanes: settings.worldFactionSlots + settings.worldEnvironmentSlots,
+        factionSlots: settings.worldFactionSlots,
+        environmentSlots: settings.worldEnvironmentSlots,
+        receiptScope: [
+            captured.chatId,
+            captured.messageId,
+            `swipe-${captured.swipeId}`,
+            `generation-${captured.generationSerial}`,
+            captured.branchId,
+        ].join(':'),
+    });
+    const sovereigntyBlackboard = createSovereigntyBlackboard({
+        turn: tickTurn,
+        sourceRef: sovereigntySourceRefOf(captured),
+    });
+    const sovereigntyAgentPool = await runSovereigntyAgentPool({
+        blackboard: sovereigntyBlackboard,
+        limits: { profile: 1, actor: 1, world: 1 },
+        jobs: [
+            {
+                agentType: 'profile',
+                agentId: `profile-${tickTurn}`,
+                input: { coverage: profilePreparation.coverage },
+            },
+            {
+                agentType: 'actor',
+                agentId: `actor-pool-${tickTurn}`,
+                input: { selected: actorSchedule.selected.length },
+            },
+            {
+                agentType: 'world',
+                agentId: `world-${tickTurn}`,
+                input: { lanes: provisionalWorldLaneSchedule.selected.length },
+            },
+        ],
+        runAgent: async (job) => {
+            if (job.agentType === 'profile') {
+                return {
+                    coverage: profilePreparation.coverage,
+                    prepared: profilePreparation.prepared.length,
+                    deferred: profilePreparation.deferred.length,
+                };
+            }
+            if (job.agentType === 'actor') {
+                return collectActorShardProposals(captured, {
+                    base: scheduledBase,
+                    actorLedger,
+                    actorSchedule,
+                    messageText: acceptedNarrative,
+                    token,
+                    excludedActorNames,
+                });
+            }
+            const messages = buildContinuityMessages({
+                context,
+                captured,
+                base: scheduledBase,
+                director,
+                markers,
+                worldContext,
+                stateAnchors,
+                retryReason: '',
+                excludedSourceIndexes: sourcePlan.skippedIndexes,
+                actorShardCandidates: null,
+                actorLedger,
+                worldLaneSchedule: provisionalWorldLaneSchedule,
+            });
+            return callModel(messages, {
+                maxTokens: settings.continuityMaxTokens,
+                timeoutMs: settings.sovereigntyHardTimeoutMs,
+                task: '活世界整理',
+                channel: 'fast',
+                instructionModule: 'world',
+                targetIndex: captured.index,
+                jsonMode: true,
+                failover: true,
+                parallelLane: 'world-agent',
+            });
+        },
+    });
+    const adjudicatedBlackboard = adjudicateSovereigntyBlackboard(
+        sovereigntyAgentPool.blackboard,
+        {
+            acceptCandidate: (candidate) => ({
+                accepted: ['profile', 'actor', 'world'].includes(candidate.agentType),
+            }),
+        },
+    );
+    const pooledCandidate = (agentType) => adjudicatedBlackboard.adjudication.accepted
+        .find((candidate) => candidate.agentType === agentType)?.payload;
+    const pooledActorShardResult = pooledCandidate('actor') || null;
+    const prefetchedWorldOutput = typeof pooledCandidate('world') === 'string'
+        ? pooledCandidate('world')
+        : '';
+    const prefetchedWorldFailure = !prefetchedWorldOutput
+        ? adjudicatedBlackboard.failures.find((entry) => entry.agentType === 'world')?.code
+            || 'world.agent_output_missing'
+        : '';
     let actorShardCandidates = null;
     let actorSettlement = {
         ledger: actorLedger,
@@ -8665,16 +9354,13 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     };
     let actorSettlementFinalized = false;
     let actorShardStatus = 'not-run';
+    let actorTechnicalFailure = '';
     const scheduledActorIds = actorSchedule.selected.map((item) => item.actorId);
     try {
-        const actorShardResult = await collectActorShardProposals(captured, {
-            base: scheduledBase,
-            actorLedger,
-            actorSchedule,
-            messageText: acceptedNarrative,
-            token,
-            excludedActorNames,
-        });
+        const actorShardResult = pooledActorShardResult || {
+            status: 'completed',
+            candidates: null,
+        };
         actorShardStatus = actorShardResult.status;
         if (actorShardResult.status === 'stale') {
             return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
@@ -8714,6 +9400,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 {
                     turn: tickTurn,
                     attemptedActorIds: scheduledActorIds,
+                    playerNames: excludedActorNames,
                 },
             );
             actorSettlementFinalized = true;
@@ -8779,28 +9466,22 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             succeeded: 0,
             failed: 1,
         };
+        actorTechnicalFailure = 'actor_shard.transport_failed';
         console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
     }
-    if (
-        !actorSettlementFinalized
-        && actorShardStatus !== 'disabled'
-        && scheduledActorIds.length
-    ) {
-        actorSettlement = settleActorActionCandidates(actorLedger, [], {
-            turn: tickTurn,
-            attemptedActorIds: scheduledActorIds,
-        });
-        actorSettlementFinalized = true;
-        actorLedger = actorSettlement.ledger;
+    if (!actorSettlementFinalized && actorShardStatus !== 'disabled' && scheduledActorIds.length) {
+        actorTechnicalFailure ||= latestActorShardDiagnostics.failed > 0
+            ? `actor_shard.${latestActorShardDiagnostics.failureCodes?.[0] || 'worker_failed'}`
+            : 'actor_shard.output_missing';
         latestActorShardDiagnostics = {
             ...latestActorShardDiagnostics,
             semanticActions: 0,
             heldActions: 0,
-            scheduledWithoutSemanticAction: scheduledActorIds.length,
+            scheduledTechnicalFailure: scheduledActorIds.length,
         };
         recordOperation(
             '人物行动',
-            `本轮 ${scheduledActorIds.length} 名到期人物没有形成语义行动；已累计沉默并进入公平重排`,
+            `本轮 ${scheduledActorIds.length} 名到期人物遇到技术失败；人物语义状态未改变，已进入自动恢复队列`,
             'warn',
         );
     }
@@ -8911,19 +9592,29 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         });
         let output = '';
         let validOutput = false;
-        try {
-            output = await callModel(messages, {
-                maxTokens: settings.continuityMaxTokens,
-                task: '活世界整理',
-                channel: 'fast',
-                targetIndex: captured.index,
-                jsonMode: true,
-                failover: true,
-            });
-        } catch (error) {
-            modelFailure = String(error.message || error);
-            retryReason = `世界模型调用失败：${modelFailure}`;
-            console.warn('[MVU Auto Doctor] 世界连续性模型调用失败：', error);
+        if (attempt === 0) {
+            output = prefetchedWorldOutput;
+            if (!output && prefetchedWorldFailure) {
+                modelFailure = prefetchedWorldFailure;
+                retryReason = `世界模型调用失败：${modelFailure}`;
+            }
+        } else {
+            try {
+                output = await callModel(messages, {
+                    maxTokens: settings.continuityMaxTokens,
+                    timeoutMs: settings.sovereigntyHardTimeoutMs,
+                    task: '活世界整理',
+                    channel: 'fast',
+                    instructionModule: 'world',
+                    targetIndex: captured.index,
+                    jsonMode: true,
+                    failover: true,
+                });
+            } catch (error) {
+                modelFailure = String(error.message || error);
+                retryReason = `世界模型调用失败：${modelFailure}`;
+                console.warn('[MVU Auto Doctor] 世界连续性模型调用失败：', error);
+            }
         }
         guard = continuityTargetIsCurrent(captured, token);
         if (!guard.ok) return { status: 'stale', reason: guard.reason };
@@ -9069,13 +9760,34 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             : '没有新建事件，也没有产生有依据的分类世界变化';
     }
     if (!progressed) {
-        if (actorLedgerChanged || worldPressureChanged) {
+        let stateCommitted = true;
+        if (
+            settings.sovereigntyMode !== 'shadow'
+            && (actorLedgerChanged || worldPressureChanged)
+        ) {
             namespace.actorLedger = actorLedger;
             namespace.worldPressure = worldPressure;
-            await writeChatNamespace(namespace, captured.chatId, {
+            stateCommitted = await writeChatNamespace(namespace, captured.chatId, {
                 fields: ['actorLedger', 'worldPressure'],
             });
         }
+        sovereigntyRuntime = await completeSovereigntyCycle({
+            runtime: sovereigntyRuntime,
+            tasks: sovereigntyTasks,
+            captured,
+            turn: tickTurn,
+            profilePreparation,
+            actorSettlement,
+            actorFailure: actorTechnicalFailure,
+            worldSuccess: false,
+            worldFailure: modelFailure
+                ? 'world.transport_failed'
+                : 'world.output_not_committed',
+            persistenceSuccess: stateCommitted,
+            actorLedger,
+            continuity: scheduledBase,
+            worldPressure,
+        });
         setContinuityStatus('世界连续性：本回合未产生有效世界节拍，已保留旧账本', 'error');
         return { status: 'stalled', reason: retryReason || '账本无实质变化' };
     }
@@ -9136,6 +9848,36 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         maxThreads: settings.continuityMaxThreads,
     });
 
+    if (settings.sovereigntyMode === 'shadow') {
+        sovereigntyRuntime = await completeSovereigntyCycle({
+            runtime: sovereigntyRuntime,
+            tasks: sovereigntyTasks,
+            captured,
+            turn: tickTurn,
+            profilePreparation,
+            actorSettlement,
+            actorFailure: actorTechnicalFailure,
+            worldSuccess: modelValidated,
+            worldFailure: modelFailure
+                ? 'world.transport_failed'
+                : modelValidated ? '' : 'world.output_not_committed',
+            persistenceSuccess: true,
+            actorLedger,
+            continuity: next,
+            worldPressure,
+        });
+        setContinuityStatus(
+            `世界连续性：Shadow 回放完成；候选已进检查点，未改写活动账本（档案覆盖 ${profilePreparation.coverage}%）`,
+            modelValidated ? 'ok' : 'warn',
+        );
+        return {
+            status: 'shadow',
+            active: next.threads.filter((thread) => thread.stage !== 'resolved').length,
+            actorActions: actorSettlement.accepted.length,
+            worldValidated: modelValidated,
+        };
+    }
+
     guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     const oldDigest = continuityContentDigest(namespace.continuity);
@@ -9185,13 +9927,14 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             state: storedActorLedger,
         };
     }
+    let stateCommitted = true;
     if (
         oldDigest !== newDigest
         || actorLedgerChanged
         || worldPressureChanged
         || isReroll
     ) {
-        await writeChatNamespace(namespace, captured.chatId, {
+        stateCommitted = await writeChatNamespace(namespace, captured.chatId, {
             fields: [
                 'continuity',
                 'continuityCheckpoint',
@@ -9205,6 +9948,23 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             ],
         });
     }
+    sovereigntyRuntime = await completeSovereigntyCycle({
+        runtime: sovereigntyRuntime,
+        tasks: sovereigntyTasks,
+        captured,
+        turn: tickTurn,
+        profilePreparation,
+        actorSettlement,
+        actorFailure: actorTechnicalFailure,
+        worldSuccess: modelValidated,
+        worldFailure: modelFailure
+            ? 'world.transport_failed'
+            : modelValidated ? '' : 'world.output_not_committed',
+        persistenceSuccess: stateCommitted,
+        actorLedger,
+        continuity: next,
+        worldPressure,
+    });
     guard = continuityTargetIsCurrent(captured, token);
     if (!guard.ok) return { status: 'stale', reason: guard.reason };
     applyContinuityInjection();
@@ -9302,7 +10062,7 @@ function enqueueContinuity(targetId, {
             return runContinuityTarget(fresh, { force });
         })
         .then((result) => {
-            if (dedupeKey && ['applied', 'disabled'].includes(result?.status)) {
+            if (dedupeKey && ['applied', 'disabled', 'shadow'].includes(result?.status)) {
                 continuityCompletedKeys.add(dedupeKey);
             }
             return result;
@@ -11426,6 +12186,7 @@ function buildFloatingUi() {
                     <div class="mvuad-floating-page-heading"><b>医生工具</b><span>手动操作集中在这里</span></div>
                     <div class="mvuad-model-call-stats mvuad-floating-model-call-stats" role="status"></div>
                     <div class="mvuad-floating-statuses">
+                        <div class="mvuad-floating-sovereignty-health" role="status"></div>
                         <div class="mvuad-floating-repair-status" role="status"></div>
                         <div class="mvuad-floating-hard-contract-status" role="status"></div>
                         <div class="mvuad-floating-continuity-status" role="status"></div>
@@ -11436,6 +12197,8 @@ function buildFloatingUi() {
                         <button class="menu_button mvuad-floating-repair" type="button">检查变量</button>
                         <button class="menu_button mvuad-floating-protocol" type="button">检查硬规则</button>
                         <button class="menu_button mvuad-floating-world" type="button">整理世界</button>
+                        <button class="menu_button mvuad-floating-sovereignty-retry" type="button">立即恢复</button>
+                        <button class="menu_button mvuad-floating-sovereignty-restore" type="button">恢复检查点</button>
                         <button class="menu_button mvuad-floating-cancel-task" type="button" hidden>停止当前后台任务</button>
                     </div>
                     <details class="mvuad-settings-fold mvuad-oplog-fold">
@@ -11453,6 +12216,7 @@ function buildFloatingUi() {
         floatingPanel: panel,
         floatingClose: panel.querySelector('.mvuad-floating-close'),
         floatingRepairStatus: panel.querySelector('.mvuad-floating-repair-status'),
+        floatingSovereigntyHealth: panel.querySelector('.mvuad-floating-sovereignty-health'),
         floatingHardContractStatus: panel.querySelector('.mvuad-floating-hard-contract-status'),
         floatingContinuityStatus: panel.querySelector('.mvuad-floating-continuity-status'),
         floatingForumStatus: panel.querySelector('.mvuad-floating-forum-status'),
@@ -11478,6 +12242,8 @@ function buildFloatingUi() {
         floatingOperationLogList: panel.querySelector('.mvuad-floating-oplog-list'),
         floatingModelCallStats: panel.querySelector('.mvuad-floating-model-call-stats'),
         floatingCancelTask: panel.querySelector('.mvuad-floating-cancel-task'),
+        floatingSovereigntyRetry: panel.querySelector('.mvuad-floating-sovereignty-retry'),
+        floatingSovereigntyRestore: panel.querySelector('.mvuad-floating-sovereignty-restore'),
     });
     registerLedgerSurface(panel.querySelector('.mvuad-ledger'));
     renderOperationLog();
@@ -11499,6 +12265,14 @@ function buildFloatingUi() {
     panel.querySelector('.mvuad-floating-world').addEventListener('click', () => {
         enqueueContinuity(null, { force: true });
     });
+    panel.querySelector('.mvuad-floating-sovereignty-retry').addEventListener(
+        'click',
+        retrySovereigntyNow,
+    );
+    panel.querySelector('.mvuad-floating-sovereignty-restore').addEventListener(
+        'click',
+        restoreLatestSovereigntyCheckpoint,
+    );
     panel.querySelector('.mvuad-floating-cancel-task').addEventListener('click', cancelCurrentOperations);
     panel.querySelector('.mvuad-floating-forum').addEventListener('click', openSelectedForum);
     panel.querySelector('.mvuad-ledger-refresh').addEventListener('click', renderContinuityLedger);
@@ -11518,6 +12292,7 @@ function buildFloatingUi() {
     setStatus(latestStatus, latestStatusKind, { record: false });
     setHardContractStatus(latestHardContractStatus, latestHardContractKind, { record: false });
     setContinuityStatus(latestContinuityStatus, latestContinuityKind, { record: false });
+    renderSovereigntyHealth();
     setForumStatus(latestForumStatus, latestForumKind, { record: false });
     syncFloatingUiVisibility();
     syncForumProviderUi();
@@ -12344,6 +13119,28 @@ function buildSettingsPanel() {
                                 每个完成的 AI 回合都调度一次世界节拍，并按真实因果增量维护独立事件与世界影响。
                                 不强求汇流，不替玩家行动，也不写 MVU 或数据库。
                             </div>
+                            <div class="mvuad-sovereignty-health" role="status"></div>
+                            <div class="mvuad-actions">
+                                <button class="menu_button mvuad-sovereignty-retry" type="button">立即重试技术任务</button>
+                                <button class="menu_button mvuad-sovereignty-restore" type="button">恢复稳定检查点</button>
+                            </div>
+                            <label class="mvuad-select">
+                                <span>人物主权引擎</span>
+                                <select class="text_pole mvuad-sovereignty-mode">
+                                    <option value="legacy">Legacy·旧引擎</option>
+                                    <option value="shadow">Shadow·影子观察</option>
+                                    <option value="active">Active·正式运行（推荐）</option>
+                                </select>
+                            </label>
+                            <label class="mvuad-select">
+                                <span>人物档案自动补全</span>
+                                <select class="text_pole mvuad-profile-completion-mode">
+                                    <option value="off">关闭</option>
+                                    <option value="basic">基础</option>
+                                    <option value="full">完整（推荐）</option>
+                                    <option value="full_adult">完整＋成人生理</option>
+                                </select>
+                            </label>
                             <label class="mvuad-select">
                                 <span>运行模式</span>
                                 <select class="text_pole mvuad-continuity-mode">
@@ -12453,6 +13250,27 @@ function buildSettingsPanel() {
                                     <div class="mvuad-actions">
                                         <button class="menu_button mvuad-actor-prompt-save" type="button">保存自定义提示词</button>
                                         <button class="menu_button mvuad-actor-prompt-reset" type="button">清空两个插槽</button>
+                                    </div>
+                                </div>
+                            </details>
+                            <details class="mvuad-settings-fold mvuad-global-instruction-settings">
+                                <summary>全局模型补充指令与作用域</summary>
+                                <div class="mvuad-settings-fold-body">
+                                    <div class="mvuad-description">
+                                        医生按原文注入所选模块，不审核或改写内容；服务商自身限制仍由所选接口决定。
+                                        诊断只保留启用、范围、长度、哈希和是否注入，不保存原文。
+                                    </div>
+                                    <label class="mvuad-check">
+                                        <input class="mvuad-global-instruction-enabled" type="checkbox">
+                                        <span>启用全局模型补充指令</span>
+                                    </label>
+                                    <textarea class="text_pole mvuad-global-instruction" rows="7" maxlength="12000"
+                                        placeholder="仅写你希望原样传给所选模型模块的补充指令。"></textarea>
+                                    <div class="mvuad-global-instruction-scopes"></div>
+                                    <div class="mvuad-global-instruction-save-hint" aria-live="polite"></div>
+                                    <div class="mvuad-actions">
+                                        <button class="menu_button mvuad-global-instruction-save" type="button">保存全局指令</button>
+                                        <button class="menu_button mvuad-global-instruction-clear" type="button">清空</button>
                                     </div>
                                 </div>
                             </details>
@@ -12662,6 +13480,36 @@ function buildSettingsPanel() {
     wrapper.querySelector('.mvuad-surface-open').addEventListener('click', (event) => {
         openDualSurfacePanel(event.currentTarget);
     });
+    const sovereigntyMode = wrapper.querySelector('.mvuad-sovereignty-mode');
+    sovereigntyMode.value = getSettings().sovereigntyMode;
+    sovereigntyMode.addEventListener('change', async () => {
+        getSettings().sovereigntyMode = ['legacy', 'shadow', 'active'].includes(
+            sovereigntyMode.value,
+        ) ? sovereigntyMode.value : 'active';
+        saveSettings();
+        const namespace = readChatNamespace();
+        const runtime = sovereigntyRuntimeFromNamespace(namespace);
+        await persistSovereigntyRuntime(runtime, getContext()?.chatId || '', {
+            durable: true,
+        });
+    });
+    const profileCompletionMode = wrapper.querySelector('.mvuad-profile-completion-mode');
+    profileCompletionMode.value = getSettings().actorProfileCompletionMode;
+    profileCompletionMode.addEventListener('change', () => {
+        getSettings().actorProfileCompletionMode = ['off', 'basic', 'full', 'full_adult']
+            .includes(profileCompletionMode.value)
+            ? profileCompletionMode.value
+            : 'full';
+        saveSettings();
+    });
+    wrapper.querySelector('.mvuad-sovereignty-retry').addEventListener(
+        'click',
+        retrySovereigntyNow,
+    );
+    wrapper.querySelector('.mvuad-sovereignty-restore').addEventListener(
+        'click',
+        restoreLatestSovereigntyCheckpoint,
+    );
     const continuityMode = wrapper.querySelector('.mvuad-continuity-mode');
     continuityMode.value = getSettings().continuityMode;
     continuityMode.addEventListener('change', () => {
@@ -12816,6 +13664,77 @@ function buildSettingsPanel() {
         saveNarrativePromptSlots();
         toast('info', '已清空两个用户自定义叙事提示词插槽。');
     });
+    const globalInstructionEnabled = wrapper.querySelector(
+        '.mvuad-global-instruction-enabled',
+    );
+    const globalInstructionText = wrapper.querySelector('.mvuad-global-instruction');
+    const globalInstructionScopes = wrapper.querySelector(
+        '.mvuad-global-instruction-scopes',
+    );
+    const globalInstructionHint = wrapper.querySelector(
+        '.mvuad-global-instruction-save-hint',
+    );
+    const globalScopeLabels = {
+        all: '全部模型调用',
+        profile: '档案',
+        physiology: '生理',
+        actor: '人物行动',
+        world: '世界',
+        forum: '论坛',
+        social: '社交',
+        variable: '严格变量',
+        strict: '严格通道',
+        fast: '轻量通道',
+    };
+    for (const scope of Object.keys(globalScopeLabels)) {
+        const label = document.createElement('label');
+        label.className = 'mvuad-check';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = scope;
+        input.checked = getSettings().globalModelInstructionScopes.includes(scope);
+        const span = document.createElement('span');
+        span.textContent = globalScopeLabels[scope];
+        label.append(input, span);
+        globalInstructionScopes.append(label);
+    }
+    globalInstructionEnabled.checked = getSettings().globalModelInstructionEnabled;
+    globalInstructionText.value = getSettings().globalModelInstruction;
+    const saveGlobalInstruction = ({ notify = false } = {}) => {
+        const scopes = [...globalInstructionScopes.querySelectorAll('input:checked')]
+            .map((input) => input.value);
+        const config = normalizeGlobalInstructionConfig({
+            enabled: globalInstructionEnabled.checked,
+            text: globalInstructionText.value,
+            scopes: scopes.length ? scopes : ['all'],
+        });
+        getSettings().globalModelInstructionEnabled = config.enabled;
+        getSettings().globalModelInstruction = config.text;
+        getSettings().globalModelInstructionScopes = config.scopes;
+        globalInstructionEnabled.checked = config.enabled;
+        for (const input of globalInstructionScopes.querySelectorAll('input')) {
+            input.checked = config.scopes.includes(input.value);
+        }
+        saveSettings();
+        globalInstructionHint.textContent = '已保存；诊断不包含指令原文';
+        if (notify) toast('success', '全局模型补充指令与作用域已保存。');
+    };
+    globalInstructionText.addEventListener('input', () => {
+        globalInstructionHint.textContent = '有未保存改动';
+    });
+    globalInstructionText.addEventListener('blur', () => saveGlobalInstruction());
+    globalInstructionEnabled.addEventListener('change', () => saveGlobalInstruction());
+    globalInstructionScopes.addEventListener('change', () => saveGlobalInstruction());
+    wrapper.querySelector('.mvuad-global-instruction-save').addEventListener(
+        'click',
+        () => saveGlobalInstruction({ notify: true }),
+    );
+    wrapper.querySelector('.mvuad-global-instruction-clear').addEventListener('click', () => {
+        globalInstructionText.value = '';
+        globalInstructionEnabled.checked = false;
+        saveGlobalInstruction();
+        toast('info', '已清空全局模型补充指令。');
+    });
     wrapper.querySelector('.mvuad-continuity-options').append(
         makeCheckbox('默认折叠未显现的幕后事件，保留惊喜', 'hideContinuitySpoilers'),
         makeCheckbox('显示可贴边隐藏的悬浮球', 'floatingOrbEnabled'),
@@ -12838,6 +13757,9 @@ function buildSettingsPanel() {
         socialStatus: wrapper.querySelector('.mvuad-social-status'),
         socialAuditList: wrapper.querySelector('.mvuad-social-audit-list'),
         continuityStatus: wrapper.querySelector('.mvuad-continuity-status'),
+        sovereigntyHealth: wrapper.querySelector('.mvuad-sovereignty-health'),
+        sovereigntyRetry: wrapper.querySelector('.mvuad-sovereignty-retry'),
+        sovereigntyRestore: wrapper.querySelector('.mvuad-sovereignty-restore'),
         operationLogList: wrapper.querySelector('.mvuad-settings-oplog-list'),
         modelCallStats: wrapper.querySelector('.mvuad-settings-model-call-stats'),
         cancelTask: wrapper.querySelector('.mvuad-cancel-task'),
@@ -12891,6 +13813,7 @@ function buildSettingsPanel() {
     setForumStatus(latestForumStatus, latestForumKind, { record: false });
     renderOperationLog();
     renderModelCallStats();
+    renderSovereigntyHealth();
     syncTaskCancelButtons();
     renderPromptSnapshot();
     renderEnvironmentReport();
@@ -13038,6 +13961,10 @@ function bindEvents() {
             const resolved = index < 0 ? latest.index : index;
             const captured = captureTarget(current, resolved);
             if (!captured) return;
+            // Observation is local and durable. It deliberately runs before any
+            // model, MVU, relation, or world wait so a total API outage cannot
+            // make an accepted reply disappear from the doctor's backlog.
+            await observeSovereigntyTarget(captured);
             await settleContinuityInjectionReceipts(captured);
             await settleActorLedgerInjectionReceipts(captured);
             const existingSettlement = existingTargetSettlementRecord(captured);
@@ -13228,6 +14155,9 @@ function bindEvents() {
             scheduleOpeningResourceSync();
             scheduleLatestHardContractAudit();
             inspectEnvironment({ waitForMvu: true });
+            recoverSovereigntyOnChatLoad().catch((error) => {
+                console.warn('[MVU Auto Doctor] 人物主权积压恢复失败：', error);
+            });
         };
     const chatEvents = new Set([
         types.CHAT_CHANGED || 'chat_changed',
@@ -13402,6 +14332,26 @@ function openDualSurfacePanel(trigger) {
     return installDualSurface().open(trigger);
 }
 
+async function mutateActorProfileV6(actorId, mutate) {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId || typeof mutate !== 'function') return { applied: false, reason: 'chat_missing' };
+    const namespace = readChatNamespace(context);
+    const ledger = normalizeActorLedger(namespace.actorLedger, { chatId });
+    const index = ledger.actors.findIndex((actor) => actor.id === String(actorId || ''));
+    if (index < 0) return { applied: false, reason: 'actor_missing' };
+    const actor = ledger.actors[index];
+    const result = mutate(actor.profileV6, actor, ledger);
+    if (!result?.profile) return { applied: false, reason: result?.reason || 'profile_invalid' };
+    ledger.actors[index] = { ...actor, profileV6: result.profile };
+    namespace.actorLedger = ledger;
+    const saved = await writeChatNamespace(namespace, chatId, {
+        fields: ['actorLedger'],
+        durable: true,
+    });
+    return { ...result, applied: result.applied !== false && saved, saved };
+}
+
 function initialize() {
     if (window.__MVU_AUTO_DOCTOR_INITIALIZED__) return;
     window.__MVU_AUTO_DOCTOR_INITIALIZED__ = true;
@@ -13423,8 +14373,8 @@ function initialize() {
     document.addEventListener('story-oracle-ready', disableStoryOracleAutoIfNeeded);
     window.MvuAutoDoctorAPI = Object.freeze({
         version: VERSION,
-        apiVersion: 6,
-        isCompatible: (required = 1) => Number(required) <= 6,
+        apiVersion: 7,
+        isCompatible: (required = 1) => Number(required) <= 7,
         waitForTargetSettled,
         runAfterTargetSettled,
         registerBarrierProtocolClient,
@@ -13457,6 +14407,37 @@ function initialize() {
             { chatId: getContext()?.chatId || '' },
         )),
         getActorLedgerView: () => deepClone(actorLedgerView(readChatNamespace().actorLedger)),
+        getActorProfileV6: (actorId) => {
+            const actor = normalizeActorLedger(readChatNamespace().actorLedger).actors
+                .find((entry) => entry.id === String(actorId || ''));
+            return actor ? deepClone(actorProfileV6View(actor)) : null;
+        },
+        setActorProfileV6Lock: (actorId, path, locked = true) => mutateActorProfileV6(
+            actorId,
+            (profile) => ({
+                profile: setActorProfileV6Lock(profile, { path, locked }),
+                applied: true,
+            }),
+        ),
+        overrideActorProfileV6: (actorId, path, value) => mutateActorProfileV6(
+            actorId,
+            (profile, actor, ledger) => applyActorProfileV6Override(profile, {
+                path,
+                value,
+                turn: ledger.turn,
+            }),
+        ),
+        regenerateActorProfileV6Module: (actorId, module) => mutateActorProfileV6(
+            actorId,
+            (profile, actor, ledger) => {
+                const result = regenerateActorProfileV6Module(profile, actor, {
+                    module,
+                    mode: getSettings().actorProfileCompletionMode,
+                    turn: ledger.turn,
+                });
+                return { ...result, applied: result.regenerated === true };
+            },
+        ),
         getActorActionReceipts: () => deepClone(
             normalizeActorLedger(readChatNamespace().actorLedger).actionReceipts,
         ),
@@ -13470,6 +14451,14 @@ function initialize() {
         getWorldLaneReceipts: () => deepClone(
             readChatNamespace().continuityWorldLaneReceipts || [],
         ),
+        getSovereigntyRuntime: () => deepClone(
+            normalizeSovereigntyRuntime(readChatNamespace().sovereigntyRuntime),
+        ),
+        getSovereigntyHealth: () => deepClone(
+            sovereigntyHealthView(readChatNamespace().sovereigntyRuntime),
+        ),
+        retrySovereigntyNow,
+        restoreLatestSovereigntyCheckpoint,
         clearContinuityState,
         runForum: refreshForumManual,
         getForumState: () => deepClone(readChatNamespace().forum),

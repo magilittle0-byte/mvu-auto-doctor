@@ -28,12 +28,18 @@ function collectRuntimeFiles(relativeDirectory) {
 }
 
 const runtimeFiles = [
+    'actor-authority-core.d.mts',
+    'actor-authority-core.mjs',
     'actor-ledger-core.d.mts',
     'actor-ledger-core.mjs',
+    'actor-profile-v6-core.d.mts',
+    'actor-profile-v6-core.mjs',
     'actor-shard-core.d.mts',
     'actor-shard-core.mjs',
     'continuity-core.mjs',
     'core.mjs',
+    'custom-instruction-core.d.mts',
+    'custom-instruction-core.mjs',
     'forum-core.mjs',
     'index.js',
     'manifest.json',
@@ -44,6 +50,10 @@ const runtimeFiles = [
     'serendipity-core.d.mts',
     'serendipity-core.mjs',
     'social-core.mjs',
+    'sovereignty-orchestrator-core.d.mts',
+    'sovereignty-orchestrator-core.mjs',
+    'sovereignty-runtime-core.d.mts',
+    'sovereignty-runtime-core.mjs',
     'style.css',
     'world-pressure-core.d.mts',
     'world-pressure-core.mjs',
@@ -81,10 +91,11 @@ function reportHash() {
 
 function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
-    const semanticRuntimeRequired = report.version === '2.0.0-rc.9';
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version);
+    const expectedLedgerVersion = report.version === '2.0.0-rc.10' ? 6 : 5;
     if (
         !actorLedger
-        || actorLedger.version !== (semanticRuntimeRequired ? 5 : 4)
+        || actorLedger.version !== (semanticRuntimeRequired ? expectedLedgerVersion : 4)
         || actorLedger.persistentAuditLedger !== true
         || actorLedger.continuousMigration !== true
         || actorLedger.privateThoughtsHidden !== true
@@ -115,6 +126,39 @@ function validateActorLedgerEvidence(report) {
             )
         )
     ) fail('Actor Ledger closed-loop evidence is incomplete');
+}
+
+function validateSovereigntyEvidence(report) {
+    if (report.version !== '2.0.0-rc.10') return;
+    const sovereignty = report.checks?.sovereigntyRuntime;
+    if (
+        !sovereignty
+        || sovereignty.schemaVersion !== 1
+        || sovereignty.observedThroughIndependentOfModel !== true
+        || sovereignty.simulatedThroughCommitOnly !== true
+        || sovereignty.durableBacklog !== true
+        || sovereignty.versionedCheckpoints !== true
+        || sovereignty.orphanRunningRecovered !== true
+        || sovereignty.technicalFailureSeparatedFromActors !== true
+        || sovereignty.retryUsesLatestState !== true
+        || sovereignty.historicalActionFabricationCount !== 0
+        || sovereignty.moduleFailureIsolation !== true
+        || sovereignty.slotFailureIsolation !== true
+        || sovereignty.healthStates?.join(',') !== 'green,yellow,orange,red,blue'
+        || sovereignty.foregroundWaitMaximumMs > 5000
+        || sovereignty.hardTimeoutMaximumMs > 35000
+        || sovereignty.profileVersion !== 6
+        || sovereignty.firstActionProfileCoveragePercent !== 100
+        || sovereignty.continuityGoalsWritten !== 0
+        || sovereignty.actorTerminalReceiptCoveragePercent !== 100
+        || sovereignty.playerActionForgeryCount !== 0
+        || sovereignty.playerConsentForgeryCount !== 0
+        || sovereignty.playerFeelingForgeryCount !== 0
+        || sovereignty.backgroundResultPrematureInjectionCount !== 0
+        || sovereignty.hiddenAbilityWithoutHistoryCount !== 0
+        || sovereignty.customInstructionScopeCoveragePercent !== 100
+        || sovereignty.customInstructionRawTextInDiagnostics !== false
+    ) fail('actor-sovereignty evidence is incomplete');
 }
 
 function validateWorldPressureEvidence(report) {
@@ -172,7 +216,7 @@ function validateSerendipityEvidence(report) {
 }
 
 function validateRc6PassReport(report) {
-    const semanticRuntimeRequired = report.version === '2.0.0-rc.9';
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version);
     const billing = report.checks?.billingRemoval;
     if (
         !billing
@@ -325,7 +369,7 @@ function validateRc6PassReport(report) {
     const artifact = report.releaseArtifact;
     if (
         !artifact
-        || artifact.files !== 73
+        || artifact.files !== (report.version === '2.0.0-rc.10' ? 84 : 73)
         || artifact.bytes < 1
         || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
         || artifact.containsSerendipityCore !== true
@@ -342,7 +386,9 @@ function validateRc6PassReport(report) {
         || publication.forcePushAllowed !== false
         || !publication.allowedRemoteRefs?.includes('refs/heads/main')
         || !publication.allowedRemoteRefs?.includes(
-            'refs/heads/codex/serendipity-engine-no-billing',
+            report.version === '2.0.0-rc.10'
+                ? 'refs/heads/codex/actor-sovereignty-engine'
+                : 'refs/heads/codex/serendipity-engine-no-billing',
         )
         || publication.tagAllowed !== false
         || publication.githubReleaseAllowed !== false
@@ -829,6 +875,7 @@ function loadAndValidateReport() {
         fail('automated suite evidence is incomplete');
     }
     validateActorLedgerEvidence(report);
+    validateSovereigntyEvidence(report);
     validateWorldPressureEvidence(report);
     validateSerendipityEvidence(report);
     if (report.result === 'blocked') {
@@ -837,7 +884,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

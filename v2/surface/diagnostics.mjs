@@ -57,6 +57,8 @@ export function createPrivacySafeDiagnosticProjection({
     barrierProtocol = {},
     actorShards = {},
     userPrompts = {},
+    sovereignty = {},
+    customInstruction = {},
 } = {}) {
     const statusKinds = Object.fromEntries(
         Object.entries(statuses).map(([key, value]) => [
@@ -177,6 +179,44 @@ export function createPrivacySafeDiagnosticProjection({
                         .filter((value) => /^actor_shard\.[a-z0-9_.-]+$/u.test(value)),
                 ),
             ].slice(0, 8),
+        },
+        sovereignty: {
+            color: String(sovereignty?.color || ''),
+            mode: String(sovereignty?.mode || ''),
+            observedThrough: Math.max(0, Number(sovereignty?.observedThrough?.turn) || 0),
+            simulatedThrough: Math.max(0, Number(sovereignty?.simulatedThrough?.turn) || 0),
+            lastSuccessTurn: Math.max(0, Number(sovereignty?.lastSuccessTurn) || 0),
+            backlog: Math.max(0, Number(sovereignty?.backlog) || 0),
+            pending: Math.max(0, Number(sovereignty?.pending) || 0),
+            running: Math.max(0, Number(sovereignty?.running) || 0),
+            retryableFailed: Math.max(0, Number(sovereignty?.retryableFailed) || 0),
+            deferred: Math.max(0, Number(sovereignty?.deferred) || 0),
+            lag: Math.max(0, Number(sovereignty?.lag) || 0),
+            failingModules: (Array.isArray(sovereignty?.failingModules)
+                ? sovereignty.failingModules
+                : []).map((value) => String(value || '')).slice(0, 12),
+            nextRetryTurn: Math.max(0, Number(sovereignty?.nextRetryTurn) || 0),
+            checkpointCount: Math.max(0, Number(sovereignty?.checkpointCount) || 0),
+            technicalReceiptCount: Math.max(
+                0,
+                Number(sovereignty?.technicalReceiptCount) || 0,
+            ),
+        },
+        customInstruction: {
+            enabled: customInstruction?.enabled === true,
+            scopes: (Array.isArray(customInstruction?.scopes)
+                ? customInstruction.scopes
+                : []).map((value) => String(value || '')).slice(0, 12),
+            length: Math.max(0, Number(customInstruction?.length) || 0),
+            hash: String(customInstruction?.hash || ''),
+            injectionCount: Math.max(0, Number(customInstruction?.injectionCount) || 0),
+            records: (Array.isArray(customInstruction?.records)
+                ? customInstruction.records
+                : []).map((entry) => ({
+                module: String(entry?.module || ''),
+                channel: String(entry?.channel || ''),
+                injected: entry?.injected === true,
+            })).slice(-80),
         },
         userPrompts: Object.fromEntries(
             Object.entries(userPrompts || {}).map(([key, value]) => [

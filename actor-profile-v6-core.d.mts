@@ -1,0 +1,14 @@
+export const ACTOR_PROFILE_V6_VERSION: number;
+export const ACTOR_SOVEREIGNTY_DIVERSITY_CONTRACT: string;
+export const ACTOR_PROFILE_COMPLETION_MODES: readonly string[];
+export const ACTOR_PROFILE_SOURCES: readonly string[];
+export const ACTOR_PROFILE_MODULES: readonly string[];
+export function emptyActorProfileV6(actorId?: string, name?: string, options?: object): object;
+export function normalizeActorProfileV6(value: unknown, options?: object): object;
+export function prepareActorProfileV6(actor: unknown, options?: object): object;
+export function prepareActorLedgerProfilesV6(value: unknown, options?: object): object;
+export function actorProfileReadyForAction(actor: unknown): boolean;
+export function setActorProfileV6Lock(value: unknown, options?: object): object;
+export function applyActorProfileV6Override(value: unknown, options?: object): object;
+export function regenerateActorProfileV6Module(value: unknown, actor: unknown, options?: object): object;
+export function actorProfileV6View(actor: unknown): object;
