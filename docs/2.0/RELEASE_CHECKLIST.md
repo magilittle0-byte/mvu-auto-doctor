@@ -78,7 +78,7 @@ SillyTavern / spv8.7.4 与完全隐藏 TauriTavern 证据；旧 rc.10 结果不�
 - [x] 真实 SillyTavern / spv8.7.4 / TavernDB：人物页、重载与数据库共存通过；API 116 方法，医生/数据库/TavernHelper 错误均为0。
 - [x] GemAI `gemini-3.1-pro-preview`：A/B 15/15；纯合成长世界整链 3/3 HTTP 200，世界整理 21.7 秒并落成 applied。
 - [x] 完全隐藏 TauriTavern：桌面与390×844人物页通过，API v8/55方法，沙箱精确恢复，窗口/端口/进程清理完成。
-- [ ] `release:build`、`qc:ci/install/record/gate`、diff check 与凭据扫描通过。
+- [x] `release:build`、`qc:ci/install/record/gate`、diff check 与凭据扫描通过。
 
 ## rc.10 历史自动与真实 QC（不作为 rc.11 通过证据）
 
