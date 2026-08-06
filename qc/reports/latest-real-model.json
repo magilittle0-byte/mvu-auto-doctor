@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "host": {
+    "version": "1.18.0",
+    "port": 8011,
+    "headless": true,
+    "sterileDataRoot": true
+  },
+  "setup": {
+    "privateSettingsCopied": false,
+    "privateChatsCopied": false,
+    "privateCharactersCopied": false,
+    "credentialWrittenToDisk": false,
+    "credentialInjectedIntoBrowserMemory": true,
+    "databaseRuntimeLoaded": false,
+    "syntheticFixture": true,
+    "originalUserDataModified": false,
+    "model": "gemini-3.1-pro-preview",
+    "credentialSource": "authorized-project-history-memory",
+    "candidateVersion": "2.0.0-rc.11",
+    "candidateIndexSha256": "5cf8b3a0371d855d68e037a4406b25071177c2608ea841ef1e6d61b62dc9e11d",
+    "legacyPublicRuntimeTemporarilyReplaced": true
+  },
+  "runtime": {
+    "hostHttpStatus": 200,
+    "credentialPreloadedInMemoryProxy": false,
+    "doctorVersion": "2.0.0-rc.11",
+    "status": "failed",
+    "correctionStatus": "failed",
+    "modelCallDelta": 3,
+    "attemptCount": 1,
+    "modelAttempted": true,
+    "modelCompleted": true,
+    "fallbackUsed": false,
+    "localStructureRepairAttempted": false,
+    "structureRepairAttempted": false,
+    "replaceCalls": 0,
+    "relationshipAfterFailure": {
+      "trust": 40,
+      "relationship": "fanatic"
+    },
+    "failureZeroWrite": true,
+    "continuityStatus": "applied",
+    "continuityClockOnly": false,
+    "actorWorldSettled": true,
+    "actorSemanticSettled": true,
+    "actorReceiptCount": 3,
+    "actorLedgerPublicCount": 1,
+    "actorSemanticProgressCount": 1,
+    "actorStateFactCount": 1,
+    "actorConsecutiveFailureCount": 0,
+    "actorShardDiagnostic": {
+      "status": "completed",
+      "selected": 1,
+      "completed": 1,
+      "succeeded": 1,
+      "failed": 0,
+      "semanticActions": 1,
+      "heldActions": 0,
+      "failureCodes": [],
+      "acceptedActions": 0,
+      "rejectedActions": 0,
+      "rejectionReasons": []
+    },
+    "modelDiagnostics": [
+      {
+        "phase": "transport",
+        "task": "活世界整理",
+        "status": "succeeded",
+        "durationMs": 21666,
+        "queueWaitMs": 0,
+        "httpStatus": 200,
+        "failureKind": "",
+        "reason": "",
+        "routeSlotIndex": 1
+      },
+      {
+        "phase": "transport",
+        "task": "活世界 NPC 分片",
+        "status": "succeeded",
+        "durationMs": 11175,
+        "queueWaitMs": 1,
+        "httpStatus": 200,
+        "failureKind": "",
+        "reason": "",
+        "routeSlotIndex": 2
+      },
+      {
+        "phase": "transport",
+        "task": "人物关系二审",
+        "status": "succeeded",
+        "durationMs": 11765,
+        "queueWaitMs": 1,
+        "httpStatus": 200,
+        "failureKind": "",
+        "reason": "",
+        "routeSlotIndex": 0
+      }
+    ],
+    "worldLaneTypes": [
+      "environment",
+      "faction"
+    ],
+    "worldLaneReceiptCount": 2,
+    "worldLaneIndependentOfActors": true,
+    "promptInfo": {
+      "task": "活世界 NPC 分片",
+      "capturedAt": 1786036527391,
+      "maxTokens": 1200,
+      "totalChars": 4834,
+      "segments": [
+        {
+          "role": "system",
+          "chars": 1724
+        },
+        {
+          "role": "user",
+          "chars": 3110
+        }
+      ]
+    },
+    "proxyMetrics": [
+      {
+        "status": 200,
+        "inputBytes": 3422,
+        "model": "gemini-3.1-pro-preview",
+        "durationMs": 11760
+      },
+      {
+        "status": 200,
+        "inputBytes": 8280,
+        "model": "gemini-3.1-pro-preview",
+        "durationMs": 11173
+      },
+      {
+        "status": 200,
+        "inputBytes": 30850,
+        "model": "gemini-3.1-pro-preview",
+        "durationMs": 21662
+      }
+    ],
+    "credentialDeleteStatus": 200,
+    "credentialLoadedAfterDelete": false,
+    "doctorErrorCount": 0,
+    "processErrorCount": 6,
+    "errorDigests": [
+      "93049d378def2fa7ed2eb66897d3b52186158567d1ac2995bd3f7c9c68123687",
+      "c8b256e54a85a0224f568dd5588a324ee329015d77c023cff784dab9466426fa",
+      "90156edd616af88e8e6a244ddc8047fa34f3c1f0b639517f8d4f985865771d72",
+      "f157f677347e07fc9d67275e6709a6a025ddfed5bf5bc4ff4ff6e5b5ffeb2bf4"
+    ]
+  },
+  "cleanup": {
+    "browserClosed": true,
+    "serverStopped": true,
+    "proxyStopped": true,
+    "externalProxyCleanupRequired": false,
+    "hostPortClosed": true,
+    "proxyPortClosed": true,
+    "temporaryDataRemoved": true,
+    "legacyPublicRuntimeRestored": true,
+    "credentialClearedFromNodeMemory": true,
+    "originalUserDataModified": false
+  }
+}

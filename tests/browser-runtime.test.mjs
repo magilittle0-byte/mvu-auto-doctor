@@ -902,7 +902,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.10');
+    assert.equal(continuity.version, '2.0.0-rc.11');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -934,6 +934,10 @@ try {
     );
     assert.doesNotMatch(continuity.calls.repairSystem, /<CorrectedContent>/u);
     assert.match(continuity.calls.repairUser, /这是开局\/人物创建审计/u);
+    assert.ok(
+        continuity.calls.continuitySystem.length + continuity.calls.continuityUser.length <= 40_000,
+        `活世界提示必须保持有界，不能重现 7 万字以上真实失败路径（实际 ${continuity.calls.continuitySystem.length + continuity.calls.continuityUser.length}）`,
+    );
     assert.ok(continuity.hardAudit, '每条新回复必须完成零模型调用的硬合同检查');
     assert.match(continuity.hardStatus, /硬合同/u);
     assert.match(continuity.hardDetails, /未发现可由程序确定/u);
@@ -2042,6 +2046,131 @@ try {
         /来源事件未绑定事件账本/u,
         '分类世界条目必须显示与事件账本的因果绑定状态',
     );
+    await page.evaluate(async () => {
+        const namespace = window.__TEST__.context.chatMetadata.mvu_auto_doctor;
+        window.__ACTOR_LEDGER_BEFORE_PROFILE_UI__ = structuredClone(namespace.actorLedger || null);
+        namespace.actorLedger = {
+            version: 5,
+            chatId: 'chat-a',
+            turn: 4,
+            actors: [{
+                id: 'NPC-PROFILE-UI',
+                name: '艾达',
+                status: 'active',
+                identity: {
+                    role: '港口抄写员',
+                    aliases: ['小艾'],
+                    traits: ['核对来源'],
+                    desires: ['完成交接'],
+                    boundaries: ['不伪造记录'],
+                    socialStyle: '先确认边界',
+                    decisionStyle: '先查证后行动',
+                    speechStyle: '短句说明事实',
+                    everydayHabits: ['整理笔记'],
+                    blindSpots: ['不熟悉远洋航线'],
+                },
+                lineage: { rootActorId: 'NPC-PROFILE-UI', currentForm: '艾达', forms: [] },
+                longTermGoals: ['保住港口档案'],
+                currentGoals: ['核对交接册'],
+                constraints: ['时间有限'],
+                stateFacts: [],
+                knowledge: [],
+                location: { name: '北港', evidence: ['synthetic-ui-fixture'] },
+                resources: [],
+                capabilities: [],
+                relationships: [],
+                commitments: [],
+                stimuli: [],
+                actionHistory: [],
+                plan: { summary: '先核对三份交接册', status: 'active', nextWindow: '夜班前' },
+                evidence: ['synthetic-ui-fixture'],
+            }],
+        };
+        for (const module of [
+            'identity', 'personality', 'relationships', 'goals', 'knowledge',
+            'resourcesCapabilities', 'dynamicState', 'actionHistory', 'physiology',
+        ]) {
+            const result = await window.MvuAutoDoctorAPI.regenerateActorProfileV6Module(
+                'NPC-PROFILE-UI',
+                module,
+            );
+            if (!result?.applied) throw new Error(`profile fixture failed: ${module}`);
+        }
+    });
+    await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="actors"]');
+    await page.waitForFunction(() => (
+        document.querySelectorAll('#mvuad-floating-panel .mvuad-profile-module').length === 9
+    ));
+    const actorProfilePanel = await page.evaluate(() => {
+        const actorPage = document.querySelector(
+            '#mvuad-floating-panel .mvuad-floating-page[data-page="actors"]',
+        );
+        const card = actorPage?.querySelector('.mvuad-actor-profile-card');
+        const controls = [...(card?.querySelectorAll('.menu_button') || [])]
+            .filter((button) => button.getClientRects().length > 0)
+            .map((button) => {
+                const rect = button.getBoundingClientRect();
+                return { width: rect.width, height: rect.height, text: button.textContent };
+            });
+        return {
+            hidden: actorPage?.hidden,
+            actorCount: actorPage?.querySelector('.mvuad-actor-profile-select')?.options.length || 0,
+            modules: actorPage?.querySelectorAll('.mvuad-profile-module').length || 0,
+            sourceBadges: actorPage?.querySelectorAll('.mvuad-profile-source').length || 0,
+            text: actorPage?.textContent || '',
+            scrollWidth: actorPage?.scrollWidth || 0,
+            clientWidth: actorPage?.clientWidth || 0,
+            controls,
+        };
+    });
+    assert.equal(actorProfilePanel.hidden, false);
+    assert.equal(actorProfilePanel.actorCount, 1);
+    assert.equal(actorProfilePanel.modules, 9, '人物页必须显示全部九类 V6 档案，而非只有事件');
+    assert.ok(actorProfilePanel.sourceBadges >= 9, '人物档案字段必须显示来源标签');
+    assert.match(actorProfilePanel.text, /人物档案/u);
+    assert.match(actorProfilePanel.text, /身份/u);
+    assert.match(actorProfilePanel.text, /人格/u);
+    assert.match(actorProfilePanel.text, /版本历史/u);
+    assert.ok(
+        actorProfilePanel.scrollWidth <= actorProfilePanel.clientWidth + 1,
+        `390px 人物档案不得横向溢出：${JSON.stringify(actorProfilePanel)}`,
+    );
+    assert.ok(
+        actorProfilePanel.controls.every((control) => control.width >= 42 && control.height >= 42),
+        `人物档案移动控件必须可触摸：${JSON.stringify(actorProfilePanel.controls)}`,
+    );
+    const speechField = page.locator(
+        '#mvuad-floating-panel .mvuad-profile-field[data-path="modules.personality.data.speechStyle"]',
+    );
+    await speechField.locator('.mvuad-profile-field-edit').click();
+    await speechField.locator('textarea').fill('先核实来源，再用一句话回答');
+    await speechField.getByRole('button', { name: '保存覆盖' }).click();
+    await page.waitForFunction(() => (
+        document.querySelector(
+            '#mvuad-floating-panel .mvuad-profile-field[data-path="modules.personality.data.speechStyle"] .mvuad-profile-field-value',
+        )?.textContent === '先核实来源，再用一句话回答'
+    ));
+    await page.locator(
+        '#mvuad-floating-panel .mvuad-profile-field[data-path="modules.personality.data.speechStyle"] .mvuad-profile-field-lock',
+    ).click();
+    await page.evaluate(async () => {
+        await window.MvuAutoDoctorAPI.regenerateActorProfileV6Module(
+            'NPC-PROFILE-UI',
+            'personality',
+        );
+    });
+    assert.equal(
+        await page.locator(
+            '#mvuad-floating-panel .mvuad-profile-field[data-path="modules.personality.data.speechStyle"] .mvuad-profile-field-value',
+        ).textContent(),
+        '先核实来源，再用一句话回答',
+        '锁定的手工覆盖必须在后续自动补全后保持不变',
+    );
+    await page.evaluate(() => {
+        window.__TEST__.context.chatMetadata.mvu_auto_doctor.actorLedger =
+            window.__ACTOR_LEDGER_BEFORE_PROFILE_UI__;
+        delete window.__ACTOR_LEDGER_BEFORE_PROFILE_UI__;
+    });
     await page.click('#mvuad-floating-panel .mvuad-floating-tabs button[data-page="threads"]');
     assert.equal(
         await page.evaluate(() => document.querySelector('#mvuad-floating-panel .mvuad-floating-page[data-page="threads"]')?.hidden),
@@ -2570,7 +2699,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.10');
+    assert.equal(lifecycle.version, '2.0.0-rc.11');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -5091,6 +5220,36 @@ try {
     assert.equal(busy.calls.model.length, 0, 'MVU 持续繁忙时必须在调用模型前安全终止');
     await busyPage.close();
 
+    const longWorldPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await longWorldPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await longWorldPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    const longWorldResult = await longWorldPage.evaluate(async () => {
+        const t = window.__TEST__;
+        const syntheticWorld = '合成长世界设定：北港班次、仓储、天气与公开交通规则。'.repeat(2600);
+        const syntheticNarrative = '合成长正文只描述公开巡检与普通交接，没有私人记录。'.repeat(1800);
+        t.context.characters[0].data.character_book.entries.push({
+            comment: 'synthetic-long-world',
+            constant: true,
+            disable: false,
+            order: 99,
+            content: syntheticWorld,
+        });
+        t.context.chat[2].mes = `${syntheticNarrative}\n<UpdateVariable><Analysis>正确</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>`;
+        const result = await window.MvuAutoDoctorAPI.runContinuity();
+        return {
+            result,
+            sourceChars: syntheticWorld.length + syntheticNarrative.length,
+            promptChars: t.calls.continuitySystem.length + t.calls.continuityUser.length,
+        };
+    });
+    assert.ok(longWorldResult.sourceChars > 100_000, '回归必须真实构造超过诊断样本规模的合成长上下文');
+    assert.ok(
+        longWorldResult.promptChars <= 40_000,
+        `超长角色卡/世界书/正文必须压缩到活世界预算内（实际 ${longWorldResult.promptChars}）`,
+    );
+    assert.notEqual(longWorldResult.result.status, 'stalled');
+    await longWorldPage.close();
+
     const rateLimitPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await rateLimitPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await rateLimitPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -5173,10 +5332,18 @@ try {
         const before = t.calls.model.filter((kind) => kind === 'continuity').length;
         const result = await window.MvuAutoDoctorAPI.runContinuity();
         const after = t.calls.model.filter((kind) => kind === 'continuity').length;
-        return { result, calls: after - before };
+        return {
+            result,
+            calls: after - before,
+            state: window.MvuAutoDoctorAPI.getContinuityState(),
+            status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        };
     });
     assert.equal(transportResult.calls, 1, '连接/鉴权/服务错误不得立即重试活世界模型');
-    assert.equal(transportResult.result.status, 'stalled');
+    assert.equal(transportResult.result.status, 'degraded');
+    assert.equal(transportResult.result.degraded, true);
+    assert.equal(transportResult.state.lastTick.action, 'held');
+    assert.match(transportResult.status, /保留全部确认状态|自动恢复/u);
     await transportPage.close();
 
     const futureTurnPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -5477,7 +5644,10 @@ try {
         let localContinuityRuns = 0;
         window.StoryOracleAPI.run = async (messages) => {
             const system = messages[0].content;
-            if (!system.includes('活世界事件')) return originalRun(messages);
+            if (
+                !system.includes('活世界事件')
+                && !system.includes('上一条活世界候选')
+            ) return originalRun(messages);
             localContinuityRuns += 1;
             t.calls.model.push('continuity');
             t.calls.continuityRuns += 1;
@@ -5522,7 +5692,10 @@ try {
         let localContinuityRuns = 0;
         window.StoryOracleAPI.run = async (messages) => {
             const system = messages[0].content;
-            if (!system.includes('活世界事件')) return originalRun(messages);
+            if (
+                !system.includes('活世界事件')
+                && !system.includes('上一条活世界候选')
+            ) return originalRun(messages);
             localContinuityRuns += 1;
             t.calls.model.push('continuity');
             t.calls.continuityRuns += 1;

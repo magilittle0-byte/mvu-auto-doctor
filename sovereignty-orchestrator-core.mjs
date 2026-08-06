@@ -135,6 +135,8 @@ export async function runSovereigntyAgentPool({
     jobs = [],
     runAgent,
     limits = {},
+    timeoutMs = 0,
+    signal = null,
 } = {}) {
     if (typeof runAgent !== 'function') throw new TypeError('runAgent is required');
     const normalizedLimits = {
@@ -145,9 +147,32 @@ export async function runSovereigntyAgentPool({
     };
     const selected = selectedJobs(jobs, normalizedLimits);
     const startedAt = Date.now();
-    const results = await Promise.allSettled(selected.map((job) => (
-        Promise.resolve().then(() => runAgent(clone(job)))
-    )));
+    const boundedTimeoutMs = integer(timeoutMs, 0, 300_000, 0);
+    const results = await Promise.allSettled(selected.map(async (job) => {
+        const controller = new AbortController();
+        const abortFromParent = () => controller.abort(signal?.reason || 'agent-pool-aborted');
+        if (signal?.aborted) abortFromParent();
+        else signal?.addEventListener?.('abort', abortFromParent, { once: true });
+        let timer = null;
+        const work = Promise.resolve().then(() => runAgent(clone(job), {
+            signal: controller.signal,
+        }));
+        try {
+            if (!boundedTimeoutMs) return await work;
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    controller.abort('agent-pool-timeout');
+                    const error = new Error(`agent pool exceeded ${boundedTimeoutMs}ms`);
+                    error.code = 'AGENT_POOL_TIMEOUT';
+                    reject(error);
+                }, boundedTimeoutMs);
+            });
+            return await Promise.race([work, timeout]);
+        } finally {
+            if (timer) clearTimeout(timer);
+            signal?.removeEventListener?.('abort', abortFromParent);
+        }
+    }));
     let next = clone(blackboard);
     const completed = [];
     for (let index = 0; index < selected.length; index += 1) {

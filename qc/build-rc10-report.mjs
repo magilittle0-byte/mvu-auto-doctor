@@ -7,7 +7,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const version = JSON.parse(
     fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'),
 ).version;
-if (version !== '2.0.0-rc.10') throw new Error('rc.10 manifest is required');
+if (version !== '2.0.0-rc.11') throw new Error('rc.11 manifest is required');
 
 function collectRuntimeFiles(relativeDirectory) {
     const files = [];
@@ -86,8 +86,37 @@ function zipEntryCount(buffer) {
 const artifactName = fs.readdirSync(path.join(root, 'dist')).find((name) => (
     name.includes(`v${version}_`) && name.toLowerCase().endsWith('.zip')
 ));
-if (!artifactName) throw new Error('rc.10 release artifact is missing');
+if (!artifactName) throw new Error('rc.11 release artifact is missing');
 const artifact = fs.readFileSync(path.join(root, 'dist', artifactName));
+const sovereigntyEvidence = JSON.parse(fs.readFileSync(
+    path.join(root, 'qc', 'reports', 'latest-sovereignty-gemini-ab.json'),
+    'utf8',
+));
+const realModelEvidence = JSON.parse(fs.readFileSync(
+    path.join(root, 'qc', 'reports', 'latest-real-model.json'),
+    'utf8',
+));
+const realDatabaseEvidence = JSON.parse(fs.readFileSync(
+    path.join(root, 'qc', 'reports', 'latest-real-database.json'),
+    'utf8',
+));
+const realTauriEvidence = JSON.parse(fs.readFileSync(
+    path.join(root, 'qc', 'reports', 'latest-real-tauri.json'),
+    'utf8',
+));
+if (
+    sovereigntyEvidence.accepted !== true
+    || sovereigntyEvidence.model !== 'gemini-3.1-pro-preview'
+    || sovereigntyEvidence.syntheticOnly !== true
+    || realModelEvidence.failure
+    || realModelEvidence.setup?.model !== 'gemini-3.1-pro-preview'
+    || realDatabaseEvidence.failure
+    || realDatabaseEvidence.setup?.candidateVersion !== version
+    || realDatabaseEvidence.cleanup?.portClosed !== true
+    || realTauriEvidence.failure
+    || realTauriEvidence.setup?.candidateVersion !== version
+    || realTauriEvidence.cleanup?.baselineRestored !== true
+) throw new Error('current rc.11 real-model evidence is missing or failed');
 const report = JSON.parse(fs.readFileSync(
     path.join(root, 'docs', 'qc-reports', 'v2.0.0-rc.9.json'),
     'utf8',
@@ -107,12 +136,12 @@ report.releaseArtifact = {
     allowlistVerified: true,
 };
 report.checks.testSuite = {
-    total: 274,
-    passed: 274,
+    total: 277,
+    passed: 277,
     failed: 0,
     todo: 0,
     skipped: 0,
-    durationMs: 151168.2287,
+    durationMs: 141686.361,
 };
 Object.assign(report.checks.actorLedger, {
     version: 6,
@@ -155,26 +184,33 @@ report.checks.sovereigntyRuntime = {
     customInstructionScopeCoveragePercent: 100,
     customInstructionRawTextInDiagnostics: false,
 };
+const databaseRuntime = realDatabaseEvidence.runtime || {};
+const databaseResponses = Array.isArray(databaseRuntime.databaseBundleResponses)
+    ? databaseRuntime.databaseBundleResponses
+    : [];
 Object.assign(report.checks.realDatabaseCompatibility.latest, {
-    evidenceRole: 'current-rc10-headless-probe',
+    evidenceRole: 'current-rc11-headless-probe',
     doctorVersionVisible: version,
-    authorImportSha256:
-        '01fc50dcd696d25e7ffef0b37f5816b173f87b644979cd9985263d1a99cbac65',
-    officialBundleSha256:
-        'bb27c0936cbb719184b83890d4f2e6738895e04ec027ebc5618ed01ad29f1efb',
-    bundleRequestCount: 6,
-    bundleResponseCount: 6,
-    bundleSuccessResponseCount: 2,
-    apiMethods: 116,
-    reloadApiMethods: 116,
-    uiSurfaceCountBeforeReload: 7,
-    reloadUiSurfaceCount: 3,
+    authorImportSha256: realDatabaseEvidence.setup?.authorImportSha256,
+    officialBundleSha256: databaseResponses.find(
+        (entry) => entry.status === 200,
+    )?.sha256 || '',
+    bundleRequestCount: databaseRuntime.databaseBundleRequestCount,
+    bundleResponseCount: databaseResponses.length,
+    bundleSuccessResponseCount: databaseResponses.filter(
+        (entry) => entry.status === 200,
+    ).length,
+    apiMethods: databaseRuntime.databaseApiMethodCount,
+    reloadApiMethods: databaseRuntime.reload?.databaseApiMethodCount,
+    uiSurfaceCountBeforeReload: databaseRuntime.databaseUiSurfaceCount,
+    reloadUiSurfaceCount: databaseRuntime.reload?.databaseUiSurfaceCount,
+    actorProfileTabVisible: databaseRuntime.uiProbe?.actorProfileTabVisible === true,
     result: 'pass',
-    doctorRuntimeErrorCount: 0,
-    databaseRuntimeErrorCount: 0,
-    tavernHelperRuntimeErrorCount: 0,
-    temporaryDataRemoved: true,
-    isolatedHostPortClosed: true,
+    doctorRuntimeErrorCount: databaseRuntime.errorCounts?.doctor,
+    databaseRuntimeErrorCount: databaseRuntime.errorCounts?.database,
+    tavernHelperRuntimeErrorCount: databaseRuntime.errorCounts?.['tavern-helper'],
+    temporaryDataRemoved: realDatabaseEvidence.cleanup?.temporaryDataRemoved === true,
+    isolatedHostPortClosed: realDatabaseEvidence.cleanup?.portClosed === true,
 });
 Object.assign(report.checks.realModel, {
     result: 'affected-paths-passed',
@@ -237,6 +273,70 @@ Object.assign(report.checks.realModel, {
         rawResponsesPersisted: false,
     },
 });
+const realRuntime = realModelEvidence.runtime || {};
+const realCleanup = realModelEvidence.cleanup || {};
+const realMetrics = Array.isArray(realRuntime.proxyMetrics)
+    ? realRuntime.proxyMetrics
+    : [];
+const guardedMeans = Object.values(sovereigntyEvidence.meanScores?.guarded || {})
+    .map(Number)
+    .filter(Number.isFinite);
+Object.assign(report.checks.realModel, {
+    attempts: realMetrics.length,
+    succeeded: realMetrics.filter((metric) => metric.status === 200).length,
+    failed: realMetrics.filter((metric) => metric.status !== 200).length,
+    proxyStatuses: realMetrics.map((metric) => metric.status),
+    inputBytes: realMetrics.map((metric) => metric.inputBytes),
+    durationMs: realMetrics.map((metric) => metric.durationMs),
+    doctorModelCallDelta: realRuntime.modelCallDelta,
+    doctorFallbackUsed: realRuntime.fallbackUsed,
+    doctorModelCompleted: realRuntime.modelCompleted,
+    appliedContinuityCalls: realRuntime.continuityStatus === 'applied' ? 1 : 0,
+    actorWorldSettled: realRuntime.actorWorldSettled,
+    actorReceiptCount: realRuntime.actorReceiptCount,
+    actorSemanticSettled: realRuntime.actorSemanticSettled,
+    actorSemanticProgressCount: realRuntime.actorSemanticProgressCount,
+    actorStateFactCount: realRuntime.actorStateFactCount,
+    actorConsecutiveFailureCount: realRuntime.actorConsecutiveFailureCount,
+    actorShardSemanticActions: realRuntime.actorShardDiagnostic?.semanticActions,
+    actorShardHeldActions: realRuntime.actorShardDiagnostic?.heldActions,
+    clockOnly: realRuntime.continuityClockOnly,
+    worldLaneTypes: realRuntime.worldLaneTypes,
+    worldLaneReceiptCount: realRuntime.worldLaneReceiptCount,
+    worldLaneIndependentOfActors: realRuntime.worldLaneIndependentOfActors,
+    secondModelStructureRepairAttempted: realRuntime.structureRepairAttempted,
+    relationshipReplaceCalls: realRuntime.replaceCalls,
+    relationshipStateUnchanged: realRuntime.failureZeroWrite,
+    databaseRuntimeLoadedDuringModelProbe:
+        realModelEvidence.setup?.databaseRuntimeLoaded === true,
+    syntheticFixtureUsed: realModelEvidence.setup?.syntheticFixture === true,
+    credentialClearedFromBrowserMemory:
+        realCleanup.credentialClearedFromNodeMemory === true,
+    credentialClearedFromProxy: realRuntime.credentialLoadedAfterDelete === false,
+    proxyStopped: realCleanup.proxyStopped === true,
+    hostPortClosed: realCleanup.hostPortClosed === true,
+    proxyPortClosed: realCleanup.proxyPortClosed === true,
+    sovereigntyAb: {
+        scenarios: sovereigntyEvidence.scenarioCount,
+        logicalCalls: sovereigntyEvidence.logicalCalls,
+        logicalSuccesses: sovereigntyEvidence.logicalSuccesses,
+        failedAttempts: sovereigntyEvidence.failedAttempts,
+        maximumConcurrency: sovereigntyEvidence.maximumConcurrency,
+        guardedWins: sovereigntyEvidence.winners?.guarded,
+        baselineWins: sovereigntyEvidence.winners?.baseline,
+        ties: sovereigntyEvidence.winners?.tie,
+        guardedMeanRange: guardedMeans.length
+            ? [Math.min(...guardedMeans), Math.max(...guardedMeans)]
+            : [],
+        guardedViolationCount: sovereigntyEvidence.guardedViolationTotal,
+        playerForgeryViolations: sovereigntyEvidence.playerForgeryViolations,
+        sameTargetModel: sovereigntyEvidence.sameTargetModelRequired,
+        independentSlotConfig: sovereigntyEvidence.independentSlotConfig,
+        credentialSourceCount: sovereigntyEvidence.credentialSourceCount,
+        rawPromptsPersisted: sovereigntyEvidence.rawPromptsPersisted,
+        rawResponsesPersisted: sovereigntyEvidence.rawResponsesPersisted,
+    },
+});
 Object.assign(report.checks.modelSlotRouting.authorizedRealHostRouteProbe, {
     scope: 'authorized-synthetic-gemai-two-slot',
     strictSlotPresets: ['baseline-no-doctor-repair', 'actor-sovereignty-repair'],
@@ -257,44 +357,49 @@ Object.assign(report.checks.modelSlotRouting.authorizedRealHostRouteProbe, {
     privateChatModelEgress: false,
     credentialSourceCount: 1,
 });
+const tauriRuntime = realTauriEvidence.runtime || {};
+const tauriCleanup = realTauriEvidence.cleanup || {};
 Object.assign(report.checks.tauriTavern, {
     result: 'pass',
     manifestVersion: version,
     initVersionAfterReload: version,
-    doctorApiMethodCount: 54,
+    doctorApiMethodCount: tauriRuntime.first?.apiCount,
+    doctorApiVersion: tauriRuntime.first?.apiVersion,
+    actorProfileApiReady: tauriRuntime.first?.actorProfileApiReady === true,
     suspendedLaunch: true,
     startupWindowHidden: true,
     hiddenWatchdogBeforeResume: true,
     desktop: {
         ...report.checks.tauriTavern.desktop,
-        width: 1280,
-        height: 720,
+        width: tauriRuntime.desktop?.width,
+        height: tauriRuntime.desktop?.height,
         panelVisible: true,
-        panelWithinViewport: true,
-        horizontalOverflow: false,
-        minimumVisibleControlHeight: 36,
+        panelWithinViewport: tauriRuntime.desktop?.panelWithinViewport === true,
+        horizontalOverflow: tauriRuntime.desktop?.horizontalOverflow === true,
+        actorProfileUiReady: tauriRuntime.desktop?.actorProfileUiReady === true,
+        minimumVisibleControlHeight: tauriRuntime.desktop?.minControlHeight,
     },
     mobile: {
         ...report.checks.tauriTavern.mobile,
-        width: 390,
-        height: 844,
+        width: tauriRuntime.mobile?.width,
+        height: tauriRuntime.mobile?.height,
         panelVisible: true,
-        panelWithinViewport: true,
-        horizontalOverflow: false,
-        minimumVisibleControlHeight: 42,
+        panelWithinViewport: tauriRuntime.mobile?.panelWithinViewport === true,
+        horizontalOverflow: tauriRuntime.mobile?.horizontalOverflow === true,
+        actorProfileUiReady: tauriRuntime.mobile?.actorProfileUiReady === true,
+        minimumVisibleControlHeight: tauriRuntime.mobile?.minControlHeight,
     },
     consoleErrorCount: 0,
-    doctorRuntimeErrorCount: 0,
+    doctorRuntimeErrorCount: tauriRuntime.doctorErrorCount,
     databaseRuntimeErrorCount: 0,
     tavernHelperRuntimeErrorCount: 0,
-    sandboxDoctorVersionAfterProbe: '1.8.10',
-    sandboxBaselineRestored: true,
-    temporaryDataRemoved: true,
-    sandboxProcessStopped: true,
-    cdpPortClosed: true,
+    sandboxDoctorVersionAfterProbe: tauriCleanup.restoredVersion,
+    sandboxBaselineRestored: tauriCleanup.baselineRestored === true,
+    temporaryDataRemoved: tauriCleanup.temporaryDataRemoved === true,
+    sandboxProcessStopped: tauriCleanup.processTreeStopped === true,
+    cdpPortClosed: tauriCleanup.cdpPortClosed === true,
     userRunningTauriTavernTouched: false,
-    sandboxBaselineDigest:
-        'a9c17b33df300f203544c35e5e03e122328dde5ff00dbc661f2cab5df7694fcf',
+    sandboxBaselineDigest: tauriCleanup.restoredDigest,
 });
 report.checks.customInstructionPrivacy = {
     scopes: [
@@ -338,6 +443,18 @@ report.checks.regressionMatrix.items = [
         disposition: 'fixed',
         evidence: 'Scoped global instructions are injected verbatim while diagnostics retain metadata only.',
     },
+    {
+        id: 'RC11-PROFILE-UI-20',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'The floating panel exposes all nine Actor Profile V6 modules with provenance, locks, manual overrides, regeneration, coverage and version history at 390x844.',
+    },
+    {
+        id: 'RC11-WORLD-RECOVERY-21',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'World prompts are bounded to 40000 characters, agent lanes share one hard deadline, one short JSON repair replaces a second full retry, and all-slot failure commits a visible conservative held receipt for automatic recovery.',
+    },
 ];
 report.publication = {
     scope: 'release-candidate',
@@ -345,7 +462,7 @@ report.publication = {
     releaseCandidateAllowed: true,
     forcePushAllowed: false,
     allowedRemoteRefs: [
-        'refs/heads/codex/actor-sovereignty-engine',
+        'refs/heads/codex/actor-profile-view',
         'refs/heads/main',
     ],
     tagAllowed: false,
@@ -367,4 +484,4 @@ fs.writeFileSync(
     path.join(root, 'docs', 'qc-reports', `v${version}.json`),
     `${JSON.stringify(report, null, 2)}\n`,
 );
-console.log(`rc.10 report written: ${report.codeFingerprint}`);
+console.log(`rc.11 report written: ${report.codeFingerprint}`);

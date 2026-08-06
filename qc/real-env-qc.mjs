@@ -91,8 +91,8 @@ function reportHash() {
 
 function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version);
-    const expectedLedgerVersion = report.version === '2.0.0-rc.10' ? 6 : 5;
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version);
+    const expectedLedgerVersion = ['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version) ? 6 : 5;
     if (
         !actorLedger
         || actorLedger.version !== (semanticRuntimeRequired ? expectedLedgerVersion : 4)
@@ -129,7 +129,7 @@ function validateActorLedgerEvidence(report) {
 }
 
 function validateSovereigntyEvidence(report) {
-    if (report.version !== '2.0.0-rc.10') return;
+    if (!['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)) return;
     const sovereignty = report.checks?.sovereigntyRuntime;
     if (
         !sovereignty
@@ -216,7 +216,7 @@ function validateSerendipityEvidence(report) {
 }
 
 function validateRc6PassReport(report) {
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version);
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version);
     const billing = report.checks?.billingRemoval;
     if (
         !billing
@@ -369,7 +369,7 @@ function validateRc6PassReport(report) {
     const artifact = report.releaseArtifact;
     if (
         !artifact
-        || artifact.files !== (report.version === '2.0.0-rc.10' ? 84 : 73)
+        || artifact.files !== (['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version) ? 84 : 73)
         || artifact.bytes < 1
         || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
         || artifact.containsSerendipityCore !== true
@@ -386,8 +386,10 @@ function validateRc6PassReport(report) {
         || publication.forcePushAllowed !== false
         || !publication.allowedRemoteRefs?.includes('refs/heads/main')
         || !publication.allowedRemoteRefs?.includes(
-            report.version === '2.0.0-rc.10'
-                ? 'refs/heads/codex/actor-sovereignty-engine'
+            ['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)
+                ? report.version === '2.0.0-rc.11'
+                    ? 'refs/heads/codex/actor-profile-view'
+                    : 'refs/heads/codex/actor-sovereignty-engine'
                 : 'refs/heads/codex/serendipity-engine-no-billing',
         )
         || publication.tagAllowed !== false
@@ -884,7 +886,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

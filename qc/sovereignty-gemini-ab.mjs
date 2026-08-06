@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { ACTOR_SOVEREIGNTY_DIVERSITY_CONTRACT } from '../actor-profile-v6-core.mjs';
 
 const MODEL = 'gemini-3.1-pro-preview';
@@ -324,6 +326,9 @@ try {
         && report.guardedViolationsNotWorse === true
         && report.playerForgeryViolations === 0
     );
+    const reportPath = path.resolve('qc/reports/latest-sovereignty-gemini-ab.json');
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (!report.accepted) {
         throw new Error('sovereignty Gemini A/B acceptance criteria failed');

@@ -558,6 +558,8 @@ try {
             && desktopUi.panelWithinViewport
             && mobileUi.horizontalOverflow === false
             && desktopUi.horizontalOverflow === false
+            && mobileUi.tabs.some((tab) => tab.page === 'actors')
+            && desktopUi.tabs.some((tab) => tab.page === 'actors')
             && mobileUi.narrativeRewriteControlCount === 0
             && desktopUi.narrativeRewriteControlCount === 0
             && mobileUi.worldInterfaceLimit.value === '2'
@@ -591,6 +593,7 @@ try {
         forumTabIndependent: mobileUi.tabs.some((tab) => (
             tab.page === 'forum' || /论坛/u.test(tab.text)
         )),
+        actorProfileTabVisible: mobileUi.tabs.some((tab) => tab.page === 'actors'),
         worldEngineTabVisible: mobileUi.tabs.some((tab) => (
             tab.page === 'world' || /世界/u.test(tab.text)
         )),
@@ -837,5 +840,8 @@ try {
     };
 }
 
+const reportPath = path.resolve(doctorRoot, 'qc/reports/latest-real-database.json');
+fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 if (runFailed) process.exitCode = 1;

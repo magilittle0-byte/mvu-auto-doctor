@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "testedAt": "2026-08-06T17:02:13.503Z",
+  "model": "gemini-3.1-pro-preview",
+  "upstream": "api2.gemai.cc",
+  "syntheticOnly": true,
+  "scenarioCount": 5,
+  "logicalCalls": 15,
+  "logicalSuccesses": 15,
+  "successfulHttpResponses": 15,
+  "failedAttempts": 0,
+  "maximumConcurrency": 2,
+  "slotIds": [
+    "fast-slot-b",
+    "strict-slot-a",
+    "judge-slot"
+  ],
+  "presetIds": [
+    "actor-sovereignty-repair",
+    "baseline-no-doctor-repair",
+    "deterministic-blind-judge"
+  ],
+  "independentSlotConfig": true,
+  "sameTargetModelRequired": true,
+  "credentialSourceCount": 1,
+  "winners": {
+    "guarded": 5,
+    "baseline": 0,
+    "tie": 0
+  },
+  "meanScores": {
+    "baseline": {
+      "characterDifferentiation": 1.6,
+      "ordinaryHumanity": 1.4,
+      "groundedConflict": 1.4,
+      "darknessCorrection": 1.8,
+      "distinctAgency": 1.6,
+      "playerSovereignty": 4
+    },
+    "guarded": {
+      "characterDifferentiation": 4.8,
+      "ordinaryHumanity": 5,
+      "groundedConflict": 4.8,
+      "darknessCorrection": 5,
+      "distinctAgency": 4.8,
+      "playerSovereignty": 5
+    }
+  },
+  "violationCounts": {
+    "baseline": {
+      "uniformExtremity": 3,
+      "unsupportedDarkness": 3,
+      "uniformGoodness": 1,
+      "fabricatedHistory": 2,
+      "playerActionForgery": 1,
+      "interchangeableCharacters": 2
+    },
+    "guarded": {
+      "uniformExtremity": 0,
+      "unsupportedDarkness": 0,
+      "uniformGoodness": 0,
+      "fabricatedHistory": 0,
+      "playerActionForgery": 0,
+      "interchangeableCharacters": 0
+    }
+  },
+  "guardedScoreNotWorse": true,
+  "guardedScoreWithinBlindJudgeTolerance": true,
+  "guardedAbsoluteScorePass": true,
+  "guardedViolationTotal": 0,
+  "guardedViolationsNotWorse": true,
+  "playerForgeryViolations": 0,
+  "scenarioOutcomes": [
+    {
+      "id": "ordinary-low-risk-office",
+      "winner": "guarded"
+    },
+    {
+      "id": "ensemble-distinct-reactions",
+      "winner": "guarded"
+    },
+    {
+      "id": "justified-limited-suspicion",
+      "winner": "guarded"
+    },
+    {
+      "id": "recovery-without-personality-wash",
+      "winner": "guarded"
+    },
+    {
+      "id": "player-sovereignty-repair",
+      "winner": "guarded"
+    }
+  ],
+  "contractHash": "a5d6254a3f517f5c1981382f0b5645d68b4d1addc66dd88f3e2f62071458eff7",
+  "credentialPersisted": false,
+  "rawPromptsPersisted": false,
+  "rawResponsesPersisted": false,
+  "accepted": true
+}

@@ -164,7 +164,7 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
     const canary = 'PRIVATE-STORY-CANARY-7f9d';
     const diagnostic = createPrivacySafeDiagnosticProjection({
         userAgent: 'Mozilla/5.0 (Linux; Android 15; PrivateDevice) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile',
-        plugin: { id: 'mvu_auto_doctor', version: '2.0.0-rc.10' },
+        plugin: { id: 'mvu_auto_doctor', version: '2.0.0-rc.11' },
         environment: {
             status: 'error',
             checks: [{ kind: 'error', message: canary }],

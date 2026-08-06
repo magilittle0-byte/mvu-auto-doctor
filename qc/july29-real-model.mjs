@@ -583,6 +583,13 @@ try {
                             disable: false,
                             order: 1,
                             content: 'Relationship changes require explicit narrative evidence.',
+                        }, {
+                            comment: 'synthetic oversized public worldbook',
+                            constant: true,
+                            disable: false,
+                            order: 2,
+                            content: 'Synthetic public North Harbor logistics bulletin. '
+                                .repeat(2500),
                         }],
                     },
                 },
@@ -700,6 +707,19 @@ try {
         const finalDiagnostic = window.MvuAutoDoctorAPI.getDiagnosticProjection();
         const actorShardDiagnostic = finalDiagnostic.actorShards || {};
         const actorLedgerView = window.MvuAutoDoctorAPI.getActorLedgerView();
+        const modelDiagnostics = window.MvuAutoDoctorAPI.getModelDiagnostics()
+            .slice(0, 12)
+            .map((entry) => ({
+                phase: entry.phase,
+                task: entry.task,
+                status: entry.status,
+                durationMs: entry.durationMs,
+                queueWaitMs: entry.queueWaitMs,
+                httpStatus: entry.httpStatus,
+                failureKind: entry.failureKind,
+                reason: entry.reason,
+                routeSlotIndex: entry.routeSlotIndex,
+            }));
         settings.connectionApiKey = '';
         config.apiKey = '';
         return {
@@ -769,6 +789,7 @@ try {
                     ? actorShardDiagnostic.rejectionReasons.slice(0, 8)
                     : [],
             },
+            modelDiagnostics,
             worldLaneTypes: [...new Set(
                 worldLaneReceipts.map((receipt) => receipt.laneType),
             )].sort(),
@@ -831,6 +852,7 @@ try {
         || modelResult.actorShardDiagnostic.semanticActions < 1
         || modelResult.actorShardDiagnostic.heldActions !== 0
         || modelResult.worldLaneIndependentOfActors !== true
+        || Number(modelResult.promptInfo?.totalChars || 0) > 40_000
         || !modelResult.worldLaneTypes.includes('environment')
         || !modelResult.worldLaneTypes.includes('faction')
         || metrics.length !== 3
@@ -901,4 +923,7 @@ try {
 }
 
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+const reportPath = path.resolve(doctorRoot, 'qc/reports/latest-real-model.json');
+fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 if (runFailed) process.exitCode = 1;

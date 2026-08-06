@@ -99,7 +99,7 @@ test('deterministic selector handles 0/1/3/5 limits without excluding present ac
     }).length, 0);
 });
 
-test('strict proposal parser rejects extra fields and identity/evidence escape', () => {
+test('proposal parser repairs harmless shape drift but rejects authority and identity/evidence escape', () => {
     const candidate = selectActorShardCandidates({
         continuity: { threads: [thread('T1', '艾达')] },
         maxWorkers: 1,
@@ -113,6 +113,27 @@ test('strict proposal parser rejects extra fields and identity/evidence escape',
         parseActorShardProposal(JSON.stringify({ ...valid, authorization: true }), { candidate }).error,
         'actor_shard.shape_not_whitelisted',
     );
+    const harmlessDrift = parseActorShardProposal(JSON.stringify({
+        proposal: {
+            ...valid,
+            modelNote: 'ignored',
+            stateChanges: valid.stateChanges.map((entry) => ({ ...entry, confidence: 0.9 })),
+            interactionTargets: undefined,
+            resourceCosts: undefined,
+        },
+        metadata: { latency: 1 },
+    }), { candidate });
+    assert.deepEqual(harmlessDrift.proposal, {
+        ...valid,
+        interactionTargets: [],
+        resourceCosts: [],
+    });
+    assert.equal(harmlessDrift.repaired, true);
+    assert.deepEqual(harmlessDrift.repairKinds, [
+        'unwrap-proposal-object',
+        'drop-unrecognized-fields',
+        'default-optional-fields',
+    ]);
     assert.deepEqual(
         parseActorShardProposal(`说明：${JSON.stringify(valid)}`, { candidate }).proposal,
         valid,

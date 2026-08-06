@@ -373,6 +373,7 @@ function assignModule(profile, module, data, {
     now = Date.now(),
     action = 'prepare',
 } = {}) {
+    if (moduleLocked(profile, module)) return false;
     const before = clone(profile.modules[module]);
     profile.modules[module] = {
         status: 'ready',
@@ -385,6 +386,7 @@ function assignModule(profile, module, data, {
     };
     profile.moduleVersions[module] += 1;
     recordHistory(profile, module, action, before, profile.modules[module], turn, now);
+    return true;
 }
 
 function calculateCoverage(profile) {
@@ -406,6 +408,7 @@ export function prepareActorProfileV6(actor, {
         name: actor?.name,
         mode: completionMode,
     });
+    const previousProfile = clone(profile);
     profile.completionMode = completionMode;
     const evidence = evidenceForActor(actor);
     if (completionMode === 'off') {
@@ -546,9 +549,25 @@ export function prepareActorProfileV6(actor, {
         turn,
         now,
     });
-    profile.modules.physiology.data.enabled = physiologyEnabled;
-    profile.modules.physiology.data.adultEnabled = physiologyEnabled;
-    profile.modules.physiology.data.personalityInferenceAllowed = false;
+    if (!moduleLocked(profile, 'physiology')) {
+        profile.modules.physiology.data.enabled = physiologyEnabled;
+        profile.modules.physiology.data.adultEnabled = physiologyEnabled;
+        profile.modules.physiology.data.personalityInferenceAllowed = false;
+    }
+    for (const [path, overrideValue] of Object.entries(previousProfile.manualOverrides || {})) {
+        const parts = pathParts(path);
+        if (parts[0] !== 'modules' || !MODULE_SET.has(parts[1])) continue;
+        setPath(profile, parts, overrideValue);
+        profile.fieldSources[path] = 'confirmed';
+    }
+    for (const [path, locked] of Object.entries(previousProfile.locks || {})) {
+        const parts = pathParts(path);
+        if (!locked || parts[0] !== 'modules' || !MODULE_SET.has(parts[1]) || parts.length < 3) {
+            continue;
+        }
+        const preservedValue = getPath(previousProfile, parts);
+        if (preservedValue !== undefined) setPath(profile, parts, preservedValue);
+    }
     profile.coverage = calculateCoverage(profile);
     profile.preparedForAction = profile.coverage === 100;
     profile.backgroundPending = false;
@@ -605,6 +624,21 @@ function setPath(object, parts, value) {
     cursor[parts.at(-1)] = clone(value);
 }
 
+function getPath(object, parts) {
+    let cursor = object;
+    for (const key of parts) {
+        if (!cursor || typeof cursor !== 'object' || !(key in cursor)) return undefined;
+        cursor = cursor[key];
+    }
+    return clone(cursor);
+}
+
+function moduleLocked(profile, module) {
+    return profile?.locks?.actor === true
+        || profile?.locks?.[module] === true
+        || profile?.locks?.[`modules.${module}`] === true;
+}
+
 export function setActorProfileV6Lock(value, {
     path,
     locked = true,
@@ -624,10 +658,15 @@ export function applyActorProfileV6Override(value, {
 } = {}) {
     const profile = normalizeActorProfileV6(value);
     const parts = pathParts(path);
-    if (!parts.length || profile.locks[parts.join('.')]) {
+    const module = parts[0] === 'modules' && MODULE_SET.has(parts[1]) ? parts[1] : '';
+    if (
+        !parts.length
+        || profile.locks.actor
+        || (module && moduleLocked(profile, module))
+        || profile.locks[parts.join('.')]
+    ) {
         return { profile, applied: false, reason: parts.length ? 'field_locked' : 'path_invalid' };
     }
-    const module = parts[0] === 'modules' && MODULE_SET.has(parts[1]) ? parts[1] : '';
     if (!module) return { profile, applied: false, reason: 'module_invalid' };
     const before = clone(profile.modules[module]);
     setPath(profile, parts, overrideValue);
@@ -656,7 +695,7 @@ export function regenerateActorProfileV6Module(value, actor, {
         mode: mode || value?.completionMode,
     });
     if (!MODULE_SET.has(module)) return { profile, regenerated: false, reason: 'module_invalid' };
-    if (profile.locks[module] || profile.locks[`modules.${module}`]) {
+    if (moduleLocked(profile, module)) {
         return { profile, regenerated: false, reason: 'module_locked' };
     }
     const regenerated = prepareActorProfileV6({ ...clone(actor), profileV6: profile }, {
