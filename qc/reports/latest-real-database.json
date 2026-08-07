@@ -19,14 +19,14 @@
     "legacyPublicRuntimeTemporarilyReplaced": true,
     "legacyPublicOriginalIndexSha256": "68b01608a360fb1fc875e2491a6f930eabe522f79959ed9a969d09ed283ab8f5",
     "doctorSourceInstalledInSterileRoot": true,
-    "candidateVersion": "2.0.0-rc.12",
-    "candidateIndexSha256": "cab689bf75e777a95ba5a82e93c2a3b2aa35d16ad1fcac8952593cf1c6ff0fd2",
+    "candidateVersion": "2.0.0-rc.13",
+    "candidateIndexSha256": "4ae2d6043b95199c1df207e2ba9229e692982d7244f6d8f948609101cb81f40d",
     "tavernHelperRuntimeInstalledInSterileRoot": true,
     "independentBridgeInstalledInSterileRoot": false
   },
   "runtime": {
     "hostHttpStatus": 200,
-    "serverFailureDigest": "93049d378def2fa7ed2eb66897d3b52186158567d1ac2995bd3f7c9c68123687",
+    "serverFailureDigest": "ffb6f5d6f0009be7779428d4a8289e8017979caaae2296bd37092b3bb26ccb79",
     "bootState": {
       "contextReady": true,
       "chatLoaded": false,
@@ -34,7 +34,7 @@
       "tavernHelperReady": false,
       "activeHelperScriptFrames": 0
     },
-    "doctorVersion": "2.0.0-rc.12",
+    "doctorVersion": "2.0.0-rc.13",
     "environmentStatus": "error",
     "actorLedgerApi": {
       "version": 6,
@@ -268,7 +268,7 @@
     "socialAttemptCount": 0,
     "socialLocalRepairAttempted": false,
     "reload": {
-      "doctorVersion": "2.0.0-rc.12",
+      "doctorVersion": "2.0.0-rc.13",
       "databaseApiMethodCount": 116,
       "environmentStatus": "error",
       "legacyPatchDetected": false,

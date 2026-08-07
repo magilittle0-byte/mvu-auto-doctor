@@ -9,7 +9,10 @@ import {
     buildActorShardRepairMessages,
     parseActorShardProposal,
 } from '../actor-shard-core.mjs';
-import { parseContinuityOutput } from '../continuity-core.mjs';
+import {
+    buildContinuityRepairMessages,
+    parseContinuityOutput,
+} from '../continuity-core.mjs';
 import { parseSocialAuditOutput } from '../social-core.mjs';
 
 const MODEL = 'gemini-3.1-pro-preview';
@@ -87,9 +90,9 @@ function buildSyntheticLongCampaign() {
         basis: `合成证据链-${index + 1}`,
         cost: `需要${(index % 4) + 1}个时间单位与可核验物资`,
     }));
-    const messages = Array.from({ length: 54 }, (_, index) => {
+    const messages = Array.from({ length: 74 }, (_, index) => {
         const actor = SYNTHETIC_ACTORS[index % SYNTHETIC_ACTORS.length];
-        const turn = Math.min(19, Math.floor(index / 3) + 1);
+        const turn = Math.min(38, Math.floor(index / 2) + 1);
         const thread = threads[index % threads.length];
         const facts = [
             `这是纯合成长局第${turn}回合第${index + 1}条消息，不对应任何用户记录。`,
@@ -350,10 +353,10 @@ async function runSyntheticScaleReplay(apiKey) {
     const candidates = [syntheticActorCandidate(1), syntheticActorCandidate(6)];
     const target = {
         chatId: 'synthetic-real-session-scale',
-        logicalIndex: 53,
-        messageId: 'synthetic-message-54',
+        logicalIndex: 73,
+        messageId: 'synthetic-message-74',
         swipeId: 0,
-        generation: 54,
+        generation: 74,
         branchId: 'synthetic-main-branch',
         contentHash: sha256(boundedContext),
     };
@@ -362,9 +365,9 @@ async function runSyntheticScaleReplay(apiKey) {
         boundedContext,
     ));
     const worldShape = {
-        turn: 20,
+        turn: 39,
         lastTick: {
-            turn: 20,
+            turn: 39,
             action: 'held',
             threadId: 'SYN-THREAD-03',
             reason: '合成地点三的可核验交接窗口尚未到达',
@@ -471,15 +474,15 @@ async function runSyntheticScaleReplay(apiKey) {
         .filter((key) => !worldAllowedRootKeys.has(key));
     const worldPrimaryAccepted = (
         !worldParsed.error
-        && worldParsed.raw?.turn === 20
-        && worldParsed.raw?.lastTick?.turn === 20
+        && worldParsed.raw?.turn === 39
+        && worldParsed.raw?.lastTick?.turn === 39
         && worldUnexpectedRootKeys.length === 0
     );
     const worldPrimaryFailureCode = worldParsed.error
         ? 'parse_error'
-        : worldParsed.raw?.turn !== 20
+        : worldParsed.raw?.turn !== 39
             ? 'turn_mismatch'
-            : worldParsed.raw?.lastTick?.turn !== 20
+            : worldParsed.raw?.lastTick?.turn !== 39
                 ? 'last_tick_turn_mismatch'
                 : worldUnexpectedRootKeys.length
                     ? 'unexpected_root_key'
@@ -526,30 +529,18 @@ async function runSyntheticScaleReplay(apiKey) {
         parseActorShardProposal(output, { candidate: candidates[index] })
     ));
 
-    const malformedWorldOutput = '{"turn":20,"lastTick":{"action":"held"},"threads":[';
+    const malformedWorldOutput = '{"turn":39,"lastTick":{"action":"held"},"threads":[';
     const worldRepairSource = worldPrimaryAccepted
         ? malformedWorldOutput
         : worldOutput;
-    const worldRepairMessages = [
+    const worldRepairMessages = buildContinuityRepairMessages(
+        worldRepairSource,
+        worldPrimaryFailureCode || 'continuity.json_invalid',
         {
-            role: 'system',
-            content: [
-                '你只负责把上一条活世界候选修成一个完整、可解析的增量 JSON 对象。',
-                '不新增事实、不补造人物行动、不替玩家决定。',
-                '根对象只允许 turn、lastTick、actorProfiles、threads、scenarioPlan、world。',
-                '只输出JSON对象，不要围栏、解释或前后文字。',
-            ].join('\n'),
+            turn: 39,
+            threadIds: [worldShape.lastTick.threadId],
         },
-        {
-            role: 'user',
-            content: [
-                `严格形状=${JSON.stringify(worldShape)}`,
-                `待修复候选=${worldRepairSource}`,
-                '没有足够依据时必须使用给定 held 状态和空增量。',
-                boundedContext.slice(-12_000),
-            ].join('\n\n'),
-        },
-    ];
+    );
     const worldRepairOutput = await callGemini(apiKey, worldRepairMessages, {
         slotId: 'world-repair-scale-slot',
         presetId: 'world-full-schema-repair',
@@ -576,15 +567,15 @@ async function runSyntheticScaleReplay(apiKey) {
     ));
     const worldRepairAccepted = (
         !worldRepairParsed.error
-        && worldRepairParsed.raw?.turn === 20
-        && worldRepairParsed.raw?.lastTick?.turn === 20
+        && worldRepairParsed.raw?.turn === 39
+        && worldRepairParsed.raw?.lastTick?.turn === 39
     );
     const worldFinalAccepted = worldPrimaryAccepted || worldRepairAccepted;
     return {
         messageCount: campaign.messages.length,
         actorCount: SYNTHETIC_ACTORS.length,
-        observedTurns: 19,
-        taskCount: 76,
+        observedTurns: 38,
+        taskCount: 155,
         threadCount: campaign.threads.length,
         sourceCharacters: campaign.context.length,
         modelContextCharacters: boundedContext.length,

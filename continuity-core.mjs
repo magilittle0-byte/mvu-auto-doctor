@@ -2081,6 +2081,68 @@ export function attachChangedSourceRefs(previous, next, sourceRef) {
     return result;
 }
 
+export function buildContinuityRepairMessages(output, error, {
+    turn = 0,
+    threadIds = [],
+} = {}) {
+    const targetTurn = Math.max(1, Math.floor(Number(turn) || 1));
+    const allowedThreadIds = [...new Set((threadIds || [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean))]
+        .slice(0, 40);
+    const candidate = String(output || '');
+    const boundedCandidate = candidate.length <= 10_000
+        ? candidate
+        : `${candidate.slice(0, 10_000)}\n[待修复候选已截断]`;
+    return [
+        {
+            role: 'system',
+            content: [
+                '你只负责把上一条活世界候选修成一个完整、可解析的增量 JSON 对象。',
+                '保留原候选中有依据的内容，不新增事实、不补造人物行动、不替玩家决定。',
+                '根对象只允许 turn、lastTick、actorProfiles、threads、scenarioPlan、world。',
+                `turn与lastTick.turn都必须严格等于目标回合 ${targetTurn}。`,
+                'lastTick 必须包含 turn、action、threadId、reason；threadId 只能使用给定已有稳定ID或 WORLD，held 理由不少于8字。',
+                'actorProfiles、threads必须是数组；scenarioPlan、world必须是对象。缺少变化时使用空数组或空对象。',
+                '只输出 JSON 对象，不要围栏、解释或前后文字。',
+            ].join('\n'),
+        },
+        {
+            role: 'user',
+            content: [
+                `原校验错误=${String(error || 'invalid-continuity').slice(0, 500)}`,
+                `目标回合=${targetTurn}`,
+                `允许的已有threadId=${JSON.stringify(allowedThreadIds.length ? allowedThreadIds : ['WORLD'])}`,
+                '严格根形状：',
+                JSON.stringify({
+                    turn: targetTurn,
+                    lastTick: {
+                        turn: targetTurn,
+                        action: 'created|advanced|manifested|resolved|dormant|held',
+                        threadId: allowedThreadIds[0] || 'WORLD',
+                        reason: '不少于8字的具体依据',
+                    },
+                    actorProfiles: [],
+                    threads: [],
+                    scenarioPlan: { amendments: [] },
+                    world: {
+                        digest: '',
+                        trends: [],
+                        factions: [],
+                        winds: [],
+                        reputation: {},
+                        environment: {},
+                        shadows: { enemies: [], secrets: [] },
+                        influences: [],
+                    },
+                }),
+                '待修复候选：',
+                boundedCandidate,
+            ].join('\n'),
+        },
+    ];
+}
+
 export function parseContinuityOutput(output, options = {}) {
     const text = String(output || '');
     const tagged = text.match(/<ContinuityState>\s*([\s\S]*?)\s*<\/ContinuityState>/iu);

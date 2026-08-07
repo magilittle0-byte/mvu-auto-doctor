@@ -91,8 +91,8 @@ function reportHash() {
 
 function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version);
-    const expectedLedgerVersion = ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version) ? 6 : 5;
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version);
+    const expectedLedgerVersion = ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version) ? 6 : 5;
     if (
         !actorLedger
         || actorLedger.version !== (semanticRuntimeRequired ? expectedLedgerVersion : 4)
@@ -129,12 +129,13 @@ function validateActorLedgerEvidence(report) {
 }
 
 function validateSovereigntyEvidence(report) {
-    if (!['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)) return;
-    const runUntilCancelledRequired = report.version === '2.0.0-rc.12';
+    if (!['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version)) return;
+    const runUntilCancelledRequired = ['2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version);
+    const convergenceRequired = report.version === '2.0.0-rc.13';
     const sovereignty = report.checks?.sovereigntyRuntime;
     if (
         !sovereignty
-        || sovereignty.schemaVersion !== 1
+        || sovereignty.schemaVersion !== (convergenceRequired ? 2 : 1)
         || sovereignty.observedThroughIndependentOfModel !== true
         || sovereignty.simulatedThroughCommitOnly !== true
         || sovereignty.durableBacklog !== true
@@ -165,6 +166,22 @@ function validateSovereigntyEvidence(report) {
         || sovereignty.hiddenAbilityWithoutHistoryCount !== 0
         || sovereignty.customInstructionScopeCoveragePercent !== 100
         || sovereignty.customInstructionRawTextInDiagnostics !== false
+        || (convergenceRequired && (
+            sovereignty.singleSchedulerClock !== 'observedThrough'
+            || sovereignty.legacyMixedClockMigration !== true
+            || sovereignty.automaticRetryWithoutNewTurn !== true
+            || sovereignty.queuedRetryUserCancellation !== true
+            || sovereignty.latestStateSupersession !== true
+            || sovereignty.exactFailureShapeTasks !== 155
+            || sovereignty.exactFailureShapeObservedTurns !== 38
+            || sovereignty.exactFailureShapeInitialSimulatedThrough !== 0
+            || sovereignty.exactFailureShapeInitialActiveBacklog !== 34
+            || sovereignty.exactFailureShapeFinalSimulatedThrough !== 38
+            || sovereignty.exactFailureShapeFinalActiveBacklog !== 0
+            || sovereignty.propertyFailureScenarios !== 64
+            || sovereignty.diagnosticAutoRetryVisible !== true
+            || sovereignty.userFacingActorTerm !== '人物行动分析'
+        ))
     ) fail('actor-sovereignty evidence is incomplete');
 }
 
@@ -223,7 +240,7 @@ function validateSerendipityEvidence(report) {
 }
 
 function validateRc6PassReport(report) {
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version);
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version);
     const billing = report.checks?.billingRemoval;
     if (
         !billing
@@ -321,9 +338,10 @@ function validateRc6PassReport(report) {
         || model.hostPortClosed !== true
         || model.proxyPortClosed !== true
     ) fail('rc6 affected real-model evidence is incomplete');
-    if (report.version === '2.0.0-rc.12') {
+    if (['2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version)) {
         const sovereigntyAb = model.sovereigntyAb;
         const scale = sovereigntyAb?.scaleReplay;
+        const rc13 = report.version === '2.0.0-rc.13';
         if (
             !sovereigntyAb
             || sovereigntyAb.logicalCalls < 22
@@ -333,10 +351,10 @@ function validateRc6PassReport(report) {
             || sovereigntyAb.playerForgeryViolations !== 0
             || sovereigntyAb.modelTimeoutConfigured !== false
             || !scale
-            || scale.messageCount !== 54
+            || scale.messageCount !== (rc13 ? 74 : 54)
             || scale.actorCount !== 9
-            || scale.observedTurns !== 19
-            || scale.taskCount !== 76
+            || scale.observedTurns !== (rc13 ? 38 : 19)
+            || scale.taskCount !== (rc13 ? 155 : 76)
             || scale.modelContextCharacters < 40_000
             || scale.parallelSlotCount !== 4
             || scale.actorFinalAccepted !== true
@@ -346,7 +364,7 @@ function validateRc6PassReport(report) {
             || scale.worldRepairAccepted !== true
             || scale.playerActionForgeryCount !== 0
             || scale.accepted !== true
-        ) fail('rc12 real-scale sovereignty evidence is incomplete');
+        ) fail(`${rc13 ? 'rc13' : 'rc12'} real-scale sovereignty evidence is incomplete`);
     }
 
     const tauri = report.checks?.tauriTavern;
@@ -403,7 +421,7 @@ function validateRc6PassReport(report) {
     const artifact = report.releaseArtifact;
     if (
         !artifact
-        || artifact.files !== (['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version) ? 84 : 73)
+        || artifact.files !== (['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version) ? 84 : 73)
         || artifact.bytes < 1
         || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
         || artifact.containsSerendipityCore !== true
@@ -420,9 +438,11 @@ function validateRc6PassReport(report) {
         || publication.forcePushAllowed !== false
         || !publication.allowedRemoteRefs?.includes('refs/heads/main')
         || !publication.allowedRemoteRefs?.includes(
-            ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)
-                ? report.version === '2.0.0-rc.12'
-                    ? 'refs/heads/codex/rc12-real-session-hotfix'
+            ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version)
+                ? report.version === '2.0.0-rc.13'
+                    ? 'refs/heads/codex/rc13-backlog-recovery'
+                    : report.version === '2.0.0-rc.12'
+                        ? 'refs/heads/codex/rc12-real-session-hotfix'
                     : report.version === '2.0.0-rc.11'
                         ? 'refs/heads/codex/actor-profile-view'
                         : 'refs/heads/codex/actor-sovereignty-engine'
@@ -922,7 +942,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12', '2.0.0-rc.13'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

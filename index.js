@@ -29,6 +29,7 @@ import {
     advanceContinuityClocks,
     applyWorldUpdate,
     attachChangedSourceRefs,
+    buildContinuityRepairMessages,
     buildContinuityInjection,
     continuityContentDigest,
     continuityConsumptionEvidence,
@@ -115,6 +116,7 @@ import {
     claimNextSovereigntyTask,
     cancelSovereigntyTaskAsStale,
     commitSovereigntyTask,
+    dueSovereigntyTasks,
     emptySovereigntyRuntime,
     failSovereigntyTask,
     normalizeSovereigntyRuntime,
@@ -124,6 +126,7 @@ import {
     restoreSovereigntyCheckpoint,
     retrySovereigntyTaskNow,
     sovereigntyHealthView,
+    sovereigntyRetryDelay,
 } from './sovereignty-runtime-core.mjs';
 import {
     composeScopedModelInstruction,
@@ -163,7 +166,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.12';
+const VERSION = '2.0.0-rc.13';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 12;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -382,6 +385,16 @@ let modelCallStats = {
 };
 const activeModelControllers = new Set();
 const activeSovereigntyTaskIds = new Set();
+let pendingSovereigntyRetryTimer = null;
+let pendingSovereigntyRetry = null;
+
+function hasPendingSovereigntyRetryForChat(context = getContext()) {
+    return Boolean(
+        pendingSovereigntyRetry
+        && context?.chatId
+        && pendingSovereigntyRetry.chatId === context.chatId
+    );
+}
 const modelRouteSlotCursors = { strict: 0, fast: 0 };
 const modelRouteHealth = { strict: new Map(), fast: new Map() };
 let activeTaskProgress = null;
@@ -1179,6 +1192,12 @@ function renderSovereigntyHealth(value = readChatNamespace()?.sovereigntyRuntime
             ? `失败模块 ${health.failingModules.join('、')}`
             : '',
         health.nextRetryTurn ? `下次重试 ${health.nextRetryTurn}` : '',
+        hasPendingSovereigntyRetryForChat()
+            ? `自动恢复已排队（约 ${Math.max(
+                0,
+                Math.ceil((pendingSovereigntyRetry.runAt - Date.now()) / 1000),
+            )} 秒）`
+            : '',
         getSettings().sovereigntyRunUntilCancelled !== false
             ? '后台持续运行，可主动取消'
             : '兼容时限模式',
@@ -1210,6 +1229,7 @@ async function retrySovereigntyNow() {
     const retried = retrySovereigntyTaskNow(
         sovereigntyRuntimeFromNamespace(namespace),
     );
+    clearPendingSovereigntyRetry();
     await persistSovereigntyRuntime(retried.runtime, chatId, { durable: true });
     const latest = latestAiMessage(context);
     const captured = captureTarget(context, latest.index);
@@ -1553,7 +1573,9 @@ function setForumStatus(text, kind = '', { record = true } = {}) {
 }
 
 function syncTaskCancelButtons() {
-    const active = !!activeTaskProgress || activeModelControllers.size > 0;
+    const active = !!activeTaskProgress
+        || activeModelControllers.size > 0
+        || !!pendingSovereigntyRetryTimer;
     for (const button of [ui?.cancelTask, ui?.floatingCancelTask]) {
         if (!button) continue;
         button.hidden = !active;
@@ -1618,6 +1640,7 @@ function invalidateOperations(reason = '') {
     }
     activeModelControllers.clear();
     activeSovereigntyTaskIds.clear();
+    clearPendingSovereigntyRetry();
     if (activeTaskProgress) finishTaskProgress(activeTaskProgress.id);
     clearTimeout(pendingOpeningSyncTimer);
     pendingOpeningSyncTimer = null;
@@ -1637,8 +1660,11 @@ async function cancelRunningSovereigntyTasks(reason = 'user_cancelled') {
     if (!chatId) return [];
     const namespace = readChatNamespace(context);
     let runtime = sovereigntyRuntimeFromNamespace(namespace);
+    const cancellableStatuses = reason === 'user_cancelled'
+        ? new Set(['pending', 'running', 'retryable_failed', 'deferred'])
+        : new Set(['running']);
     const runningIds = runtime.backlog
-        .filter((task) => task.status === 'running')
+        .filter((task) => cancellableStatuses.has(task.status))
         .map((task) => task.id);
     for (const taskId of runningIds) {
         runtime = cancelSovereigntyTaskAsStale(runtime, {
@@ -1659,7 +1685,7 @@ async function cancelRunningSovereigntyTasks(reason = 'user_cancelled') {
 }
 
 function cancelCurrentOperations() {
-    if (!activeTaskProgress && !activeModelControllers.size) {
+    if (!activeTaskProgress && !activeModelControllers.size && !pendingSovereigntyRetryTimer) {
         toast('info', '当前没有正在执行的模型任务。');
         return false;
     }
@@ -2033,7 +2059,7 @@ async function inspectEnvironment({ waitForMvu = false, mvuOverride = null } = {
 
     const runtimeActors = actorLedgerView(readChatNamespace(context).actorLedger);
     const recentWorldCalls = normalizedModelDiagnostics(modelDiagnostics)
-        .filter((entry) => /世界|连续|NPC 分片/u.test(entry.task))
+        .filter((entry) => /世界|连续|NPC 分片|人物行动分析/u.test(entry.task))
         .slice(0, 24);
     const recentWorldFailures = recentWorldCalls.filter(
         (entry) => entry.phase === 'transport' && entry.status === 'failed',
@@ -2148,7 +2174,13 @@ function diagnosticPayload() {
             environment: lastEnvironmentReport,
             barrierProtocol: databaseBarrier,
             actorShards: latestActorShardDiagnostics,
-            sovereignty: sovereigntyHealthView(namespace.sovereigntyRuntime),
+            sovereignty: {
+                ...sovereigntyHealthView(namespace.sovereigntyRuntime),
+                autoRetryScheduled: hasPendingSovereigntyRetryForChat(context),
+                autoRetryAt: hasPendingSovereigntyRetryForChat(context)
+                    ? pendingSovereigntyRetry.runAt
+                    : 0,
+            },
             customInstruction: customInstructionDiagnosticProjection({
                 enabled: settings.globalModelInstructionEnabled,
                 text: settings.globalModelInstruction,
@@ -3615,6 +3647,80 @@ async function persistSovereigntyRuntime(runtime, expectedChatId, { durable = tr
     return saved;
 }
 
+function clearPendingSovereigntyRetry() {
+    if (pendingSovereigntyRetryTimer) clearTimeout(pendingSovereigntyRetryTimer);
+    pendingSovereigntyRetryTimer = null;
+    pendingSovereigntyRetry = null;
+    syncTaskCancelButtons();
+}
+
+function scheduleSovereigntyAutoRetry(captured, runtime = null) {
+    const settings = getSettings();
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    const currentRuntime = normalizeSovereigntyRuntime(
+        runtime || readChatNamespace(context)?.sovereigntyRuntime,
+        { chatId },
+    );
+    const due = dueSovereigntyTasks(currentRuntime);
+    if (
+        !captured
+        || !chatId
+        || settings.sovereigntyMode === 'legacy'
+        || settings.sovereigntyRunUntilCancelled === false
+        || !due.length
+    ) {
+        clearPendingSovereigntyRetry();
+        return false;
+    }
+    const delayMs = sovereigntyRetryDelay(currentRuntime);
+    if (!delayMs) {
+        clearPendingSovereigntyRetry();
+        return false;
+    }
+    const runAt = Date.now() + delayMs;
+    if (
+        pendingSovereigntyRetry
+        && pendingSovereigntyRetry.chatId === chatId
+        && pendingSovereigntyRetry.targetIndex === captured.index
+        && pendingSovereigntyRetry.runAt <= runAt
+    ) return true;
+    clearPendingSovereigntyRetry();
+    const scheduledEpoch = operationEpoch;
+    pendingSovereigntyRetry = {
+        chatId,
+        targetIndex: captured.index,
+        runAt,
+        epoch: scheduledEpoch,
+    };
+    pendingSovereigntyRetryTimer = setTimeout(() => {
+        const scheduled = pendingSovereigntyRetry;
+        pendingSovereigntyRetryTimer = null;
+        pendingSovereigntyRetry = null;
+        syncTaskCancelButtons();
+        const freshContext = getContext();
+        if (
+            !scheduled
+            || scheduled.epoch !== operationEpoch
+            || freshContext?.chatId !== scheduled.chatId
+        ) return;
+        const fresh = captureTarget(freshContext, scheduled.targetIndex);
+        if (!fresh || !dueSovereigntyTasks(
+            sovereigntyRuntimeFromNamespace(readChatNamespace(freshContext)),
+        ).length) {
+            renderSovereigntyHealth();
+            return;
+        }
+        enqueueContinuity(scheduled.targetIndex, {
+            force: true,
+            expectedTarget: fresh,
+        });
+    }, delayMs);
+    syncTaskCancelButtons();
+    renderSovereigntyHealth(currentRuntime);
+    return true;
+}
+
 async function observeSovereigntyTarget(captured) {
     const settings = getSettings();
     const namespace = readChatNamespace();
@@ -3720,6 +3826,7 @@ function settleSovereigntyModule(runtime, task, {
     commitRef = '',
     failureCode = 'technical_failure',
     currentTurn = 0,
+    retryOnCurrentTurn = false,
 } = {}) {
     if (!task) return runtime;
     const result = success
@@ -3732,7 +3839,10 @@ function settleSovereigntyModule(runtime, task, {
             taskId: task.id,
             failureCode,
             retryable: true,
-            nextRetryTurn: Math.max(1, Number(currentTurn) + 1),
+            nextRetryTurn: Math.max(
+                1,
+                Number(currentTurn) + (retryOnCurrentTurn ? 0 : 1),
+            ),
         });
     return result.runtime;
 }
@@ -3753,6 +3863,8 @@ async function completeSovereigntyCycle({
     worldPressure = null,
 }) {
     let next = normalizeSovereigntyRuntime(runtime, { chatId: captured.chatId });
+    const recoveryTurn = Math.max(1, next.observedThrough.turn || Number(turn) || 1);
+    const retryOnCurrentTurn = getSettings().sovereigntyRunUntilCancelled !== false;
     const profileReady = getSettings().actorProfileCompletionMode === 'off'
         || (profilePreparation?.deferred?.length || 0) === 0;
     next = settleSovereigntyModule(next, tasks.profile, {
@@ -3767,7 +3879,8 @@ async function completeSovereigntyCycle({
         failureCode: persistenceSuccess
             ? 'profile.preparation_incomplete'
             : 'profile.persistence_failed',
-        currentTurn: turn,
+        currentTurn: recoveryTurn,
+        retryOnCurrentTurn,
     });
     next = settleSovereigntyModule(next, tasks.physiology, {
         success: profileReady && persistenceSuccess,
@@ -3780,7 +3893,8 @@ async function completeSovereigntyCycle({
         failureCode: persistenceSuccess
             ? 'physiology.preparation_incomplete'
             : 'physiology.persistence_failed',
-        currentTurn: turn,
+        currentTurn: recoveryTurn,
+        retryOnCurrentTurn,
     });
     next = settleSovereigntyModule(next, tasks.actor, {
         success: !actorFailure && persistenceSuccess,
@@ -3797,7 +3911,8 @@ async function completeSovereigntyCycle({
         failureCode: persistenceSuccess
             ? actorFailure || 'actor.technical_failure'
             : 'actor.persistence_failed',
-        currentTurn: turn,
+        currentTurn: recoveryTurn,
+        retryOnCurrentTurn,
     });
     next = settleSovereigntyModule(next, tasks.world, {
         success: worldSuccess && persistenceSuccess,
@@ -3812,7 +3927,8 @@ async function completeSovereigntyCycle({
         failureCode: persistenceSuccess
             ? worldFailure || 'world.output_not_committed'
             : 'world.persistence_failed',
-        currentTurn: turn,
+        currentTurn: recoveryTurn,
+        retryOnCurrentTurn,
     });
     await persistSovereigntyRuntime(next, captured.chatId, { durable: true });
     for (const task of Object.values(tasks || {})) {
@@ -8933,64 +9049,6 @@ function buildContinuityMessages({
     return [{ role: 'system', content: system }, { role: 'user', content: boundedUser }];
 }
 
-function buildContinuityRepairMessages(output, error, {
-    turn = 0,
-    threadIds = [],
-} = {}) {
-    const targetTurn = Math.max(1, Math.floor(Number(turn) || 1));
-    const allowedThreadIds = [...new Set((threadIds || [])
-        .map((id) => String(id || '').trim())
-        .filter(Boolean))]
-        .slice(0, 40);
-    return [
-        {
-            role: 'system',
-            content: [
-                '你只负责把上一条活世界候选修成一个完整、可解析的增量 JSON 对象。',
-                '保留原候选中有依据的内容，不新增事实、不补造人物行动、不替玩家决定。',
-                '根对象只允许 turn、lastTick、actorProfiles、threads、scenarioPlan、world。',
-                `turn与lastTick.turn都必须严格等于目标回合 ${targetTurn}。`,
-                'lastTick 必须包含 turn、action、threadId、reason；threadId 只能使用给定已有稳定ID或 WORLD，held 理由不少于8字。',
-                'actorProfiles、threads必须是数组；scenarioPlan、world必须是对象。缺少变化时使用空数组或空对象。',
-                '只输出 JSON 对象，不要围栏、解释或前后文字。',
-            ].join('\n'),
-        },
-        {
-            role: 'user',
-            content: [
-                `原校验错误=${String(error || 'invalid-continuity').slice(0, 500)}`,
-                `目标回合=${targetTurn}`,
-                `允许的已有threadId=${safeJson(allowedThreadIds.length ? allowedThreadIds : ['WORLD'])}`,
-                '严格根形状：',
-                safeJson({
-                    turn: targetTurn,
-                    lastTick: {
-                        turn: targetTurn,
-                        action: 'created|advanced|manifested|resolved|dormant|held',
-                        threadId: allowedThreadIds[0] || 'WORLD',
-                        reason: '不少于8字的具体依据',
-                    },
-                    actorProfiles: [],
-                    threads: [],
-                    scenarioPlan: { amendments: [] },
-                    world: {
-                        digest: '',
-                        trends: [],
-                        factions: [],
-                        winds: [],
-                        reputation: {},
-                        environment: {},
-                        shadows: { enemies: [], secrets: [] },
-                        influences: [],
-                    },
-                }),
-                '待修复候选：',
-                cropText(String(output || ''), 10_000, '待修复候选'),
-            ].join('\n'),
-        },
-    ];
-}
-
 function actorShardLeaseFingerprint(captured) {
     return {
         chatId: String(captured?.chatId || ''),
@@ -9070,7 +9128,7 @@ async function collectActorShardProposals(captured, {
     });
     await actorShardLeaseManager.start(leaseId, 'parallel-proposals');
     setContinuityStatus(
-        `世界连续性：NPC分片 0/${candidates.length}（最多 ${settings.actorShardMaxWorkers} 次额外轻量调用）`,
+        `世界连续性：人物行动分析 0/${candidates.length}（每名人物独立，最多 ${settings.actorShardMaxWorkers} 路）`,
         'busy',
     );
     const actorDeadlineAt = runUntilCancelled
@@ -9094,7 +9152,7 @@ async function collectActorShardProposals(captured, {
                 failed: progress.failed,
             };
             setContinuityStatus(
-                `世界连续性：NPC分片 ${progress.completed}/${progress.total}（成功 ${progress.succeeded}，降级 ${progress.failed}）`,
+                `世界连续性：人物行动分析 ${progress.completed}/${progress.total}（可用 ${progress.succeeded}，等待自动恢复 ${progress.failed}）`,
                 'busy',
             );
         },
@@ -9106,7 +9164,7 @@ async function collectActorShardProposals(captured, {
             {
                 maxTokens: settings.actorShardMaxTokens,
                 timeoutMs: settings.actorShardTimeoutMs,
-                task: '活世界 NPC 分片',
+                task: '活世界人物行动分析',
                 channel: 'fast',
                 targetIndex: captured.index,
                 jsonMode: true,
@@ -9122,7 +9180,7 @@ async function collectActorShardProposals(captured, {
             buildActorShardRepairMessages(output, candidate, error), {
             maxTokens: settings.actorShardMaxTokens,
             timeoutMs: runUntilCancelled ? 0 : Math.min(12_000, settings.actorShardTimeoutMs),
-            task: '活世界 NPC 分片 JSON 修复',
+            task: '活世界人物行动分析 JSON 修复',
             channel: 'fast',
             instructionModule: 'actor',
             targetIndex: captured.index,
@@ -9526,7 +9584,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 captured,
                 'actor_target_advanced',
             );
-            return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
+            return { status: 'stale', reason: '人物行动分析期间目标身份已经变化' };
         }
         actorShardCandidates = actorShardResult.candidates;
         if (actorShardResult.candidates?.proposals?.length) {
@@ -9630,12 +9688,15 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             failed: 1,
         };
         actorTechnicalFailure = 'actor_shard.transport_failed';
-        console.warn('[MVU Auto Doctor] NPC分片失败，已降级到原宏观连续性路径：', error);
+        console.warn('[MVU Auto Doctor] 人物行动分析失败，世界模块继续独立运行：', error);
     }
     if (!actorSettlementFinalized && actorShardStatus !== 'disabled' && scheduledActorIds.length) {
-        actorTechnicalFailure ||= latestActorShardDiagnostics.failed > 0
-            ? `actor_shard.${latestActorShardDiagnostics.failureCodes?.[0] || 'worker_failed'}`
-            : 'actor_shard.output_missing';
+        const workerFailureCode = latestActorShardDiagnostics.failed > 0
+            ? String(latestActorShardDiagnostics.failureCodes?.[0] || 'worker_failed')
+            : 'output_missing';
+        actorTechnicalFailure ||= workerFailureCode.startsWith('actor_shard.')
+            ? workerFailureCode
+            : `actor_shard.${workerFailureCode}`;
         latestActorShardDiagnostics = {
             ...latestActorShardDiagnostics,
             semanticActions: 0,
@@ -10245,6 +10306,15 @@ function enqueueContinuity(targetId, {
         })
         .finally(() => {
             if (dedupeKey) continuityPendingKeys.delete(dedupeKey);
+            if (expected?.epoch === operationEpoch) {
+                const freshContext = getContext();
+                const freshLatest = latestAiMessage(freshContext);
+                const fresh = captureTarget(freshContext, freshLatest.index);
+                scheduleSovereigntyAutoRetry(
+                    fresh,
+                    sovereigntyRuntimeFromNamespace(readChatNamespace(freshContext)),
+                );
+            }
         });
     return continuityChain;
 }
@@ -13589,7 +13659,7 @@ function buildSettingsPanel() {
                                 </div>
                                 <div class="mvuad-provider-status mvuad-strict-provider-status" role="status"></div>
                                 <div class="mvuad-route-heading">轻量人物 / 世界 / 论坛通道</div>
-                                <div class="mvuad-description">人物分片、关系二审、世界与论坛共享这些槽位；每个槽位都明确绑定一个 API 预设。</div>
+                                <div class="mvuad-description">人物行动分析、关系二审、世界与论坛共享这些槽位；每个槽位都明确绑定一个 API 预设。</div>
                                 <div class="mvuad-route-slots mvuad-fast-route-slots"></div>
                                 <div class="mvuad-actions mvuad-route-actions">
                                     <button class="menu_button mvuad-fast-slot-add" type="button">＋ 轻量并发槽位</button>
@@ -13907,10 +13977,10 @@ function buildSettingsPanel() {
                             <div class="mvuad-description">
                                 默认2，可设0—4；主回复仍可采用0条。多个事件只有在各自触发条件已经成熟，
                                 或共享同一时间、地点、人物、势力、资源或因果簇时才可共同爆发，并继续受注入预算限制。
-                                人物行动与势力、环境、经济等结构世界过程分轨调度；关闭人物分片不会停止后者。
+                                人物行动与势力、环境、经济等结构世界过程分轨调度；关闭逐人物行动分析不会停止后者。
                             </div>
                             <label class="mvuad-select">
-                                <span>NPC 分片</span>
+                                <span>人物行动分析</span>
                                 <select class="text_pole mvuad-actor-shard-mode">
                                     <option value="off">关闭（0 次额外调用）</option>
                                     <option value="auto">人物驱动·自动（推荐）</option>
@@ -13982,7 +14052,7 @@ function buildSettingsPanel() {
                                         rows="5" maxlength="6000"
                                         placeholder="留空使用内置连续性规则。"></textarea>
                                     <label class="mvuad-prompt-addon-label" for="mvuad-actor-shard-prompt-addon">
-                                        NPC 分片自定义提示词
+                                        人物行动分析自定义提示词
                                     </label>
                                     <textarea id="mvuad-actor-shard-prompt-addon"
                                         class="text_pole mvuad-actor-shard-prompt-addon"
@@ -14402,7 +14472,7 @@ function buildSettingsPanel() {
         getSettings().actorShardPromptAddon = actorValue;
         saveSettings();
         actorPromptSaveHint.textContent = '已保存；诊断仅记录长度、哈希与启用状态';
-        if (notify) toast('success', '世界连续性与 NPC 分片自定义提示词已保存。');
+        if (notify) toast('success', '世界连续性与人物行动分析自定义提示词已保存。');
     };
     for (const input of [continuityPromptAddon, actorShardPromptAddon]) {
         input.addEventListener('input', () => {

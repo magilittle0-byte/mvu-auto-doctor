@@ -4,6 +4,7 @@ import {
     advanceContinuityClocks,
     applyWorldUpdate,
     attachChangedSourceRefs,
+    buildContinuityRepairMessages,
     buildContinuityInjection,
     continuityConsumptionEvidence,
     continuityLifecycleStats,
@@ -846,6 +847,20 @@ const parsedWorldDelta = parseContinuityOutput(`
 }
 </ContinuityState>`, { chatId: 'world-chat' });
 assert.equal(parsedWorldDelta.raw.world.winds[0].id, 'WIND-01');
+
+const worldRepairMessages = buildContinuityRepairMessages(
+    '{"turn":38,"lastTick":{"turn":38}}',
+    'turn_mismatch',
+    { turn: 39, threadIds: ['SYN-THREAD-03'] },
+);
+assert.equal(worldRepairMessages.length, 2);
+assert.match(worldRepairMessages[0].content, /严格等于目标回合 39/u);
+assert.match(worldRepairMessages[1].content, /目标回合=39/u);
+assert.match(worldRepairMessages[1].content, /SYN-THREAD-03/u);
+assert.ok(
+    worldRepairMessages[1].content.endsWith('{"turn":38,"lastTick":{"turn":38}}'),
+    '待修复候选必须位于用户消息末尾，不能在其后追加会争夺目标身份的旧长局上下文',
+);
 
 const legacyWithoutScenario = normalizeContinuityState({
     version: 4,

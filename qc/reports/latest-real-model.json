@@ -18,14 +18,14 @@
     "model": "gemini-3.1-pro-preview",
     "upstream": "api2.gemai.cc",
     "credentialSource": "authorized-project-history-memory",
-    "candidateVersion": "2.0.0-rc.12",
-    "candidateIndexSha256": "cab689bf75e777a95ba5a82e93c2a3b2aa35d16ad1fcac8952593cf1c6ff0fd2",
+    "candidateVersion": "2.0.0-rc.13",
+    "candidateIndexSha256": "4ae2d6043b95199c1df207e2ba9229e692982d7244f6d8f948609101cb81f40d",
     "legacyPublicRuntimeTemporarilyReplaced": true
   },
   "runtime": {
     "hostHttpStatus": 200,
     "credentialPreloadedInMemoryProxy": false,
-    "doctorVersion": "2.0.0-rc.12",
+    "doctorVersion": "2.0.0-rc.13",
     "status": "failed",
     "correctionStatus": "failed",
     "modelCallDelta": 3,
@@ -68,7 +68,7 @@
         "phase": "transport",
         "task": "活世界整理",
         "status": "succeeded",
-        "durationMs": 14482,
+        "durationMs": 20517,
         "queueWaitMs": 0,
         "httpStatus": 200,
         "failureKind": "",
@@ -77,10 +77,10 @@
       },
       {
         "phase": "transport",
-        "task": "活世界 NPC 分片",
+        "task": "活世界人物行动分析",
         "status": "succeeded",
-        "durationMs": 5147,
-        "queueWaitMs": 1,
+        "durationMs": 4277,
+        "queueWaitMs": 2,
         "httpStatus": 200,
         "failureKind": "",
         "reason": "",
@@ -90,7 +90,7 @@
         "phase": "transport",
         "task": "人物关系二审",
         "status": "succeeded",
-        "durationMs": 8915,
+        "durationMs": 6905,
         "queueWaitMs": 2,
         "httpStatus": 200,
         "failureKind": "",
@@ -105,8 +105,8 @@
     "worldLaneReceiptCount": 2,
     "worldLaneIndependentOfActors": true,
     "promptInfo": {
-      "task": "活世界 NPC 分片",
-      "capturedAt": 1786082187074,
+      "task": "活世界人物行动分析",
+      "capturedAt": 1786099901538,
       "maxTokens": 1200,
       "totalChars": 5019,
       "segments": [
@@ -125,19 +125,19 @@
         "status": 200,
         "inputBytes": 3422,
         "model": "gemini-3.1-pro-preview",
-        "durationMs": 8911
+        "durationMs": 6900
       },
       {
         "status": 200,
         "inputBytes": 8813,
         "model": "gemini-3.1-pro-preview",
-        "durationMs": 5145
+        "durationMs": 4274
       },
       {
         "status": 200,
         "inputBytes": 31472,
         "model": "gemini-3.1-pro-preview",
-        "durationMs": 14478
+        "durationMs": 20513
       }
     ],
     "credentialDeleteStatus": 200,

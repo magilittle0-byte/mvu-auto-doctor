@@ -196,6 +196,8 @@ export function createPrivacySafeDiagnosticProjection({
                 ? sovereignty.failingModules
                 : []).map((value) => String(value || '')).slice(0, 12),
             nextRetryTurn: Math.max(0, Number(sovereignty?.nextRetryTurn) || 0),
+            autoRetryScheduled: sovereignty?.autoRetryScheduled === true,
+            autoRetryAt: Math.max(0, Number(sovereignty?.autoRetryAt) || 0),
             checkpointCount: Math.max(0, Number(sovereignty?.checkpointCount) || 0),
             technicalReceiptCount: Math.max(
                 0,
