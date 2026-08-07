@@ -217,6 +217,16 @@ function parseJsonObjectWithSafePunctuationRepair(text) {
     const source = String(text || '').trim()
         .replace(/^```(?:json)?\s*/iu, '')
         .replace(/\s*```$/u, '');
+    const balanced = extractFirstBalancedJsonObject(source);
+    if (!balanced.error) {
+        const exact = balanced.start === 0 && balanced.end === source.length;
+        return {
+            value: balanced.value,
+            repaired: !exact,
+            repairKinds: exact ? [] : ['extract-first-balanced-json-object'],
+            repairAttempted: !exact,
+        };
+    }
     const start = source.indexOf('{');
     const end = source.lastIndexOf('}');
     const candidate = start >= 0 && end > start
@@ -360,3 +370,4 @@ export function renderSocialPatchBlock(ops, summary = '') {
         '</UpdateVariable>',
     ].join('\n');
 }
+import { extractFirstBalancedJsonObject } from './sovereignty-runtime-core.mjs';

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "phase": 7,
-  "generatedAt": "2026-08-06T17:18:41.765Z",
+  "generatedAt": "2026-08-07T06:05:42.990Z",
   "environment": "node-unit-integration-browser-release",
   "totals": {
     "cases": 17,
@@ -199,7 +199,7 @@
       "status": "pass"
     }
   ],
-  "candidate": "2.0.0-rc.11",
+  "candidate": "2.0.0-rc.12",
   "command": "node --test tests\\v2-director-core.test.mjs tests\\v2-director-replays.test.mjs tests\\v2-domain-core.test.mjs tests\\v2-domain-replays.test.mjs tests\\v2-domain-transaction-core.test.mjs tests\\v2-domain-transaction-replays.test.mjs tests\\v2-long-session-hardening.test.mjs tests\\v2-release-core.test.mjs tests\\v2-release-replays.test.mjs tests\\v2-replay-fixtures.test.mjs tests\\v2-runtime-core.test.mjs tests\\v2-runtime-replays.test.mjs tests\\v2-surface-browser.test.mjs tests\\v2-surface-core.test.mjs tests\\v2-transaction-core.test.mjs tests\\v2-transaction-replays.test.mjs",
   "testFiles": [
     "tests\\v2-director-core.test.mjs",

@@ -73,6 +73,16 @@ test('confirmed card or narrative facts remain confirmed while designed gaps are
     assert.equal(profile.modules.identity.source, 'confirmed');
     assert.equal(profile.modules.personality.source, 'confirmed');
     assert.equal(profile.modules.goals.source, 'confirmed');
+    assert.equal(
+        profile.fieldSources['modules.personality.data.speechStyle'],
+        'confirmed',
+    );
+    assert.equal(
+        profile.fieldSources['modules.personality.data.socialStyle'],
+        'designed_seed',
+    );
+    assert.equal(profile.fieldSources['modules.goals.data.longTerm'], 'confirmed');
+    assert.equal(profile.fieldSources['modules.goals.data.current'], 'designed_seed');
     assert.equal(profile.modules.resourcesCapabilities.data.noUnconfirmedAbilityGranted, true);
 });
 
@@ -178,4 +188,43 @@ test('diagnostic view exposes source and counts without profile prose', () => {
     assert.equal(view.coverage, 100);
     assert.equal(serialized.includes(ada.profileV6.modules.personality.data.socialStyle), false);
     assert.equal(view.physiologyInfersPersonality, false);
+});
+
+test('nine-actor long-session profiles have real plans, provenance and idempotent history', () => {
+    let ledger = {
+        turn: 1,
+        actors: Array.from({ length: 9 }, (_, index) => (
+            actor(`NPC-LONG-${index + 1}`, `人物${index + 1}`)
+        )),
+    };
+    const first = prepareActorLedgerProfilesV6(ledger, { mode: 'full', turn: 1, now: 100 });
+    ledger = first.ledger;
+    const historyCounts = ledger.actors.map((entry) => entry.profileV6.history.length);
+    for (let turn = 2; turn <= 54; turn += 1) {
+        ledger.turn = turn;
+        ledger = prepareActorLedgerProfilesV6(ledger, {
+            mode: 'full',
+            turn,
+            now: 100 + turn,
+        }).ledger;
+    }
+    assert.equal(ledger.actors.every((entry) => entry.profileV6.coverage === 100), true);
+    assert.equal(ledger.actors.every((entry) => entry.profileV6.preparedForAction), true);
+    assert.equal(ledger.actors.every((entry) => entry.currentGoals.length > 0), true);
+    assert.equal(ledger.actors.every((entry) => entry.plan.summary && entry.plan.steps.length), true);
+    assert.equal(ledger.actors.every((entry) => (
+        entry.plan.nextWindow
+        && entry.plan.obstacles.length
+        && entry.plan.costs.length
+        && entry.plan.alternatives.length
+    )), true);
+    assert.equal(ledger.actors.every((entry) => (
+        Object.keys(entry.profileV6.fieldSources).length > 20
+    )), true);
+    assert.deepEqual(
+        ledger.actors.map((entry) => entry.profileV6.history.length),
+        historyCounts,
+        'unchanged profiles must not fill the 40-entry history cap every turn',
+    );
+    assert.ok(new Set(ledger.actors.map((entry) => entry.plan.summary)).size >= 5);
 });

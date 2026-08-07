@@ -162,6 +162,27 @@ test('reports the current schema-level equipment slot gap and ambiguous backpack
     assert.ok(!result.issues.some((issue) => /医疗包/u.test(issue.message)));
 });
 
+test('generic type and quality fields do not misclassify consumables, scrolls or keys as equipment', () => {
+    const result = auditEquipmentContracts({
+        玩家: {
+            背包: {
+                治疗药剂: { 描述: '恢复状态', 数量: 2, 类型: '消耗品', 品质: '普通' },
+                回城卷轴: { 描述: '返回据点', 数量: 1, 类型: '卷轴', 品质: '稀有' },
+                仓库钥匙: { 描述: '开启仓库', 数量: 1, 类型: '任务道具', 品质: '普通' },
+                制式手枪: { 描述: '标准武器', 数量: 1, 类型: '手枪', 品质: '普通' },
+            },
+        },
+    }, {
+        ruleTexts: ['背包中的装备必须保留品质、类型、伤害骰等完整装备字段。'],
+    });
+    const incomplete = result.issues.filter((issue) => (
+        issue.code === 'bag-equipment-fields-incomplete'
+    ));
+    assert.equal(incomplete.length, 1);
+    assert.match(incomplete[0].path, /制式手枪/u);
+    assert.equal(result.issues.some((issue) => /治疗药剂|回城卷轴|仓库钥匙/u.test(issue.path)), false);
+});
+
 test('validates declared equipment slots without inventing a correction', () => {
     const stat = {
         角色: {

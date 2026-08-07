@@ -147,7 +147,7 @@ export async function runSovereigntyAgentPool({
     };
     const selected = selectedJobs(jobs, normalizedLimits);
     const startedAt = Date.now();
-    const boundedTimeoutMs = integer(timeoutMs, 0, 300_000, 0);
+    const boundedTimeoutMs = integer(timeoutMs, 0, Number.MAX_SAFE_INTEGER, 0);
     const results = await Promise.allSettled(selected.map(async (job) => {
         const controller = new AbortController();
         const abortFromParent = () => controller.abort(signal?.reason || 'agent-pool-aborted');

@@ -53,6 +53,7 @@ import {
     WORLD_WIND_TYPE_LABELS,
 } from './continuity-core.mjs';
 import {
+    buildActorShardRepairMessages,
     buildActorShardMessages,
     formatUserNarrativeInstruction,
     normalizeUserPromptSlot,
@@ -112,12 +113,14 @@ import {
 } from './actor-profile-v6-core.mjs';
 import {
     claimNextSovereigntyTask,
+    cancelSovereigntyTaskAsStale,
     commitSovereigntyTask,
     emptySovereigntyRuntime,
     failSovereigntyTask,
     normalizeSovereigntyRuntime,
     observeSovereigntyTurn,
     recoverOrphanedSovereigntyTasks,
+    requeueSovereigntyTaskForLatestState,
     restoreSovereigntyCheckpoint,
     retrySovereigntyTaskNow,
     sovereigntyHealthView,
@@ -160,7 +163,7 @@ import {
 } from './v2/runtime/index.mjs';
 
 const PLUGIN_ID = 'mvu_auto_doctor';
-const VERSION = '2.0.0-rc.11';
+const VERSION = '2.0.0-rc.12';
 const STATUS_PLACEHOLDER = '<StatusPlaceHolderImpl/>';
 const CHAT_NAMESPACE_VERSION = 12;
 const CONTINUITY_INJECTION_NAME = 'mvu-auto-doctor-continuity';
@@ -230,7 +233,8 @@ const DEFAULTS = Object.freeze({
     sovereigntyForegroundWaitMs: 3000,
     sovereigntySoftTimeoutMs: 12000,
     sovereigntyHardTimeoutMs: 30000,
-    sovereigntySettingsVersion: 1,
+    sovereigntyRunUntilCancelled: true,
+    sovereigntySettingsVersion: 2,
     mvuIdleTimeoutMs: 8000,
     mvuStableTimeoutMs: 8000,
     hardContractAuditEnabled: true,
@@ -377,6 +381,7 @@ let modelCallStats = {
     },
 };
 const activeModelControllers = new Set();
+const activeSovereigntyTaskIds = new Set();
 const modelRouteSlotCursors = { strict: 0, fast: 0 };
 const modelRouteHealth = { strict: new Map(), fast: new Map() };
 let activeTaskProgress = null;
@@ -629,6 +634,15 @@ function getSettings() {
     if (previousSovereigntySettingsVersion < 1) {
         settings.sovereigntyMode = 'active';
         settings.sovereigntySettingsVersion = 1;
+        changed = true;
+    }
+    if (previousSovereigntySettingsVersion < 2) {
+        settings.sovereigntyRunUntilCancelled = true;
+        settings.sovereigntySettingsVersion = 2;
+        changed = true;
+    }
+    if (typeof settings.sovereigntyRunUntilCancelled !== 'boolean') {
+        settings.sovereigntyRunUntilCancelled = true;
         changed = true;
     }
     if (!['off', 'basic', 'full', 'full_adult'].includes(settings.actorProfileCompletionMode)) {
@@ -1165,6 +1179,9 @@ function renderSovereigntyHealth(value = readChatNamespace()?.sovereigntyRuntime
             ? `失败模块 ${health.failingModules.join('、')}`
             : '',
         health.nextRetryTurn ? `下次重试 ${health.nextRetryTurn}` : '',
+        getSettings().sovereigntyRunUntilCancelled !== false
+            ? '后台持续运行，可主动取消'
+            : '兼容时限模式',
     ].filter(Boolean).join(' · ');
     for (const root of [ui?.sovereigntyHealth, ui?.floatingSovereigntyHealth]) {
         if (!root) continue;
@@ -1600,6 +1617,7 @@ function invalidateOperations(reason = '') {
         }
     }
     activeModelControllers.clear();
+    activeSovereigntyTaskIds.clear();
     if (activeTaskProgress) finishTaskProgress(activeTaskProgress.id);
     clearTimeout(pendingOpeningSyncTimer);
     pendingOpeningSyncTimer = null;
@@ -1613,11 +1631,39 @@ function invalidateOperations(reason = '') {
     if (reason) console.info('[MVU Auto Doctor] 旧任务已失效：', reason);
 }
 
+async function cancelRunningSovereigntyTasks(reason = 'user_cancelled') {
+    const context = getContext();
+    const chatId = context?.chatId || '';
+    if (!chatId) return [];
+    const namespace = readChatNamespace(context);
+    let runtime = sovereigntyRuntimeFromNamespace(namespace);
+    const runningIds = runtime.backlog
+        .filter((task) => task.status === 'running')
+        .map((task) => task.id);
+    for (const taskId of runningIds) {
+        runtime = cancelSovereigntyTaskAsStale(runtime, {
+            taskId,
+            reason,
+        }).runtime;
+        activeSovereigntyTaskIds.delete(taskId);
+    }
+    if (runningIds.length) {
+        await persistSovereigntyRuntime(runtime, chatId, { durable: true });
+        recordOperation(
+            '人物主权',
+            `已按用户要求取消 ${runningIds.length} 个正在运行的后台任务；迟到结果不会提交`,
+            '',
+        );
+    }
+    return runningIds;
+}
+
 function cancelCurrentOperations() {
     if (!activeTaskProgress && !activeModelControllers.size) {
         toast('info', '当前没有正在执行的模型任务。');
         return false;
     }
+    void cancelRunningSovereigntyTasks('user_cancelled');
     invalidateOperations('用户停止了当前后台任务');
     setStatus('已停止当前后台任务；迟到结果不会写入聊天或变量', '');
     toast('info', '已停止当前后台任务；若上游不支持取消，迟到结果也会被安全丢弃。');
@@ -3575,6 +3621,7 @@ async function observeSovereigntyTarget(captured) {
     let runtime = sovereigntyRuntimeFromNamespace(namespace, settings);
     const recovered = recoverOrphanedSovereigntyTasks(runtime, {
         staleAfterMs: settings.sovereigntyHardTimeoutMs + 5_000,
+        excludeTaskIds: [...activeSovereigntyTaskIds],
     });
     runtime = recovered.runtime;
     const modules = settings.sovereigntyMode === 'legacy'
@@ -3608,7 +3655,10 @@ async function recoverSovereigntyOnChatLoad() {
     const namespace = readChatNamespace(context);
     const recovered = recoverOrphanedSovereigntyTasks(
         sovereigntyRuntimeFromNamespace(namespace, settings),
-        { staleAfterMs: settings.sovereigntyHardTimeoutMs + 5_000 },
+        {
+            staleAfterMs: settings.sovereigntyRunUntilCancelled ? 1_000 : settings.sovereigntyHardTimeoutMs + 5_000,
+            excludeTaskIds: [...activeSovereigntyTaskIds],
+        },
     );
     await persistSovereigntyRuntime(recovered.runtime, chatId, { durable: true });
     const health = sovereigntyHealthView(recovered.runtime);
@@ -3637,13 +3687,31 @@ async function claimSovereigntyModules(namespace, captured, modules) {
             currentTurn: runtime.observedThrough.turn,
         });
         runtime = result.runtime;
-        if (result.task) claimed[module] = result.task;
+        if (result.task) {
+            claimed[module] = result.task;
+            activeSovereigntyTaskIds.add(result.task.id);
+        }
     }
     namespace.sovereigntyRuntime = runtime;
     if (Object.keys(claimed).length) {
         await persistSovereigntyRuntime(runtime, captured.chatId, { durable: true });
     }
     return { runtime, claimed };
+}
+
+async function requeueClaimedSovereigntyTasks(tasks, captured, reason = 'target_advanced') {
+    const entries = Object.values(tasks || {}).filter((task) => task?.id);
+    if (!entries.length) return;
+    const namespace = readChatNamespace();
+    let runtime = sovereigntyRuntimeFromNamespace(namespace);
+    for (const task of entries) {
+        runtime = requeueSovereigntyTaskForLatestState(runtime, {
+            taskId: task.id,
+            reason,
+        }).runtime;
+        activeSovereigntyTaskIds.delete(task.id);
+    }
+    await persistSovereigntyRuntime(runtime, captured.chatId, { durable: true });
 }
 
 function settleSovereigntyModule(runtime, task, {
@@ -3747,6 +3815,9 @@ async function completeSovereigntyCycle({
         currentTurn: turn,
     });
     await persistSovereigntyRuntime(next, captured.chatId, { durable: true });
+    for (const task of Object.values(tasks || {})) {
+        if (task?.id) activeSovereigntyTaskIds.delete(task.id);
+    }
     return next;
 }
 
@@ -4581,16 +4652,16 @@ async function withTimeout(promise, milliseconds, label, {
     signal = null,
     onTimeout = null,
 } = {}) {
-    const timeout = Math.min(
-        MAX_MODEL_TIMEOUT_MS,
-        Math.max(250, Number(milliseconds) || 120000),
-    );
+    const requestedTimeout = Number(milliseconds);
+    const timeout = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+        ? Math.min(MAX_MODEL_TIMEOUT_MS, Math.max(250, requestedTimeout))
+        : 0;
     let timer;
     let abortHandler;
     try {
-        const racers = [
-            Promise.resolve(promise),
-            new Promise((_, reject) => {
+        const racers = [Promise.resolve(promise)];
+        if (timeout > 0) {
+            racers.push(new Promise((_, reject) => {
                 timer = setTimeout(
                     () => {
                         try {
@@ -4602,8 +4673,8 @@ async function withTimeout(promise, milliseconds, label, {
                     },
                     timeout,
                 );
-            }),
-        ];
+            }));
+        }
         if (signal) {
             racers.push(new Promise((_, reject) => {
                 abortHandler = () => {
@@ -5115,14 +5186,21 @@ async function callModel(messages, options = {}) {
         1024,
         Number(options.maxTokens ?? settings.maxTokens) || DEFAULTS.maxTokens,
     );
-    const timeoutMs = Math.min(
-        MAX_MODEL_TIMEOUT_MS,
-        Math.max(
-            MIN_MODEL_TIMEOUT_MS,
-            Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
-        ),
-    );
-    const deadlineAt = Number.isFinite(Number(options.deadlineAt))
+    const runUntilCancelled = options.runUntilCancelled === true
+        || (
+            options.runUntilCancelled !== false
+            && settings.sovereigntyRunUntilCancelled !== false
+        );
+    const timeoutMs = runUntilCancelled
+        ? 0
+        : Math.min(
+            MAX_MODEL_TIMEOUT_MS,
+            Math.max(
+                MIN_MODEL_TIMEOUT_MS,
+                Number(options.timeoutMs ?? settings.modelTimeoutMs) || 120000,
+            ),
+        );
+    const deadlineAt = !runUntilCancelled && Number.isFinite(Number(options.deadlineAt))
         ? Number(options.deadlineAt)
         : 0;
     const attemptedCount = Array.isArray(options.attemptedRouteSlots)
@@ -5156,7 +5234,9 @@ async function callModel(messages, options = {}) {
         error.code = 'MODEL_TOTAL_DEADLINE';
         throw error;
     }
-    const attemptTimeoutMs = deadlineAt
+    const attemptTimeoutMs = runUntilCancelled
+        ? 0
+        : deadlineAt
         ? Math.max(
             250,
             Math.min(
@@ -8853,7 +8933,15 @@ function buildContinuityMessages({
     return [{ role: 'system', content: system }, { role: 'user', content: boundedUser }];
 }
 
-function buildContinuityRepairMessages(output, error) {
+function buildContinuityRepairMessages(output, error, {
+    turn = 0,
+    threadIds = [],
+} = {}) {
+    const targetTurn = Math.max(1, Math.floor(Number(turn) || 1));
+    const allowedThreadIds = [...new Set((threadIds || [])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean))]
+        .slice(0, 40);
     return [
         {
             role: 'system',
@@ -8861,7 +8949,9 @@ function buildContinuityRepairMessages(output, error) {
                 '你只负责把上一条活世界候选修成一个完整、可解析的增量 JSON 对象。',
                 '保留原候选中有依据的内容，不新增事实、不补造人物行动、不替玩家决定。',
                 '根对象只允许 turn、lastTick、actorProfiles、threads、scenarioPlan、world。',
-                '缺少变化时使用空数组或空对象；lastTick 必须指向已有稳定ID或 WORLD，并写不少于8字的具体 held 理由。',
+                `turn与lastTick.turn都必须严格等于目标回合 ${targetTurn}。`,
+                'lastTick 必须包含 turn、action、threadId、reason；threadId 只能使用给定已有稳定ID或 WORLD，held 理由不少于8字。',
+                'actorProfiles、threads必须是数组；scenarioPlan、world必须是对象。缺少变化时使用空数组或空对象。',
                 '只输出 JSON 对象，不要围栏、解释或前后文字。',
             ].join('\n'),
         },
@@ -8869,6 +8959,31 @@ function buildContinuityRepairMessages(output, error) {
             role: 'user',
             content: [
                 `原校验错误=${String(error || 'invalid-continuity').slice(0, 500)}`,
+                `目标回合=${targetTurn}`,
+                `允许的已有threadId=${safeJson(allowedThreadIds.length ? allowedThreadIds : ['WORLD'])}`,
+                '严格根形状：',
+                safeJson({
+                    turn: targetTurn,
+                    lastTick: {
+                        turn: targetTurn,
+                        action: 'created|advanced|manifested|resolved|dormant|held',
+                        threadId: allowedThreadIds[0] || 'WORLD',
+                        reason: '不少于8字的具体依据',
+                    },
+                    actorProfiles: [],
+                    threads: [],
+                    scenarioPlan: { amendments: [] },
+                    world: {
+                        digest: '',
+                        trends: [],
+                        factions: [],
+                        winds: [],
+                        reputation: {},
+                        environment: {},
+                        shadows: { enemies: [], secrets: [] },
+                        influences: [],
+                    },
+                }),
                 '待修复候选：',
                 cropText(String(output || ''), 10_000, '待修复候选'),
             ].join('\n'),
@@ -8899,6 +9014,7 @@ async function collectActorShardProposals(captured, {
     signal = null,
 } = {}) {
     const settings = getSettings();
+    const runUntilCancelled = settings.sovereigntyRunUntilCancelled !== false;
     if (settings.actorShardMode === 'off') {
         latestActorShardDiagnostics = {
             status: 'disabled',
@@ -8945,22 +9061,28 @@ async function collectActorShardProposals(captured, {
         branchId: captured.branchId,
         target,
         phase: 'selecting',
-        softDeadlineAt: Date.now() + settings.actorShardTimeoutMs,
-        hardDeadlineAt: Date.now() + settings.actorShardTimeoutMs + 5000,
+        softDeadlineAt: runUntilCancelled
+            ? Number.MAX_SAFE_INTEGER
+            : Date.now() + settings.actorShardTimeoutMs,
+        hardDeadlineAt: runUntilCancelled
+            ? Number.MAX_SAFE_INTEGER
+            : Date.now() + settings.actorShardTimeoutMs + 5000,
     });
     await actorShardLeaseManager.start(leaseId, 'parallel-proposals');
     setContinuityStatus(
         `世界连续性：NPC分片 0/${candidates.length}（最多 ${settings.actorShardMaxWorkers} 次额外轻量调用）`,
         'busy',
     );
-    const actorDeadlineAt = Date.now() + settings.actorShardTimeoutMs;
+    const actorDeadlineAt = runUntilCancelled
+        ? 0
+        : Date.now() + settings.actorShardTimeoutMs;
     const result = await runActorShardBatch({
         candidates,
         maxConcurrency: Math.min(
             settings.actorShardMaxWorkers,
             settings.fastChannelConcurrency,
         ),
-        timeoutMs: settings.actorShardTimeoutMs,
+        timeoutMs: runUntilCancelled ? 0 : settings.actorShardTimeoutMs,
         signal,
         isCurrent: () => continuityTargetIsCurrent(captured, token).ok,
         onProgress(progress) {
@@ -8992,30 +9114,14 @@ async function collectActorShardProposals(captured, {
                 parallelLane: candidate.id,
                 failover: true,
                 maxFailovers: 1,
-                deadlineAt: actorDeadlineAt,
+                ...(actorDeadlineAt ? { deadlineAt: actorDeadlineAt } : {}),
+                runUntilCancelled,
             },
         ),
-        repairWorker: async (output, candidate, { signal, error }) => callModel([
-            {
-                role: 'system',
-                content: [
-                    '你只负责把上一条 NPC 人物分片结果修成一个完整 JSON 对象。',
-                    '不要续写剧情、不要补造行动、不要改变 actorId；无法确定的可选值留空。',
-                    '只输出 JSON 对象，不要围栏、解释或前后文字。',
-                ].join('\n'),
-            },
-            {
-                role: 'user',
-                content: [
-                    `actorId=${candidate.id}`,
-                    `原校验错误=${error || 'json_invalid'}`,
-                    '待修复输出：',
-                    String(output || '').slice(0, 12_000),
-                ].join('\n'),
-            },
-        ], {
-            maxTokens: 700,
-            timeoutMs: Math.min(12_000, settings.actorShardTimeoutMs),
+        repairWorker: async (output, candidate, { signal, error }) => callModel(
+            buildActorShardRepairMessages(output, candidate, error), {
+            maxTokens: settings.actorShardMaxTokens,
+            timeoutMs: runUntilCancelled ? 0 : Math.min(12_000, settings.actorShardTimeoutMs),
             task: '活世界 NPC 分片 JSON 修复',
             channel: 'fast',
             instructionModule: 'actor',
@@ -9025,8 +9131,10 @@ async function collectActorShardProposals(captured, {
             parallelLane: `${candidate.id}-repair`,
             failover: false,
             maxFailovers: 0,
-            deadlineAt: actorDeadlineAt,
-        }),
+            ...(actorDeadlineAt ? { deadlineAt: actorDeadlineAt } : {}),
+                runUntilCancelled,
+            },
+        ),
     });
     latestActorShardDiagnostics = {
         status: result.status,
@@ -9128,6 +9236,7 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         sovereigntyTasks = claimed.claimed;
         namespace.sovereigntyRuntime = sovereigntyRuntime;
     }
+    try {
     const checkpointBase = continuityBase(namespace, captured);
     let base = checkpointBase;
     base = mergeMarkerRecords(base, markers.records, {
@@ -9137,7 +9246,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     const character = currentCharacter(context);
     const worldContext = await collectContinuityWorldContext(context, character);
     guard = continuityTargetIsCurrent(captured, token);
-    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (!guard.ok) {
+        await requeueClaimedSovereigntyTasks(sovereigntyTasks, captured, 'target_advanced');
+        return { status: 'stale', reason: guard.reason };
+    }
     let stateAnchors = '未读取到当前 MVU 锚点。';
     try {
         const Mvu = await getMvu();
@@ -9147,7 +9259,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         console.warn('[MVU Auto Doctor] 读取活世界时间/地点锚点失败：', error);
     }
     guard = continuityTargetIsCurrent(captured, token);
-    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (!guard.ok) {
+        await requeueClaimedSovereigntyTasks(sovereigntyTasks, captured, 'target_advanced');
+        return { status: 'stale', reason: guard.reason };
+    }
     if (
         settings.sovereigntyMode === 'legacy'
         && !continuityFeatureActive(settings, markers, base, worldContext, force)
@@ -9294,10 +9409,13 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         turn: tickTurn,
         sourceRef: sovereigntySourceRefOf(captured),
     });
-    const sovereigntyDeadlineAt = Date.now() + settings.sovereigntyHardTimeoutMs;
+    const runUntilCancelled = settings.sovereigntyRunUntilCancelled !== false;
+    const sovereigntyDeadlineAt = runUntilCancelled
+        ? 0
+        : Date.now() + settings.sovereigntyHardTimeoutMs;
     const sovereigntyAgentPool = await runSovereigntyAgentPool({
         blackboard: sovereigntyBlackboard,
-        timeoutMs: settings.sovereigntyHardTimeoutMs,
+        timeoutMs: runUntilCancelled ? 0 : settings.sovereigntyHardTimeoutMs,
         limits: { profile: 1, actor: 1, world: 1 },
         jobs: [
             {
@@ -9359,7 +9477,8 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 jsonMode: true,
                 failover: true,
                 maxFailovers: 1,
-                deadlineAt: sovereigntyDeadlineAt,
+                ...(sovereigntyDeadlineAt ? { deadlineAt: sovereigntyDeadlineAt } : {}),
+                runUntilCancelled,
                 signal,
                 parallelLane: 'world-agent',
             });
@@ -9402,6 +9521,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         };
         actorShardStatus = actorShardResult.status;
         if (actorShardResult.status === 'stale') {
+            await requeueClaimedSovereigntyTasks(
+                sovereigntyTasks,
+                captured,
+                'actor_target_advanced',
+            );
             return { status: 'stale', reason: 'NPC分片期间目标身份已经变化' };
         }
         actorShardCandidates = actorShardResult.candidates;
@@ -9608,11 +9732,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     let modelValidated = false;
     let modelFailure = '';
     let previousInvalidOutput = '';
-    const maxAttempts = force ? 2 : 1;
+    const maxAttempts = 2;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         if (attempt > 0) {
             setContinuityStatus(
-                `世界连续性：第 1 次结果不可用，正在进行第 2/${maxAttempts} 次手动重试…`,
+                `世界连续性：第 1 次结果不可用，正在自动修复第 2/${maxAttempts} 次…`,
                 'busy',
             );
         }
@@ -9631,7 +9755,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                 actorLedger,
                 worldLaneSchedule,
             })
-            : buildContinuityRepairMessages(previousInvalidOutput, retryReason);
+            : buildContinuityRepairMessages(previousInvalidOutput, retryReason, {
+                turn: tickTurn,
+                threadIds: scheduledBase.threads.map((thread) => thread.id),
+            });
         let output = '';
         let validOutput = false;
         if (attempt === 0) {
@@ -9644,7 +9771,9 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             try {
                 output = await callModel(messages, {
                     maxTokens: Math.min(1800, settings.continuityMaxTokens),
-                    timeoutMs: Math.min(12_000, settings.sovereigntyHardTimeoutMs),
+                    timeoutMs: runUntilCancelled
+                        ? 0
+                        : Math.min(12_000, settings.sovereigntyHardTimeoutMs),
                     task: '活世界整理 JSON 短修复',
                     channel: 'fast',
                     instructionModule: 'world',
@@ -9652,7 +9781,8 @@ async function runContinuityTarget(captured, { force = false } = {}) {
                     jsonMode: true,
                     failover: false,
                     maxFailovers: 0,
-                    deadlineAt: sovereigntyDeadlineAt,
+                    ...(sovereigntyDeadlineAt ? { deadlineAt: sovereigntyDeadlineAt } : {}),
+                    runUntilCancelled,
                 });
             } catch (error) {
                 modelFailure = String(error.message || error);
@@ -9661,7 +9791,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
             }
         }
         guard = continuityTargetIsCurrent(captured, token);
-        if (!guard.ok) return { status: 'stale', reason: guard.reason };
+        if (!guard.ok) {
+            await requeueClaimedSovereigntyTasks(sovereigntyTasks, captured, 'target_advanced');
+            return { status: 'stale', reason: guard.reason };
+        }
 
         let candidate = scheduledBase;
         let explicitHeldTick = null;
@@ -9907,7 +10040,10 @@ async function runContinuityTarget(captured, { force = false } = {}) {
     }
 
     guard = continuityTargetIsCurrent(captured, token);
-    if (!guard.ok) return { status: 'stale', reason: guard.reason };
+    if (!guard.ok) {
+        await requeueClaimedSovereigntyTasks(sovereigntyTasks, captured, 'target_advanced');
+        return { status: 'stale', reason: guard.reason };
+    }
     const oldDigest = continuityContentDigest(namespace.continuity);
     const newDigest = continuityContentDigest(next);
     namespace.continuity = next;
@@ -10031,6 +10167,11 @@ async function runContinuityTarget(captured, { force = false } = {}) {
         actorActionRejected: actorSettlement.rejected.length,
         reason: modelFailure || undefined,
     };
+    } finally {
+        for (const task of Object.values(sovereigntyTasks || {})) {
+            if (task?.id) activeSovereigntyTaskIds.delete(task.id);
+        }
+    }
 }
 
 function sameTargetExceptContent(left, right) {
@@ -13726,6 +13867,13 @@ function buildSettingsPanel() {
                                     <option value="active">Active·正式运行（推荐）</option>
                                 </select>
                             </label>
+                            <label class="mvuad-check">
+                                <input class="mvuad-sovereignty-run-until-cancelled" type="checkbox">
+                                <span>医生模型任务持续运行，直到完成或我主动取消</span>
+                            </label>
+                            <div class="mvuad-description">
+                                开启后变量、人物、世界、关系与论坛模型都不会被固定秒数掐断；正文无需等待后台完成，运行中可用“停止当前后台任务”安全取消。
+                            </div>
                             <label class="mvuad-select">
                                 <span>人物档案自动补全</span>
                                 <select class="text_pole mvuad-profile-completion-mode">
@@ -14086,6 +14234,20 @@ function buildSettingsPanel() {
         await persistSovereigntyRuntime(runtime, getContext()?.chatId || '', {
             durable: true,
         });
+    });
+    const sovereigntyRunUntilCancelled = wrapper.querySelector(
+        '.mvuad-sovereignty-run-until-cancelled',
+    );
+    sovereigntyRunUntilCancelled.checked = getSettings().sovereigntyRunUntilCancelled !== false;
+    sovereigntyRunUntilCancelled.addEventListener('change', () => {
+        getSettings().sovereigntyRunUntilCancelled = sovereigntyRunUntilCancelled.checked;
+        saveSettings();
+        toast(
+            'info',
+            sovereigntyRunUntilCancelled.checked
+                ? '后台任务已改为持续运行；你可以随时主动取消。'
+                : '后台任务将重新使用兼容时限。',
+        );
     });
     const profileCompletionMode = wrapper.querySelector('.mvuad-profile-completion-mode');
     profileCompletionMode.value = getSettings().actorProfileCompletionMode;
@@ -14537,7 +14699,9 @@ function bindEvents() {
                 dryRun: false,
             };
             resetCurrentModelCallStats(generationType);
-            invalidateOperations(`开始新的${lastGeneration.type}生成`);
+            if (['swipe', 'regenerate'].includes(lastGeneration.type)) {
+                invalidateOperations(`开始新的${lastGeneration.type}生成`);
+            }
             await restoreBranchCheckpointsForSwipe(undefined);
             applySocialInjection();
             prepareSerendipityGeneration(generationType);

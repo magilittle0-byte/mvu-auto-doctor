@@ -371,6 +371,31 @@ export function selectActorShardCandidates({
         .slice(0, limit);
 }
 
+function actorShardOutputShape(candidate) {
+    return {
+        actorId: candidate?.id,
+        actorName: candidate?.name,
+        time: 'unknown',
+        location: candidate?.actorState?.location?.name
+            || candidate?.locations?.[0]
+            || 'unknown',
+        travelTurns: 0,
+        knowledgeBasis: candidate?.knowledgeBasis || [],
+        currentGoal: candidate?.goals?.[0]
+            || '自行评估外部刺激并选择符合人物目标的下一步',
+        intent: 'execute',
+        candidateAction: `围绕“${candidate?.goals?.[0] || '人物自己的目标'}”继续行动（候选，尚未发生）`,
+        stateChanges: [{ kind: 'plan', summary: '完成一个可核验的具体准备步骤' }],
+        interactionTargets: [],
+        resourceCosts: [],
+        capabilityUsed: '',
+        waitCondition: '',
+        sourceThreads: candidate?.sourceThreads || [],
+        evidence: candidate?.evidence || [],
+        causalChain: candidate?.causalChain || [],
+    };
+}
+
 export function buildActorShardMessages(candidate, {
     target = {},
     customPrompt = '',
@@ -423,25 +448,41 @@ export function buildActorShardMessages(candidate, {
             causalChain: candidate?.causalChain || [],
         }),
         '=== 严格输出形状 ===',
+        JSON.stringify(actorShardOutputShape(candidate)),
+    ].join('\n');
+    return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+export function buildActorShardRepairMessages(output, candidate, error = 'json_invalid') {
+    const system = [
+        '你只负责修复一份已经生成的NPC行动候选，不负责续写剧情。',
+        '保留原候选中的行动语义；不得新增行动、结果、能力、资源、关系、秘密或玩家参与。',
+        'actorId与actorName必须逐字使用目标绑定值。interactionTargets、resourceCosts与capabilityUsed只能使用允许清单；不确定就留空。',
+        '必须返回严格输出形状中的全部字段，不得返回额外字段、包装对象、标签、代码围栏或解释。',
+        '只输出一个合法JSON对象。',
+    ].join('\n');
+    const user = [
+        `原校验错误=${cleanText(error, 160) || 'json_invalid'}`,
+        '=== 目标绑定与允许清单 ===',
         JSON.stringify({
             actorId: candidate?.id,
             actorName: candidate?.name,
-            time: 'unknown',
-            location: candidate?.locations?.[0] || 'unknown',
-            travelTurns: 0,
+            locations: cleanList([
+                candidate?.actorState?.location?.name,
+                ...(candidate?.locations || []),
+            ], 8, 160),
             knowledgeBasis: candidate?.knowledgeBasis || [],
-            currentGoal: candidate?.goals?.[0] || '自行评估外部刺激并选择符合人物目标的下一步',
-            intent: 'execute',
-            candidateAction: `围绕“${candidate?.goals?.[0] || '人物自己的目标'}”继续行动（候选，尚未发生）`,
-            stateChanges: [{ kind: 'plan', summary: '完成一个可核验的具体准备步骤' }],
-            interactionTargets: [],
-            resourceCosts: [],
-            capabilityUsed: '',
-            waitCondition: '',
+            goals: candidate?.goals || [],
+            resources: candidate?.actorState?.resources || [],
+            capabilities: candidate?.actorState?.capabilities || [],
             sourceThreads: candidate?.sourceThreads || [],
             evidence: candidate?.evidence || [],
             causalChain: candidate?.causalChain || [],
         }),
+        '=== 严格输出形状（键必须齐全）===',
+        JSON.stringify(actorShardOutputShape(candidate)),
+        '=== 待修复候选 ===',
+        String(output || '').slice(0, 12_000),
     ].join('\n');
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
@@ -465,14 +506,38 @@ export function parseActorShardProposal(output, { candidate } = {}) {
         return { error: 'actor_shard.shape_not_whitelisted' };
     }
     const unwrapped = unwrapProposal(parsed.value);
-    const value = unwrapped.value;
-    if (!objectRecord(value)) return { error: 'actor_shard.shape_not_whitelisted' };
+    if (!objectRecord(unwrapped.value)) return { error: 'actor_shard.shape_not_whitelisted' };
+    const value = { ...unwrapped.value };
+    const locallyDefaulted = [];
+    const safeDefaults = {
+        actorName: candidate?.name,
+        time: 'unknown',
+        location: candidate?.actorState?.location?.name
+            || candidate?.locations?.[0]
+            || 'unknown',
+        travelTurns: 0,
+        knowledgeBasis: candidate?.knowledgeBasis || [],
+        currentGoal: candidate?.goals?.[0]
+            || '自行评估外部刺激并选择符合人物目标的下一步',
+        interactionTargets: [],
+        resourceCosts: [],
+        capabilityUsed: '',
+        waitCondition: '',
+        sourceThreads: candidate?.sourceThreads || [],
+        evidence: candidate?.evidence || [],
+        causalChain: candidate?.causalChain || [],
+    };
+    for (const [key, fallback] of Object.entries(safeDefaults)) {
+        if (Object.hasOwn(value, key)) continue;
+        value[key] = clone(fallback);
+        locallyDefaulted.push(key);
+    }
     const missingRequired = PROPOSAL_KEYS.some((key) => (
         !OPTIONAL_PROPOSAL_KEYS.has(key) && !Object.hasOwn(value, key)
     ));
     if (missingRequired) return { error: 'actor_shard.shape_not_whitelisted' };
     const droppedFields = Object.keys(value).some((key) => !PROPOSAL_KEYS.includes(key));
-    const defaultedFields = [...OPTIONAL_PROPOSAL_KEYS].some((key) => !Object.hasOwn(value, key));
+    const defaultedFields = locallyDefaulted.length > 0;
     if (
         cleanText(value.actorId, 180) !== candidate?.id
         || cleanText(value.actorName, 120) !== candidate?.name
@@ -612,7 +677,7 @@ export function parseActorShardProposal(output, { candidate } = {}) {
             ...(parsed.repairKinds || []),
             ...(unwrapped.unwrapped ? ['unwrap-proposal-object'] : []),
             ...(droppedFields ? ['drop-unrecognized-fields'] : []),
-            ...(defaultedFields ? ['default-optional-fields'] : []),
+            ...(defaultedFields ? ['default-safe-bound-fields'] : []),
         ],
     };
 }
@@ -736,10 +801,13 @@ export async function runActorShardBatch({
         const workerController = new AbortController();
         const cancelWorker = () => workerController.abort(controller.signal.reason);
         controller.signal.addEventListener('abort', cancelWorker, { once: true });
-        const timer = setTimeout(
-            () => workerController.abort('worker-timeout'),
-            Math.max(10, Number(timeoutMs) || 30000),
-        );
+        const requestedTimeoutMs = Number(timeoutMs);
+        const timer = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+            ? setTimeout(
+                () => workerController.abort('worker-timeout'),
+                Math.max(10, requestedTimeoutMs),
+            )
+            : null;
         try {
             if (!isCurrent()) {
                 stale = true;
@@ -798,7 +866,7 @@ export async function runActorShardBatch({
                 });
             }
         } finally {
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
             controller.signal.removeEventListener('abort', cancelWorker);
             completed += 1;
             notify();

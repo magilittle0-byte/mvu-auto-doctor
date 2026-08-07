@@ -7,7 +7,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const version = JSON.parse(
     fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'),
 ).version;
-if (version !== '2.0.0-rc.11') throw new Error('rc.11 manifest is required');
+if (version !== '2.0.0-rc.12') throw new Error('rc.12 manifest is required');
 
 function collectRuntimeFiles(relativeDirectory) {
     const files = [];
@@ -86,7 +86,7 @@ function zipEntryCount(buffer) {
 const artifactName = fs.readdirSync(path.join(root, 'dist')).find((name) => (
     name.includes(`v${version}_`) && name.toLowerCase().endsWith('.zip')
 ));
-if (!artifactName) throw new Error('rc.11 release artifact is missing');
+if (!artifactName) throw new Error('rc.12 release artifact is missing');
 const artifact = fs.readFileSync(path.join(root, 'dist', artifactName));
 const sovereigntyEvidence = JSON.parse(fs.readFileSync(
     path.join(root, 'qc', 'reports', 'latest-sovereignty-gemini-ab.json'),
@@ -110,13 +110,14 @@ if (
     || sovereigntyEvidence.syntheticOnly !== true
     || realModelEvidence.failure
     || realModelEvidence.setup?.model !== 'gemini-3.1-pro-preview'
+    || realModelEvidence.setup?.upstream !== 'api2.gemai.cc'
     || realDatabaseEvidence.failure
     || realDatabaseEvidence.setup?.candidateVersion !== version
     || realDatabaseEvidence.cleanup?.portClosed !== true
     || realTauriEvidence.failure
     || realTauriEvidence.setup?.candidateVersion !== version
     || realTauriEvidence.cleanup?.baselineRestored !== true
-) throw new Error('current rc.11 real-model evidence is missing or failed');
+) throw new Error('current rc.12 real-model evidence is missing or failed');
 const report = JSON.parse(fs.readFileSync(
     path.join(root, 'docs', 'qc-reports', 'v2.0.0-rc.9.json'),
     'utf8',
@@ -136,12 +137,12 @@ report.releaseArtifact = {
     allowlistVerified: true,
 };
 report.checks.testSuite = {
-    total: 277,
-    passed: 277,
+    total: 285,
+    passed: 285,
     failed: 0,
     todo: 0,
     skipped: 0,
-    durationMs: 141686.361,
+    durationMs: 142215.6563,
 };
 Object.assign(report.checks.actorLedger, {
     version: 6,
@@ -171,7 +172,9 @@ report.checks.sovereigntyRuntime = {
     healthStates: ['green', 'yellow', 'orange', 'red', 'blue'],
     foregroundWaitMaximumMs: 5000,
     softTimeoutMaximumMs: 15000,
-    hardTimeoutMaximumMs: 35000,
+    modelRunUntilCancelled: true,
+    userCancellationAvailable: true,
+    hardTimeoutMaximumMs: null,
     profileVersion: 6,
     firstActionProfileCoveragePercent: 100,
     continuityGoalsWritten: 0,
@@ -335,6 +338,8 @@ Object.assign(report.checks.realModel, {
         credentialSourceCount: sovereigntyEvidence.credentialSourceCount,
         rawPromptsPersisted: sovereigntyEvidence.rawPromptsPersisted,
         rawResponsesPersisted: sovereigntyEvidence.rawResponsesPersisted,
+        modelTimeoutConfigured: sovereigntyEvidence.modelTimeoutConfigured,
+        scaleReplay: sovereigntyEvidence.scaleReplay,
     },
 });
 Object.assign(report.checks.modelSlotRouting.authorizedRealHostRouteProbe, {
@@ -455,6 +460,18 @@ report.checks.regressionMatrix.items = [
         disposition: 'fixed',
         evidence: 'World prompts are bounded to 40000 characters, agent lanes share one hard deadline, one short JSON repair replaces a second full retry, and all-slot failure commits a visible conservative held receipt for automatic recovery.',
     },
+    {
+        id: 'RC12-RUN-UNTIL-CANCELLED-22',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'All doctor model jobs run in the background until completion or explicit user cancellation; a later accepted turn requeues stale work against current state without fabricating historical actions.',
+    },
+    {
+        id: 'RC12-REAL-SCALE-23',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'A sanitized 54-message, 9-actor, 19-turn, 76-task replay plus four parallel long-context Gemini slots covers actor, world, social and full-schema repair paths without private data egress.',
+    },
 ];
 report.publication = {
     scope: 'release-candidate',
@@ -462,7 +479,7 @@ report.publication = {
     releaseCandidateAllowed: true,
     forcePushAllowed: false,
     allowedRemoteRefs: [
-        'refs/heads/codex/actor-profile-view',
+        'refs/heads/codex/rc12-real-session-hotfix',
         'refs/heads/main',
     ],
     tagAllowed: false,
@@ -484,4 +501,4 @@ fs.writeFileSync(
     path.join(root, 'docs', 'qc-reports', `v${version}.json`),
     `${JSON.stringify(report, null, 2)}\n`,
 );
-console.log(`rc.11 report written: ${report.codeFingerprint}`);
+console.log(`rc.12 report written: ${report.codeFingerprint}`);
