@@ -192,3 +192,20 @@ test('social audit never invents missing semantics for truncated JSON', () => {
     assert.equal(parsed.error, '社会语义二审没有返回合法 JSON 对象');
     assert.equal(parsed.localRepairAttempted, true);
 });
+
+test('social audit extracts the first complete object from model prefaces and trailing metadata', () => {
+    const parsed = parseSocialAuditOutput([
+        '分析完成，以下为结果：',
+        JSON.stringify({
+            verdict: 'pass',
+            summary: '关系变化有明确证据',
+            findings: [],
+            decisions: [],
+        }),
+        JSON.stringify({ transportMetadata: { latency: 35000 } }),
+    ].join('\n'));
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.verdict, 'pass');
+    assert.equal(parsed.repaired, true);
+    assert.deepEqual(parsed.repairKinds, ['extract-first-balanced-json-object']);
+});

@@ -91,8 +91,8 @@ function reportHash() {
 
 function validateActorLedgerEvidence(report) {
     const actorLedger = report.checks?.actorLedger;
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version);
-    const expectedLedgerVersion = ['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version) ? 6 : 5;
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version);
+    const expectedLedgerVersion = ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version) ? 6 : 5;
     if (
         !actorLedger
         || actorLedger.version !== (semanticRuntimeRequired ? expectedLedgerVersion : 4)
@@ -129,7 +129,8 @@ function validateActorLedgerEvidence(report) {
 }
 
 function validateSovereigntyEvidence(report) {
-    if (!['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)) return;
+    if (!['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)) return;
+    const runUntilCancelledRequired = report.version === '2.0.0-rc.12';
     const sovereignty = report.checks?.sovereigntyRuntime;
     if (
         !sovereignty
@@ -146,7 +147,13 @@ function validateSovereigntyEvidence(report) {
         || sovereignty.slotFailureIsolation !== true
         || sovereignty.healthStates?.join(',') !== 'green,yellow,orange,red,blue'
         || sovereignty.foregroundWaitMaximumMs > 5000
-        || sovereignty.hardTimeoutMaximumMs > 35000
+        || (runUntilCancelledRequired
+            ? (
+                sovereignty.modelRunUntilCancelled !== true
+                || sovereignty.userCancellationAvailable !== true
+                || sovereignty.hardTimeoutMaximumMs !== null
+            )
+            : sovereignty.hardTimeoutMaximumMs > 35000)
         || sovereignty.profileVersion !== 6
         || sovereignty.firstActionProfileCoveragePercent !== 100
         || sovereignty.continuityGoalsWritten !== 0
@@ -216,7 +223,7 @@ function validateSerendipityEvidence(report) {
 }
 
 function validateRc6PassReport(report) {
-    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version);
+    const semanticRuntimeRequired = ['2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version);
     const billing = report.checks?.billingRemoval;
     if (
         !billing
@@ -314,6 +321,33 @@ function validateRc6PassReport(report) {
         || model.hostPortClosed !== true
         || model.proxyPortClosed !== true
     ) fail('rc6 affected real-model evidence is incomplete');
+    if (report.version === '2.0.0-rc.12') {
+        const sovereigntyAb = model.sovereigntyAb;
+        const scale = sovereigntyAb?.scaleReplay;
+        if (
+            !sovereigntyAb
+            || sovereigntyAb.logicalCalls < 22
+            || sovereigntyAb.logicalSuccesses !== sovereigntyAb.logicalCalls
+            || sovereigntyAb.failedAttempts > 4
+            || sovereigntyAb.maximumConcurrency < 4
+            || sovereigntyAb.playerForgeryViolations !== 0
+            || sovereigntyAb.modelTimeoutConfigured !== false
+            || !scale
+            || scale.messageCount !== 54
+            || scale.actorCount !== 9
+            || scale.observedTurns !== 19
+            || scale.taskCount !== 76
+            || scale.modelContextCharacters < 40_000
+            || scale.parallelSlotCount !== 4
+            || scale.actorFinalAccepted !== true
+            || scale.worldFinalAccepted !== true
+            || scale.socialAccepted !== true
+            || scale.actorRepairAccepted !== true
+            || scale.worldRepairAccepted !== true
+            || scale.playerActionForgeryCount !== 0
+            || scale.accepted !== true
+        ) fail('rc12 real-scale sovereignty evidence is incomplete');
+    }
 
     const tauri = report.checks?.tauriTavern;
     if (
@@ -369,7 +403,7 @@ function validateRc6PassReport(report) {
     const artifact = report.releaseArtifact;
     if (
         !artifact
-        || artifact.files !== (['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version) ? 84 : 73)
+        || artifact.files !== (['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version) ? 84 : 73)
         || artifact.bytes < 1
         || !/^[a-f0-9]{64}$/u.test(String(artifact.sha256 || ''))
         || artifact.containsSerendipityCore !== true
@@ -386,10 +420,12 @@ function validateRc6PassReport(report) {
         || publication.forcePushAllowed !== false
         || !publication.allowedRemoteRefs?.includes('refs/heads/main')
         || !publication.allowedRemoteRefs?.includes(
-            ['2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)
-                ? report.version === '2.0.0-rc.11'
-                    ? 'refs/heads/codex/actor-profile-view'
-                    : 'refs/heads/codex/actor-sovereignty-engine'
+            ['2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)
+                ? report.version === '2.0.0-rc.12'
+                    ? 'refs/heads/codex/rc12-real-session-hotfix'
+                    : report.version === '2.0.0-rc.11'
+                        ? 'refs/heads/codex/actor-profile-view'
+                        : 'refs/heads/codex/actor-sovereignty-engine'
                 : 'refs/heads/codex/serendipity-engine-no-billing',
         )
         || publication.tagAllowed !== false
@@ -886,7 +922,7 @@ function loadAndValidateReport() {
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');
         return report;
     }
-    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11'].includes(report.version)) {
+    if (['2.0.0-rc.6', '2.0.0-rc.7', '2.0.0-rc.8', '2.0.0-rc.9', '2.0.0-rc.10', '2.0.0-rc.11', '2.0.0-rc.12'].includes(report.version)) {
         validateRc6PassReport(report);
         const testedAt = Date.parse(report.testedAt);
         if (!Number.isFinite(testedAt)) fail('invalid testedAt timestamp');

@@ -19,8 +19,8 @@
     "legacyPublicRuntimeTemporarilyReplaced": true,
     "legacyPublicOriginalIndexSha256": "68b01608a360fb1fc875e2491a6f930eabe522f79959ed9a969d09ed283ab8f5",
     "doctorSourceInstalledInSterileRoot": true,
-    "candidateVersion": "2.0.0-rc.11",
-    "candidateIndexSha256": "5cf8b3a0371d855d68e037a4406b25071177c2608ea841ef1e6d61b62dc9e11d",
+    "candidateVersion": "2.0.0-rc.12",
+    "candidateIndexSha256": "cab689bf75e777a95ba5a82e93c2a3b2aa35d16ad1fcac8952593cf1c6ff0fd2",
     "tavernHelperRuntimeInstalledInSterileRoot": true,
     "independentBridgeInstalledInSterileRoot": false
   },
@@ -34,7 +34,7 @@
       "tavernHelperReady": false,
       "activeHelperScriptFrames": 0
     },
-    "doctorVersion": "2.0.0-rc.11",
+    "doctorVersion": "2.0.0-rc.12",
     "environmentStatus": "error",
     "actorLedgerApi": {
       "version": 6,
@@ -268,7 +268,7 @@
     "socialAttemptCount": 0,
     "socialLocalRepairAttempted": false,
     "reload": {
-      "doctorVersion": "2.0.0-rc.11",
+      "doctorVersion": "2.0.0-rc.12",
       "databaseApiMethodCount": 116,
       "environmentStatus": "error",
       "legacyPatchDetected": false,

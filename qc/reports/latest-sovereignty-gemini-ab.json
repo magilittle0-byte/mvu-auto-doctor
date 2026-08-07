@@ -1,28 +1,90 @@
 {
   "schemaVersion": 1,
-  "testedAt": "2026-08-06T17:02:13.503Z",
+  "testedAt": "2026-08-07T05:52:27.784Z",
   "model": "gemini-3.1-pro-preview",
   "upstream": "api2.gemai.cc",
   "syntheticOnly": true,
   "scenarioCount": 5,
-  "logicalCalls": 15,
-  "logicalSuccesses": 15,
-  "successfulHttpResponses": 15,
+  "logicalCalls": 22,
+  "logicalSuccesses": 22,
+  "successfulHttpResponses": 22,
   "failedAttempts": 0,
-  "maximumConcurrency": 2,
+  "maximumConcurrency": 4,
   "slotIds": [
-    "fast-slot-b",
+    "world-scale-slot",
+    "social-scale-slot",
+    "strict-actor-scale-slot",
+    "fast-actor-scale-slot",
+    "actor-repair-scale-slot-1",
+    "actor-repair-scale-slot-2",
+    "world-repair-scale-slot",
     "strict-slot-a",
+    "fast-slot-b",
     "judge-slot"
   ],
   "presetIds": [
-    "actor-sovereignty-repair",
+    "world-long-session-increment",
+    "social-long-session-audit",
+    "strict-long-session-actor",
+    "fast-long-session-actor",
+    "actor-full-schema-repair",
+    "world-full-schema-repair",
     "baseline-no-doctor-repair",
+    "actor-sovereignty-repair",
     "deterministic-blind-judge"
   ],
   "independentSlotConfig": true,
   "sameTargetModelRequired": true,
   "credentialSourceCount": 1,
+  "modelTimeoutConfigured": false,
+  "longestSuccessfulCallMs": 17004,
+  "inputByteRange": [
+    712,
+    114872
+  ],
+  "scaleReplay": {
+    "messageCount": 54,
+    "actorCount": 9,
+    "observedTurns": 19,
+    "taskCount": 76,
+    "threadCount": 12,
+    "sourceCharacters": 40542,
+    "modelContextCharacters": 40000,
+    "modelTimeoutConfigured": false,
+    "foregroundBlockingRequired": false,
+    "parallelSlotCount": 4,
+    "logicalCalls": 7,
+    "actorPrimaryAccepted": false,
+    "actorPrimaryAcceptedBySlot": [
+      false,
+      false
+    ],
+    "actorPrimaryFailureCodes": [
+      "actor_shard.resource_invalid",
+      "actor_shard.resource_invalid"
+    ],
+    "actorRepairModes": [
+      "automatic-primary-repair",
+      "automatic-primary-repair"
+    ],
+    "actorRepairAcceptedBySlot": [
+      true,
+      true
+    ],
+    "actorFinalAccepted": true,
+    "worldPrimaryAccepted": true,
+    "worldPrimaryFailureCode": "",
+    "worldRepairMode": "deliberate-malformed-probe",
+    "worldFinalAccepted": true,
+    "socialAccepted": true,
+    "actorRepairAccepted": true,
+    "worldRepairAccepted": true,
+    "unexpectedWorldRootKeyCount": 0,
+    "playerActionForgeryCount": 0,
+    "rawPromptsPersisted": false,
+    "rawResponsesPersisted": false,
+    "accepted": true
+  },
   "winners": {
     "guarded": 5,
     "baseline": 0,
@@ -30,12 +92,12 @@
   },
   "meanScores": {
     "baseline": {
-      "characterDifferentiation": 1.6,
-      "ordinaryHumanity": 1.4,
-      "groundedConflict": 1.4,
-      "darknessCorrection": 1.8,
-      "distinctAgency": 1.6,
-      "playerSovereignty": 4
+      "characterDifferentiation": 1.4,
+      "ordinaryHumanity": 1.2,
+      "groundedConflict": 1.2,
+      "darknessCorrection": 2.6,
+      "distinctAgency": 1.4,
+      "playerSovereignty": 4.2
     },
     "guarded": {
       "characterDifferentiation": 4.8,
@@ -48,12 +110,12 @@
   },
   "violationCounts": {
     "baseline": {
-      "uniformExtremity": 3,
+      "uniformExtremity": 4,
       "unsupportedDarkness": 3,
       "uniformGoodness": 1,
-      "fabricatedHistory": 2,
+      "fabricatedHistory": 1,
       "playerActionForgery": 1,
-      "interchangeableCharacters": 2
+      "interchangeableCharacters": 3
     },
     "guarded": {
       "uniformExtremity": 0,

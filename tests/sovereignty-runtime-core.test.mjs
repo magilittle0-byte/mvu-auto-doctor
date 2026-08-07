@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    cancelSovereigntyTaskAsStale,
     claimNextSovereigntyTask,
     commitSovereigntyTask,
     conservativeSovereigntyFallback,
@@ -11,6 +12,7 @@ import {
     observeSovereigntyTurn,
     parseJsonObjectWithSingleRepair,
     recoverOrphanedSovereigntyTasks,
+    requeueSovereigntyTaskForLatestState,
     restoreSovereigntyCheckpoint,
     retrySovereigntyTaskNow,
     sovereigntyHealthView,
@@ -97,6 +99,64 @@ test('restart recovers orphan running jobs and retries against latest state only
     assert.equal(oldTask.status, 'retryable_failed');
     assert.equal(oldTask.recoveryMode, 'latest_state');
     assert.equal(oldTask.historicalActionAllowed, false);
+});
+
+test('active unlimited jobs survive watchdog scans and explicit user cancellation is terminal', () => {
+    const observed = observeSovereigntyTurn(emptySovereigntyRuntime('chat-unbounded'), {
+        sourceRef: source(1),
+        modules: ['actor', 'world'],
+        now: 100,
+    });
+    const claimed = claimNextSovereigntyTask(observed.runtime, {
+        module: 'world',
+        currentTurn: 1,
+        now: 200,
+    });
+    const kept = recoverOrphanedSovereigntyTasks(claimed.runtime, {
+        now: 500_000,
+        staleAfterMs: 1_000,
+        excludeTaskIds: [claimed.task.id],
+    });
+    assert.equal(kept.recovered.length, 0);
+    assert.equal(kept.runtime.backlog.find((task) => task.id === claimed.task.id).status, 'running');
+    const cancelled = cancelSovereigntyTaskAsStale(kept.runtime, {
+        taskId: claimed.task.id,
+        reason: 'user_cancelled',
+        now: 500_001,
+    });
+    const task = cancelled.runtime.backlog.find((entry) => entry.id === claimed.task.id);
+    assert.equal(task.status, 'cancelled_stale');
+    assert.equal(task.metadata.cancelReason, 'user_cancelled');
+});
+
+test('a newer accepted turn requeues stale work against latest state without a technical failure', () => {
+    let runtime = observeSovereigntyTurn(emptySovereigntyRuntime('chat-requeue'), {
+        sourceRef: source(1),
+        modules: ['world'],
+        now: 100,
+    }).runtime;
+    const claimed = claimNextSovereigntyTask(runtime, {
+        module: 'world',
+        currentTurn: 1,
+        now: 200,
+    });
+    runtime = observeSovereigntyTurn(claimed.runtime, {
+        sourceRef: source(2),
+        modules: ['world'],
+        now: 300,
+    }).runtime;
+    const requeued = requeueSovereigntyTaskForLatestState(runtime, {
+        taskId: claimed.task.id,
+        reason: 'target_advanced',
+        now: 400,
+    });
+    const task = requeued.runtime.backlog.find((entry) => entry.id === claimed.task.id);
+    assert.equal(task.status, 'pending');
+    assert.equal(task.recoveryMode, 'latest_state');
+    assert.equal(task.historicalActionAllowed, false);
+    assert.equal(task.nextRetryTurn, 2);
+    assert.equal(task.metadata.requeueReason, 'target_advanced');
+    assert.equal(requeued.runtime.technicalReceipts.length, 0);
 });
 
 test('only committed transactions advance simulatedThrough and create versioned checkpoints', () => {

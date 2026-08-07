@@ -262,6 +262,13 @@ const modelConfig = approvedCustom
         proxy: 'opencode',
     }
     : directModelConfig;
+const qcUpstream = (
+    brokerSupplied
+    && /^gemini[-_]/iu.test(modelConfig.model)
+)
+    ? 'https://api2.gemai.cc/v1'
+    : String(process.env.OPENCODE_QC_UPSTREAM || '');
+process.env.OPENCODE_QC_UPSTREAM = '';
 let endpoint = null;
 try {
     endpoint = new URL(modelConfig.endpoint);
@@ -315,6 +322,9 @@ const report = {
         syntheticFixture: true,
         originalUserDataModified: false,
         model: modelConfig.model,
+        upstream: qcUpstream
+            ? new URL(qcUpstream).hostname
+            : '',
         credentialSource: brokerCredentials.source,
         candidateVersion,
         candidateIndexSha256: sha256(
@@ -381,7 +391,7 @@ try {
                 DS_TEST_PORT: String(proxyPort),
                 OPENCODE_QC_PORT: String(proxyPort),
                 OPENCODE_QC_UPSTREAM: String(
-                    process.env.OPENCODE_QC_UPSTREAM || '',
+                    qcUpstream,
                 ),
             },
         });

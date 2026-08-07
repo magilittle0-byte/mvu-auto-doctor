@@ -4,7 +4,7 @@
     "sandbox": "real-tauritavern-qc",
     "baselineVersion": "1.8.10",
     "baselineDigest": "a9c17b33df300f203544c35e5e03e122328dde5ff00dbc661f2cab5df7694fcf",
-    "candidateVersion": "2.0.0-rc.11",
+    "candidateVersion": "2.0.0-rc.12",
     "suspendedLaunch": true,
     "startupWindowHidden": true,
     "hiddenWatchdogBeforeResume": true,
@@ -13,15 +13,15 @@
     "cdpLoopbackOnly": true
   },
   "runtime": {
-    "targetPid": 47984,
+    "targetPid": 48388,
     "first": {
-      "version": "2.0.0-rc.11",
+      "version": "2.0.0-rc.12",
       "apiVersion": 8,
       "actorProfileApiReady": true,
       "apiCount": 55
     },
     "reload": {
-      "version": "2.0.0-rc.11",
+      "version": "2.0.0-rc.12",
       "apiVersion": 8,
       "actorProfileApiReady": true,
       "apiCount": 55

@@ -345,12 +345,15 @@ export function observeSovereigntyTurn(value, {
 export function recoverOrphanedSovereigntyTasks(value, {
     now = Date.now(),
     staleAfterMs = 35_000,
+    excludeTaskIds = [],
 } = {}) {
     const runtime = normalizeSovereigntyRuntime(value);
+    const excluded = new Set((Array.isArray(excludeTaskIds) ? excludeTaskIds : []).map(String));
     const recovered = [];
     for (const task of runtime.backlog) {
         if (
             task.status !== 'running'
+            || excluded.has(task.id)
             || now - task.claimedAt < Math.max(1_000, Number(staleAfterMs) || 35_000)
         ) continue;
         task.status = 'retryable_failed';
@@ -487,6 +490,7 @@ export function commitSovereigntyTask(value, {
 
 export function cancelSovereigntyTaskAsStale(value, {
     taskId,
+    reason = 'target_stale',
     now = Date.now(),
 } = {}) {
     const runtime = normalizeSovereigntyRuntime(value);
@@ -494,9 +498,37 @@ export function cancelSovereigntyTaskAsStale(value, {
     if (!task || task.status === 'committed') return { runtime, changed: false };
     task.status = 'cancelled_stale';
     task.historicalActionAllowed = false;
+    task.metadata = {
+        ...(task.metadata || {}),
+        cancelReason: cleanText(reason, 160) || 'target_stale',
+        cancelledAt: now,
+    };
     task.updatedAt = now;
     runtime.updatedAt = now;
     recomputeSimulatedThrough(runtime);
+    return { runtime, changed: true, task: clone(task) };
+}
+
+export function requeueSovereigntyTaskForLatestState(value, {
+    taskId,
+    reason = 'target_advanced',
+    now = Date.now(),
+} = {}) {
+    const runtime = normalizeSovereigntyRuntime(value);
+    const task = runtime.backlog.find((entry) => entry.id === taskId);
+    if (!task || TERMINAL_STATUSES.has(task.status)) return { runtime, changed: false };
+    task.status = 'pending';
+    task.nextRetryTurn = runtime.observedThrough.turn;
+    task.recoveryMode = 'latest_state';
+    task.historicalActionAllowed = false;
+    task.claimedAt = 0;
+    task.updatedAt = now;
+    task.metadata = {
+        ...(task.metadata || {}),
+        requeueReason: cleanText(reason, 160) || 'target_advanced',
+        requeuedAt: now,
+    };
+    runtime.updatedAt = now;
     return { runtime, changed: true, task: clone(task) };
 }
 

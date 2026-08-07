@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+    buildActorShardRepairMessages,
     buildActorShardMessages,
     convergeActorShardProposals,
     formatUserNarrativeInstruction,
@@ -132,7 +133,7 @@ test('proposal parser repairs harmless shape drift but rejects authority and ide
     assert.deepEqual(harmlessDrift.repairKinds, [
         'unwrap-proposal-object',
         'drop-unrecognized-fields',
-        'default-optional-fields',
+        'default-safe-bound-fields',
     ]);
     assert.deepEqual(
         parseActorShardProposal(`说明：${JSON.stringify(valid)}`, { candidate }).proposal,
@@ -174,6 +175,63 @@ test('proposal parser repairs harmless shape drift but rejects authority and ide
         ).error,
         'actor_shard.travel_invalid',
     );
+});
+
+test('real-session shape drift is repaired from the full bound schema without inventing action semantics', () => {
+    const candidate = selectActorShardCandidates({
+        continuity: { threads: [thread('T-long', '艾达')] },
+        maxWorkers: 1,
+    })[0];
+    const partial = proposal(candidate);
+    for (const key of [
+        'actorName',
+        'time',
+        'location',
+        'travelTurns',
+        'knowledgeBasis',
+        'currentGoal',
+        'sourceThreads',
+        'evidence',
+        'causalChain',
+    ]) delete partial[key];
+    const parsed = parseActorShardProposal(JSON.stringify(partial), { candidate });
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.proposal.actorId, candidate.id);
+    assert.equal(parsed.proposal.actorName, candidate.name);
+    assert.equal(parsed.proposal.candidateAction, '沿既有线索调查仓库');
+    assert.deepEqual(parsed.proposal.stateChanges, [
+        { kind: 'knowledge', summary: '仓库调查获得一项新的可核验线索' },
+    ]);
+    assert.ok(parsed.repairKinds.includes('default-safe-bound-fields'));
+
+    const repairMessages = buildActorShardRepairMessages(
+        '{"actorId":"broken"}',
+        candidate,
+        'actor_shard.shape_not_whitelisted',
+    );
+    const repairPrompt = repairMessages.map((message) => message.content).join('\n');
+    assert.match(repairPrompt, /严格输出形状/u);
+    assert.match(repairPrompt, /candidateAction/u);
+    assert.match(repairPrompt, /stateChanges/u);
+    assert.match(repairPrompt, new RegExp(candidate.id, 'u'));
+});
+
+test('run-until-cancelled actor workers are not aborted by a doctor timer', async () => {
+    const candidate = selectActorShardCandidates({
+        continuity: { threads: [thread('T-slow', '艾达')] },
+        maxWorkers: 1,
+    })[0];
+    const result = await runActorShardBatch({
+        candidates: [candidate],
+        timeoutMs: 0,
+        callWorker: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 45));
+            return JSON.stringify(proposal(candidate));
+        },
+    });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.proposals.length, 1);
+    assert.equal(result.failures.length, 0);
 });
 
 test('persistent actor proposals whitelist resource costs and capabilities before local settlement', () => {

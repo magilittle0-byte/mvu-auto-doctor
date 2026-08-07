@@ -902,7 +902,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.11');
+    assert.equal(continuity.version, '2.0.0-rc.12');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2699,7 +2699,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.11');
+    assert.equal(lifecycle.version, '2.0.0-rc.12');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -2817,13 +2817,13 @@ try {
             settingsReads += 1;
             return { autoDiagnoseEnabled: settingsReads > 1 };
         };
-        await t.context.eventSource.emit('generation_started', 'normal', {}, false);
-        await t.context.eventSource.emit('message_received', 2);
+        window.__COMMIT_GUARD_PROMISE__ = window.MvuAutoDoctorAPI.runLatest();
     });
     await commitGuardPage.waitForFunction(() => window.__TEST__.hasDeferred(), null, { timeout: 20000 });
     await commitGuardPage.evaluate(() => {
         window.__TEST__.resolveRepair('<UpdateVariable><Analysis>提交前复查</Analysis><JSONPatch>[{"op":"delta","path":"/账户/代币","value":1}]</JSONPatch></UpdateVariable>');
     });
+    await commitGuardPage.evaluate(() => window.__COMMIT_GUARD_PROMISE__);
     await commitGuardPage.waitForTimeout(1200);
     const commitGuard = await commitGuardPage.evaluate(() => ({
         replacements: window.__TEST__.calls.replace.length,
@@ -2832,6 +2832,43 @@ try {
     assert.equal(commitGuard.replacements, 0, '提交屏障前发现神谕 AUTO 重开时不得写 MVU');
     assert.match(commitGuard.status, /避免双写/u);
     await commitGuardPage.close();
+
+    const userCancelPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await userCancelPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await userCancelPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await userCancelPage.evaluate(() => {
+        const t = window.__TEST__;
+        t.context.extensionSettings.mvu_auto_doctor.delayMs = 0;
+        t.context.extensionSettings.mvu_auto_doctor.sovereigntyRunUntilCancelled = true;
+        t.setMode('defer');
+        window.__USER_CANCEL_PROMISE__ = window.MvuAutoDoctorAPI.runLatest();
+    });
+    await userCancelPage.waitForFunction(() => (
+        window.__TEST__.hasDeferred()
+        && !document.querySelector('.mvuad-cancel-task')?.hidden
+    ), null, { timeout: 20000 });
+    await userCancelPage.evaluate(() => {
+        document.querySelector('.mvuad-cancel-task')?.click();
+    });
+    const cancelledResult = await userCancelPage.evaluate(async () => {
+        const result = await window.__USER_CANCEL_PROMISE__;
+        window.__TEST__.resolveRepair(
+            '<UpdateVariable><Analysis>迟到结果不得落地</Analysis>'
+            + '<JSONPatch>[{"op":"delta","path":"/账户/代币","value":99}]</JSONPatch>'
+            + '</UpdateVariable>',
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return {
+            result,
+            replacements: window.__TEST__.calls.replace.length,
+            status: window.MvuAutoDoctorAPI.getStatus(),
+            cancelHidden: document.querySelector('.mvuad-cancel-task')?.hidden,
+        };
+    });
+    assert.equal(cancelledResult.replacements, 0);
+    assert.equal(cancelledResult.cancelHidden, true);
+    assert.match(cancelledResult.status, /已停止当前后台任务|已取消/u);
+    await userCancelPage.close();
 
     const legacyGuardPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await legacyGuardPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
@@ -5708,7 +5745,7 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await retryPage.waitForFunction(() => (
-        window.__TEST__.calls.continuityRuns === 1
+        window.__TEST__.calls.continuityRuns === 2
     ), null, { timeout: 30000 });
     await retryPage.waitForTimeout(500);
     const retryResult = await retryPage.evaluate(() => ({
@@ -5716,7 +5753,7 @@ try {
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
     }));
-    assert.equal(retryResult.calls.continuityRuns, 1, '自动活世界遇到坏账本不得重复调用模型');
+    assert.equal(retryResult.calls.continuityRuns, 2, '自动活世界只允许一次结构修复，不得无限重复');
     assert.equal(retryResult.state.threads.length, 0);
     assert.match(retryResult.status, /未通过账本校验|未产生可用账本|未产生有效世界节拍/u);
     await retryPage.evaluate(() => window.MvuAutoDoctorAPI.runContinuity());
@@ -5878,6 +5915,9 @@ try {
         actorReceipts: window.MvuAutoDoctorAPI.getActorActionReceipts(),
         worldLaneReceipts: window.MvuAutoDoctorAPI.getWorldLaneReceipts(),
         controls: {
+            runUntilCancelled: document.querySelector(
+                '.mvuad-sovereignty-run-until-cancelled',
+            ).checked,
             mode: document.querySelector('.mvuad-actor-shard-mode').value,
             workers: document.querySelector('.mvuad-actor-shard-workers').value,
             exploration: document.querySelector('.mvuad-actor-exploration-slots').value,
@@ -5913,10 +5953,13 @@ try {
     assert.equal(actorIntegration.settings.actorShardMaxWorkers, 2);
     assert.equal(actorIntegration.settings.actorShardTimeoutMs, 30000);
     assert.equal(actorIntegration.settings.actorShardSettingsVersion, 4);
+    assert.equal(actorIntegration.settings.sovereigntyRunUntilCancelled, true);
+    assert.equal(actorIntegration.settings.sovereigntySettingsVersion, 2);
     assert.equal(actorIntegration.settings.strictChannelConcurrency, 2);
     assert.equal(actorIntegration.settings.fastChannelConcurrency, 4);
     assert.equal(actorIntegration.settings.modelConcurrencySettingsVersion, 2);
     assert.deepEqual(actorIntegration.controls, {
+        runUntilCancelled: true,
         mode: 'on',
         workers: '2',
         exploration: '1',

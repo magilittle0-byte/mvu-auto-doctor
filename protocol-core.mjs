@@ -38,6 +38,16 @@ const EQUIPMENT_SIGNAL_FIELDS = Object.freeze([
     '装备闪避',
     '强化等级',
 ]);
+const STRONG_EQUIPMENT_SIGNAL_FIELDS = new Set([
+    '伤害骰',
+    '主属性加成',
+    '副属性加成',
+    '装备防御',
+    '装备闪避',
+    '强化等级',
+]);
+const EQUIPMENT_TYPE_VALUE = /(?:武器|防具|装备|手枪|步枪|冲锋枪|霰弹枪|猎枪|机枪|刀|剑|匕首|斧|锤|盾|弓|弩|法杖|护甲|装甲|头盔|护目镜|护手|战靴|饰品|戒指|项链)/u;
+const NON_EQUIPMENT_TYPE_VALUE = /(?:消耗|药品|食物|材料|任务|钥匙|卷轴|书|文件|道具|货币|弹药|配件|容器|杂物)/u;
 
 const STRICT_EQUIPMENT_NAME = /(?:手枪|步枪|冲锋枪|霰弹枪|猎枪|机枪|砍刀|战刀|斩骨刀|长剑|短剑|匕首|链锯|护甲|装甲|胸甲|头盔|护目镜|护手|手套|战靴|军靴|盾牌|戒指|项链|弓|弩|法杖)/u;
 const EQUIPMENT_NAME_EXCLUSION = /(?:弹药|子弹|弹匣|枪套|箭矢|配件|零件|模型|玩具|图纸)/u;
@@ -953,10 +963,19 @@ export function auditEquipmentContracts(statData, {
         for (const [name, rawItem] of Object.entries(bag.items)) {
             if (!isPlainObject(rawItem)) continue;
             const presentSignals = EQUIPMENT_SIGNAL_FIELDS.filter((field) => field in rawItem);
-            const looksLikeEquipment = presentSignals.length > 0 || (
+            const strongSignals = presentSignals.filter((field) => (
+                STRONG_EQUIPMENT_SIGNAL_FIELDS.has(field)
+            ));
+            const typeValue = asText(rawItem.类型).trim();
+            const typeDeclaresEquipment = EQUIPMENT_TYPE_VALUE.test(typeValue)
+                && !NON_EQUIPMENT_TYPE_VALUE.test(typeValue);
+            const nameDeclaresEquipment = (
                 STRICT_EQUIPMENT_NAME.test(name)
                 && !EQUIPMENT_NAME_EXCLUSION.test(name)
             );
+            const looksLikeEquipment = strongSignals.length > 0
+                || typeDeclaresEquipment
+                || nameDeclaresEquipment;
             if (!looksLikeEquipment) continue;
             const missing = EQUIPMENT_FIELDS.filter((field) => !(field in rawItem));
             const path = `${bag.path}.${name}`;
