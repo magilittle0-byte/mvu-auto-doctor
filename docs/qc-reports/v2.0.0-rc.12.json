@@ -1,14 +1,14 @@
 {
   "schemaVersion": 2,
   "version": "2.0.0-rc.12",
-  "testedAt": "2026-08-07T06:05:58.546Z",
+  "testedAt": "2026-08-07T06:16:22.570Z",
   "result": "pass",
   "codeFingerprint": "e1de43e7de1f02afc5c2906a239786a95ee146744af6a725579649041728c36d",
   "releaseArtifact": {
     "name": "05_MVU自动医生_v2.0.0-rc.12_离线候选.zip",
     "files": 84,
-    "bytes": 1958531,
-    "sha256": "b869b5b4cc86180aa16c18a46d62d94e927490799b55da3bdb6016a90e03891d",
+    "bytes": 1958583,
+    "sha256": "72624ae6086c0676fc4dac38cf1a5c30d8a82c64dfa828dac4802af6daae541a",
     "containsSerendipityCore": true,
     "containsDatabaseFinalReplyBridge": false,
     "allowlistVerified": true
