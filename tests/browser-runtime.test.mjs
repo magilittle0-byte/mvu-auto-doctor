@@ -677,6 +677,11 @@ const server = http.createServer((request, response) => {
         response.end(harness);
         return;
     }
+    if (requestPath === '/no-chat') {
+        response.writeHead(200, { 'content-type': typeOf('.html') });
+        response.end(harness.replace("chatId: 'chat-a'", 'chatId: null'));
+        return;
+    }
     if (requestPath === '/scripts/world-info.js') {
         response.writeHead(200, { 'content-type': typeOf('.js') });
         response.end(worldInfoModule);
@@ -722,6 +727,27 @@ browser.newPage = async (...args) => {
 };
 
 try {
+    const noChatPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const noChatErrors = [];
+    noChatPage.on('pageerror', (error) => noChatErrors.push(error?.message || String(error)));
+    noChatPage.on('console', (message) => {
+        if (message.type() === 'error') noChatErrors.push(message.text());
+    });
+    await noChatPage.goto(`http://127.0.0.1:${port}/no-chat`, { waitUntil: 'networkidle' });
+    await noChatPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await noChatPage.locator('#mvuad-floating-orb').waitFor({ state: 'visible' });
+    const noChatDiagnostic = await noChatPage.evaluate(() => (
+        window.MvuAutoDoctorAPI.getDiagnosticProjection()
+    ));
+    assert.equal(noChatDiagnostic?.sovereignty?.autoRetryScheduled, false);
+    assert.equal(noChatDiagnostic?.sovereignty?.autoRetryAt, 0);
+    assert.deepEqual(
+        noChatErrors.filter((entry) => /mvu-auto-doctor|renderSovereigntyHealth|runAt/iu.test(entry)),
+        [],
+        '无聊天且无排队重试时，健康面板初始化不得把两个空标识误判为同一任务',
+    );
+    await noChatPage.close();
+
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await page.waitForFunction(() => !!window.MvuAutoDoctorAPI);
@@ -902,7 +928,7 @@ try {
         featureFoldsClosed: [...document.querySelectorAll('#mvu-auto-doctor-settings .mvuad-settings-section')]
             .every((details) => !details.open),
     }));
-    assert.equal(continuity.version, '2.0.0-rc.12');
+    assert.equal(continuity.version, '2.0.0-rc.13');
     assert.deepEqual(continuity.serendipityControls, {
         frequency: 'standard',
         amplitude: 'extreme',
@@ -2699,7 +2725,7 @@ try {
         forumState: window.MvuAutoDoctorAPI.getForumState(),
         ledgerText: document.querySelector('#mvuad-floating-panel .mvuad-ledger')?.textContent || '',
     }));
-    assert.equal(lifecycle.version, '2.0.0-rc.12');
+    assert.equal(lifecycle.version, '2.0.0-rc.13');
     assert.equal(lifecycle.calls.continuityRuns, 4, '每个完成的AI回复都必须运行一次世界节拍');
     assert.equal(lifecycle.calls.forumRuns, 4, '内置来源必须在每个完成的AI回复后自动刷新');
     assert.equal(lifecycle.state.turn, 4);
@@ -5745,25 +5771,61 @@ try {
         await t.context.eventSource.emit('message_received', 2);
     });
     await retryPage.waitForFunction(() => (
-        window.__TEST__.calls.continuityRuns === 2
-    ), null, { timeout: 30000 });
-    await retryPage.waitForTimeout(500);
+        window.__TEST__.calls.continuityRuns === 3
+        && window.MvuAutoDoctorAPI.getContinuityState().threads.length === 1
+    ), null, { timeout: 45000 });
     const retryResult = await retryPage.evaluate(() => ({
         calls: structuredClone(window.__TEST__.calls),
         state: window.MvuAutoDoctorAPI.getContinuityState(),
         status: document.querySelector('.mvuad-continuity-status')?.textContent || '',
+        diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
     }));
-    assert.equal(retryResult.calls.continuityRuns, 2, '自动活世界只允许一次结构修复，不得无限重复');
-    assert.equal(retryResult.state.threads.length, 0);
-    assert.match(retryResult.status, /未通过账本校验|未产生可用账本|未产生有效世界节拍/u);
-    await retryPage.evaluate(() => window.MvuAutoDoctorAPI.runContinuity());
-    const manualRetryResult = await retryPage.evaluate(() => ({
-        calls: structuredClone(window.__TEST__.calls),
-        state: window.MvuAutoDoctorAPI.getContinuityState(),
-    }));
-    assert.equal(manualRetryResult.calls.continuityRuns, 3, '手动整理可在首次坏账本后定向重试一次');
-    assert.equal(manualRetryResult.state.threads[0].id, 'WE-重试-街巷-01');
+    assert.equal(retryResult.calls.continuityRuns, 3, '一次短修复失败后必须在后台自动恢复，不得要求用户再发消息或手动点击');
+    assert.equal(retryResult.state.threads[0].id, 'WE-重试-街巷-01');
+    assert.equal(retryResult.diagnostic.sovereignty.backlog, 0);
+    assert.equal(
+        retryResult.diagnostic.sovereignty.simulatedThrough,
+        retryResult.diagnostic.sovereignty.observedThrough,
+    );
+    assert.equal(retryResult.diagnostic.sovereignty.autoRetryScheduled, false);
     await retryPage.close();
+
+    const cancelRetryPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await cancelRetryPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+    await cancelRetryPage.waitForFunction(() => !!window.MvuAutoDoctorAPI);
+    await cancelRetryPage.evaluate(async () => {
+        const t = window.__TEST__;
+        window.StoryOracleAPI.run = async () => {
+            t.calls.model.push('continuity');
+            t.calls.continuityRuns += 1;
+            return '<ContinuityState>{"turn":1,"threads":[]}</ContinuityState>';
+        };
+        await window.MvuAutoDoctorAPI.runContinuity();
+    });
+    const queuedCancellation = await cancelRetryPage.evaluate(() => ({
+        calls: window.__TEST__.calls.continuityRuns,
+        diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
+        cancelHidden: document.querySelector('.mvuad-cancel-task')?.hidden,
+        cancelled: window.MvuAutoDoctorAPI.cancelCurrent(),
+    }));
+    assert.equal(queuedCancellation.calls, 2);
+    assert.equal(queuedCancellation.diagnostic.sovereignty.autoRetryScheduled, true);
+    assert.equal(queuedCancellation.cancelHidden, false);
+    assert.equal(queuedCancellation.cancelled, true);
+    await cancelRetryPage.waitForFunction(() => {
+        const diagnostic = window.MvuAutoDoctorAPI.getDiagnosticProjection();
+        return diagnostic.sovereignty.backlog === 0
+            && diagnostic.sovereignty.autoRetryScheduled === false;
+    }, null, { timeout: 10000 });
+    await cancelRetryPage.waitForTimeout(2500);
+    const cancelledRetry = await cancelRetryPage.evaluate(() => ({
+        calls: window.__TEST__.calls.continuityRuns,
+        diagnostic: window.MvuAutoDoctorAPI.getDiagnosticProjection(),
+    }));
+    assert.equal(cancelledRetry.calls, 2, '用户取消后已排队的自动恢复不得重新发起模型调用');
+    assert.equal(cancelledRetry.diagnostic.sovereignty.backlog, 0);
+    assert.equal(cancelledRetry.diagnostic.sovereignty.autoRetryScheduled, false);
+    await cancelRetryPage.close();
 
     const actorIntegrationPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await actorIntegrationPage.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });

@@ -198,6 +198,8 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
             retryableFailed: 1,
             failingModules: ['actor'],
             technicalReceiptCount: 1,
+            autoRetryScheduled: true,
+            autoRetryAt: 12345,
         },
         customInstruction: {
             enabled: true,
@@ -236,6 +238,8 @@ test('diagnostic projection removes narrative derivatives, full prompts, raw pay
     });
     assert.equal(diagnostic.sovereignty.observedThrough, 9);
     assert.equal(diagnostic.sovereignty.simulatedThrough, 7);
+    assert.equal(diagnostic.sovereignty.autoRetryScheduled, true);
+    assert.equal(diagnostic.sovereignty.autoRetryAt, 12345);
     assert.equal(diagnostic.customInstruction.hash, 'synthetic-hash-only');
     assert.equal(Object.hasOwn(diagnostic.customInstruction, 'text'), false);
     assert.deepEqual(diagnosticPrivacyCanaryFindings(diagnostic, [canary]), {

@@ -252,6 +252,23 @@ function classifyRuntimeError(value) {
     };
 }
 
+function debugRuntimeError(value) {
+    if (process.env.MVUAD_QC_DEBUG_ERRORS !== '1') return;
+    const classified = classifyRuntimeError(value);
+    const summary = String(value || '')
+        .replace(/https?:\/\/[^\s)]+/giu, '[url]')
+        .replace(/[A-Z]:\\[^\r\n:]+/giu, '[path]')
+        .split(/\r?\n/u)
+        .slice(0, 3)
+        .join(' | ')
+        .slice(0, 600);
+    process.stderr.write(`${JSON.stringify({
+        owner: classified.owner,
+        class: classified.class,
+        summary,
+    })}\n`);
+}
+
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mvuad-spv874-qc-'));
 const resolvedTemp = path.resolve(tempRoot);
 const legacyPublicBackupRoot = path.join(tempRoot, 'legacy-public-doctor-backup');
@@ -383,9 +400,11 @@ try {
     page.on('console', (message) => {
         if (message.type() !== 'error') return;
         runtimeErrors.push(classifyRuntimeError(message.text()));
+        debugRuntimeError(message.text());
     });
     page.on('pageerror', (error) => {
         runtimeErrors.push(classifyRuntimeError(error?.stack || error?.message || error));
+        debugRuntimeError(error?.stack || error?.message || error);
     });
     page.on('request', (request) => {
         if (!request.url().includes(`AlbusKen/shujuku@${targetDatabaseVersion}`)) return;
@@ -760,6 +779,7 @@ try {
     };
 } catch (error) {
     runFailed = true;
+    debugRuntimeError(error?.stack || error?.message || error);
     const message = String(error?.message || error);
     const hasNetworkFailure = (
         databaseRequests.length > 0

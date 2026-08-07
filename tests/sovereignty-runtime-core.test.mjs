@@ -6,16 +6,19 @@ import {
     claimNextSovereigntyTask,
     commitSovereigntyTask,
     conservativeSovereigntyFallback,
+    dueSovereigntyTasks,
     emptySovereigntyRuntime,
     extractFirstBalancedJsonObject,
     failSovereigntyTask,
     observeSovereigntyTurn,
+    normalizeSovereigntyRuntime,
     parseJsonObjectWithSingleRepair,
     recoverOrphanedSovereigntyTasks,
     requeueSovereigntyTaskForLatestState,
     restoreSovereigntyCheckpoint,
     retrySovereigntyTaskNow,
     sovereigntyHealthView,
+    sovereigntyRetryDelay,
 } from '../sovereignty-runtime-core.mjs';
 
 function source(index, suffix = 'a') {
@@ -253,4 +256,139 @@ test('all-slot failure returns a conservative deferred result with zero fabricat
     assert.deepEqual(fallback.semanticChanges, []);
     assert.equal(fallback.historicalActionFabricated, false);
     assert.equal(fallback.playerActionFabricated, false);
+});
+
+test('v1 mixed-clock backlog migrates to the observed cursor instead of waiting for a future actor clock', () => {
+    let runtime = emptySovereigntyRuntime('chat-mixed-clock');
+    for (let turn = 1; turn <= 38; turn += 1) {
+        runtime = observeSovereigntyTurn(runtime, {
+            sourceRef: source(turn),
+            modules: ['actor', 'world'],
+            now: 1_000 + turn,
+        }).runtime;
+    }
+    const claimed = claimNextSovereigntyTask(runtime, {
+        module: 'actor',
+        currentTurn: 38,
+        now: 2_000,
+    });
+    runtime = failSovereigntyTask(claimed.runtime, {
+        taskId: claimed.task.id,
+        failureCode: 'actor_shard.json_missing',
+        nextRetryTurn: 47,
+        now: 2_100,
+    }).runtime;
+    runtime.version = 1;
+
+    const migrated = normalizeSovereigntyRuntime(runtime);
+    const failed = migrated.backlog.find((task) => task.id === claimed.task.id);
+    assert.equal(migrated.version, 2);
+    assert.equal(failed.nextRetryTurn, 38);
+    assert.equal(failed.recoveryMode, 'latest_state');
+    assert.equal(failed.historicalActionAllowed, false);
+    assert.equal(dueSovereigntyTasks(migrated).some((task) => task.id === failed.id), true);
+    assert.equal(sovereigntyRetryDelay(migrated), 2_000);
+});
+
+test('one latest-state success supersedes same-module historical work and converges a 38-turn backlog', () => {
+    let runtime = emptySovereigntyRuntime('chat-convergence');
+    for (let turn = 1; turn <= 38; turn += 1) {
+        runtime = observeSovereigntyTurn(runtime, {
+            sourceRef: source(turn),
+            modules: ['actor', 'world'],
+            now: 1_000 + turn,
+        }).runtime;
+    }
+    for (const module of ['actor', 'world']) {
+        const claimed = claimNextSovereigntyTask(runtime, {
+            module,
+            currentTurn: 38,
+            now: 2_000,
+        });
+        assert.equal(claimed.task.turn, 1);
+        assert.equal(claimed.task.recoveryMode, 'latest_state');
+        const committed = commitSovereigntyTask(claimed.runtime, {
+            taskId: claimed.task.id,
+            payload: { module, generatedFromLatestState: true },
+            now: 2_100,
+        });
+        runtime = committed.runtime;
+        assert.equal(committed.supersededTaskIds.length, 37);
+        assert.equal(committed.checkpoint.turn, 38);
+        assert.equal(committed.task.metadata.coveredThroughTurn, 38);
+        assert.equal(runtime.backlog.filter((task) => (
+            task.module === module
+            && !['committed', 'cancelled_stale'].includes(task.status)
+        )).length, 0);
+    }
+    assert.equal(runtime.simulatedThrough.turn, 38);
+    assert.equal(sovereigntyHealthView(runtime).backlog, 0);
+    assert.equal(dueSovereigntyTasks(runtime).length, 0);
+});
+
+test('64 deterministic mixed failure, refresh and retry histories always converge by latest-state coverage', () => {
+    let seed = 0x5eed1234;
+    const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 0x1_0000_0000;
+    };
+    for (let scenario = 1; scenario <= 64; scenario += 1) {
+        const turns = 12 + Math.floor(random() * 39);
+        let runtime = emptySovereigntyRuntime(`chat-property-${scenario}`);
+        for (let turn = 1; turn <= turns; turn += 1) {
+            runtime = observeSovereigntyTurn(runtime, {
+                sourceRef: {
+                    ...source(turn),
+                    chatId: `chat-property-${scenario}`,
+                },
+                modules: ['profile', 'actor', 'world'],
+                now: scenario * 10_000 + turn,
+            }).runtime;
+        }
+        for (const task of runtime.backlog) {
+            if (task.module === 'observation') continue;
+            const roll = random();
+            if (roll < 0.24) {
+                task.status = 'committed';
+                task.committedAt = scenario * 20_000 + task.turn;
+            } else if (roll < 0.43) {
+                task.status = 'cancelled_stale';
+                task.historicalActionAllowed = false;
+            } else if (roll < 0.72) {
+                task.status = 'retryable_failed';
+                task.retryCount = 1 + Math.floor(random() * 5);
+                task.technicalFailureCount = task.retryCount;
+                task.nextRetryTurn = turns + 1 + Math.floor(random() * 12);
+                task.lastFailureCode = `${task.module}.synthetic_failure`;
+                task.recoveryMode = 'latest_state';
+                task.historicalActionAllowed = false;
+            }
+        }
+        runtime.version = 1;
+        runtime = normalizeSovereigntyRuntime(runtime);
+        for (const module of ['profile', 'actor', 'world']) {
+            const active = runtime.backlog.some((task) => (
+                task.module === module
+                && !['committed', 'cancelled_stale'].includes(task.status)
+            ));
+            if (!active) continue;
+            const claimed = claimNextSovereigntyTask(runtime, {
+                module,
+                currentTurn: turns,
+                now: scenario * 30_000,
+            });
+            assert.ok(claimed.task, `scenario ${scenario} module ${module} must be due after migration`);
+            runtime = commitSovereigntyTask(claimed.runtime, {
+                taskId: claimed.task.id,
+                payload: { scenario, module, latest: true },
+                now: scenario * 30_000 + 1,
+            }).runtime;
+        }
+        assert.equal(
+            runtime.simulatedThrough.turn,
+            turns,
+            `scenario ${scenario} cursor must converge`,
+        );
+        assert.equal(sovereigntyHealthView(runtime).backlog, 0);
+    }
 });

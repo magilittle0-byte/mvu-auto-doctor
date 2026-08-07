@@ -447,7 +447,7 @@ test('custom prompts enter only labeled narrative model messages and diagnostics
     })[0];
     const secret = '保持冷峻侦探叙事，不改变任何授权。';
     const messages = buildActorShardMessages(candidate, { customPrompt: secret });
-    assert.match(messages[0].content, /用户自定义NPC分片指令/u);
+    assert.match(messages[0].content, /用户自定义人物行动分析指令/u);
     assert.match(messages[0].content, new RegExp(secret, 'u'));
     const continuityInstruction = formatUserNarrativeInstruction('世界连续性', secret);
     assert.match(continuityInstruction, /用户自定义世界连续性指令/u);

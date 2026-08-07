@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "version": "2.0.0-rc.13",
+  "runtimeVersion": 2,
+  "generatedAt": "2026-08-07T10:54:54.238Z",
+  "sourceSha256": "2c8db54873db28f8cd26079b03de038fe55990b2ab560ea1142251345cf01351",
+  "syntheticOnly": true,
+  "accepted": true,
+  "schedulerClock": "observedThrough",
+  "legacyMixedClockMigration": true,
+  "automaticRetryWithoutNewTurn": true,
+  "queuedRetryUserCancellation": true,
+  "latestStateSupersession": true,
+  "exactFailureShape": {
+    "initial": {
+      "observedThrough": 38,
+      "simulatedThrough": 0,
+      "taskCount": 155,
+      "activeBacklog": 34,
+      "retryableFailed": 24,
+      "pending": 10
+    },
+    "final": {
+      "observedThrough": 38,
+      "simulatedThrough": 38,
+      "activeBacklog": 0,
+      "retryableFailed": 0
+    },
+    "recoveryReceipts": [
+      {
+        "module": "actor",
+        "coveredThroughTurn": 38,
+        "supersededTaskCount": 17
+      },
+      {
+        "module": "world",
+        "coveredThroughTurn": 38,
+        "supersededTaskCount": 15
+      }
+    ]
+  },
+  "propertyFailureScenarios": 64,
+  "historicalActionFabricationCount": 0
+}

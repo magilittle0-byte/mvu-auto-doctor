@@ -7,6 +7,7 @@ import {
     commitSovereigntyTask,
     emptySovereigntyRuntime,
     failSovereigntyTask,
+    normalizeSovereigntyRuntime,
     observeSovereigntyTurn,
     retrySovereigntyTaskNow,
     sovereigntyHealthView,
@@ -139,19 +140,119 @@ test('sanitized 54-message, 9-actor, 19-turn replay preserves backlog and profil
         }
     }
     const health = sovereigntyHealthView(runtime);
-    assert.equal(health.retryableFailed, 12);
-    assert.equal(health.failingModules.includes('actor'), true);
-    assert.equal(health.failingModules.includes('world'), true);
+    assert.equal(health.retryableFailed, 0);
+    assert.equal(health.backlog, 0);
+    assert.equal(health.failingModules.length, 0);
+    assert.equal(runtime.simulatedThrough.turn, 19);
     assert.equal(runtime.technicalReceipts.length, 12);
     assert.equal(ledger.actors.every((actor) => actor.actionHistory.length === 0), true);
     assert.equal(ledger.actors.every((actor) => actor.profileV6.modules.actionHistory.data.historicalActionsInvented === false), true);
 
     const retried = retrySovereigntyTaskNow(runtime, { now: 3_000 });
-    assert.equal(retried.retried.length, 12);
-    assert.equal(retried.runtime.backlog.filter((task) => task.status === 'pending').length, 12);
+    assert.equal(retried.retried.length, 0);
+    assert.equal(retried.runtime.backlog.filter((task) => task.status === 'pending').length, 0);
     assert.equal(retried.runtime.backlog.filter((task) => (
         task.status === 'pending'
         && task.recoveryMode === 'latest_state'
         && task.historicalActionAllowed === false
-    )).length, 12);
+    )).length, 0);
+});
+
+test('sanitized 38-observation rc12 failure shape converges 155 persisted tasks after refresh', () => {
+    let runtime = emptySovereigntyRuntime('synthetic-rc12-recovery');
+    for (let turn = 1; turn <= 38; turn += 1) {
+        runtime = observeSovereigntyTurn(runtime, {
+            sourceRef: {
+                ...sourceRef(turn),
+                chatId: 'synthetic-rc12-recovery',
+            },
+            modules: [
+                'profile',
+                'actor',
+                'world',
+                ...(turn <= 3 ? ['physiology'] : []),
+            ],
+            now: 10_000 + turn,
+        }).runtime;
+    }
+    const assign = (module, statuses) => {
+        const tasks = runtime.backlog.filter((task) => task.module === module);
+        assert.equal(tasks.length, statuses.length);
+        tasks.forEach((task, index) => {
+            task.status = statuses[index];
+            task.attemptCount = statuses[index] === 'retryable_failed' ? 3 : 1;
+            task.retryCount = statuses[index] === 'retryable_failed' ? 3 : 0;
+            task.technicalFailureCount = statuses[index] === 'retryable_failed' ? 3 : 0;
+            task.nextRetryTurn = statuses[index] === 'retryable_failed'
+                ? 41 + (index % 7)
+                : task.turn;
+            task.lastFailureCode = statuses[index] === 'retryable_failed'
+                ? `${module}.synthetic_technical_failure`
+                : '';
+            task.recoveryMode = statuses[index] === 'retryable_failed'
+                ? 'latest_state'
+                : 'source_turn';
+            task.historicalActionAllowed = statuses[index] !== 'retryable_failed';
+            task.committedAt = statuses[index] === 'committed' ? 20_000 + index : 0;
+        });
+    };
+    assign('profile', [
+        ...Array(29).fill('committed'),
+        ...Array(9).fill('cancelled_stale'),
+    ]);
+    assign('actor', [
+        ...Array(13).fill('retryable_failed'),
+        ...Array(18).fill('cancelled_stale'),
+        ...Array(2).fill('committed'),
+        ...Array(5).fill('pending'),
+    ]);
+    assign('world', [
+        ...Array(11).fill('retryable_failed'),
+        ...Array(4).fill('committed'),
+        ...Array(18).fill('cancelled_stale'),
+        ...Array(5).fill('pending'),
+    ]);
+    assign('physiology', [
+        ...Array(2).fill('committed'),
+        'cancelled_stale',
+    ]);
+    runtime.version = 1;
+    runtime.simulatedThrough = { turn: 0, sourceKey: '', sourceRef: null, at: 0 };
+
+    runtime = normalizeSovereigntyRuntime(runtime);
+    assert.equal(runtime.backlog.length, 155);
+    assert.equal(runtime.observedThrough.turn, 38);
+    assert.equal(runtime.simulatedThrough.turn, 0);
+    assert.equal(runtime.backlog.filter((task) => task.status === 'committed').length, 75);
+    assert.equal(runtime.backlog.filter((task) => task.status === 'retryable_failed').length, 24);
+    assert.equal(runtime.backlog.filter((task) => task.status === 'cancelled_stale').length, 46);
+    assert.equal(runtime.backlog.filter((task) => task.status === 'pending').length, 10);
+    assert.equal(runtime.backlog.filter((task) => (
+        task.status === 'retryable_failed' && task.nextRetryTurn <= 38
+    )).length, 24);
+
+    for (const module of ['actor', 'world']) {
+        const claimed = claimNextSovereigntyTask(runtime, {
+            module,
+            currentTurn: 38,
+            now: 30_000,
+        });
+        assert.ok(claimed.task);
+        assert.equal(claimed.task.recoveryMode, 'latest_state');
+        runtime = commitSovereigntyTask(claimed.runtime, {
+            taskId: claimed.task.id,
+            payload: {
+                module,
+                currentActorClock: 46,
+                observedClock: 38,
+                generatedFromLatestState: true,
+            },
+            now: 31_000,
+        }).runtime;
+    }
+    const health = sovereigntyHealthView(runtime);
+    assert.equal(runtime.simulatedThrough.turn, 38);
+    assert.equal(health.backlog, 0);
+    assert.equal(health.retryableFailed, 0);
+    assert.equal(health.pending, 0);
 });

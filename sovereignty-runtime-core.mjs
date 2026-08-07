@@ -1,6 +1,6 @@
 import { fingerprint } from './core.mjs';
 
-export const SOVEREIGNTY_RUNTIME_VERSION = 1;
+export const SOVEREIGNTY_RUNTIME_VERSION = 2;
 export const SOVEREIGNTY_CHECKPOINT_VERSION = 1;
 export const SOVEREIGNTY_TASK_STATUSES = Object.freeze([
     'pending',
@@ -165,6 +165,8 @@ function normalizeHealth(value) {
 
 export function normalizeSovereigntyRuntime(value, { chatId = '' } = {}) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const sourceVersion = integer(source.version);
+    const observedThrough = normalizeCursor(source.observedThrough);
     const backlog = (Array.isArray(source.backlog) ? source.backlog : [])
         .map(normalizeTask)
         .filter(Boolean)
@@ -175,6 +177,26 @@ export function normalizeSovereigntyRuntime(value, { chatId = '' } = {}) {
         usedTaskIds.add(task.id);
         return true;
     });
+    const moduleHealth = normalizeHealth(source.moduleHealth);
+    if (sourceVersion < 2) {
+        for (const task of uniqueBacklog) {
+            if (!['retryable_failed', 'deferred'].includes(task.status)) continue;
+            task.nextRetryTurn = Math.min(task.nextRetryTurn, observedThrough.turn);
+            task.recoveryMode = 'latest_state';
+            task.historicalActionAllowed = false;
+        }
+        for (const module of SOVEREIGNTY_MODULES) {
+            const nextRetryTurns = uniqueBacklog
+                .filter((task) => (
+                    task.module === module
+                    && ['retryable_failed', 'deferred'].includes(task.status)
+                ))
+                .map((task) => task.nextRetryTurn);
+            moduleHealth[module].nextRetryTurn = nextRetryTurns.length
+                ? Math.min(...nextRetryTurns)
+                : 0;
+        }
+    }
     return {
         version: SOVEREIGNTY_RUNTIME_VERSION,
         checkpointVersion: SOVEREIGNTY_CHECKPOINT_VERSION,
@@ -182,7 +204,7 @@ export function normalizeSovereigntyRuntime(value, { chatId = '' } = {}) {
         mode: ['legacy', 'shadow', 'active'].includes(source.mode)
             ? source.mode
             : 'active',
-        observedThrough: normalizeCursor(source.observedThrough),
+        observedThrough,
         simulatedThrough: normalizeCursor(source.simulatedThrough),
         observations: (Array.isArray(source.observations) ? source.observations : [])
             .filter((entry) => entry && typeof entry === 'object')
@@ -229,7 +251,7 @@ export function normalizeSovereigntyRuntime(value, { chatId = '' } = {}) {
             }))
             .filter((entry) => entry.id && entry.taskId && entry.code)
             .slice(-240),
-        moduleHealth: normalizeHealth(source.moduleHealth),
+        moduleHealth,
         lastRecoveryAt: integer(source.lastRecoveryAt),
         updatedAt: integer(source.updatedAt),
     };
@@ -457,21 +479,63 @@ export function commitSovereigntyTask(value, {
     const runtime = normalizeSovereigntyRuntime(value);
     const task = runtime.backlog.find((entry) => entry.id === taskId);
     if (!task || task.status === 'cancelled_stale') return { runtime, changed: false };
+    const latestStateCoverage = (
+        task.recoveryMode === 'latest_state'
+        && runtime.observedThrough.turn >= task.turn
+    );
+    const coveredThroughTurn = latestStateCoverage
+        ? runtime.observedThrough.turn
+        : task.turn;
+    const coveredCursor = latestStateCoverage && runtime.observedThrough.sourceRef
+        ? runtime.observedThrough
+        : {
+            turn: task.turn,
+            sourceKey: task.sourceKey,
+            sourceRef: task.sourceRef,
+        };
     task.status = 'committed';
     task.committedAt = now;
     task.updatedAt = now;
+    task.nextRetryTurn = 0;
     task.commitRef = cleanText(commitRef, 120)
         || `COMMIT-${fingerprint(`${task.id}|${now}`).slice(0, 20)}`;
     task.lastFailureCode = '';
+    const supersededTaskIds = [];
+    if (latestStateCoverage) {
+        for (const entry of runtime.backlog) {
+            if (
+                entry.id === task.id
+                || entry.module !== task.module
+                || entry.turn > coveredThroughTurn
+                || TERMINAL_STATUSES.has(entry.status)
+            ) continue;
+            entry.status = 'cancelled_stale';
+            entry.historicalActionAllowed = false;
+            entry.claimedAt = 0;
+            entry.updatedAt = now;
+            entry.metadata = {
+                ...(entry.metadata || {}),
+                cancelReason: 'latest_state_superseded',
+                supersededByTaskId: task.id,
+                supersededAt: now,
+            };
+            supersededTaskIds.push(entry.id);
+        }
+        task.metadata = {
+            ...(task.metadata || {}),
+            coveredThroughTurn,
+            supersededTaskCount: supersededTaskIds.length,
+        };
+    }
     const stateDigest = `sha256:${fingerprint(JSON.stringify(payload ?? null))}`;
     const checkpoint = {
         version: SOVEREIGNTY_CHECKPOINT_VERSION,
         id: `SCP-${fingerprint(`${task.id}|${stateDigest}|${now}`).slice(0, 24)}`,
         taskId: task.id,
         module: task.module,
-        turn: task.turn,
-        sourceKey: task.sourceKey,
-        sourceRef: clone(task.sourceRef),
+        turn: coveredCursor.turn,
+        sourceKey: coveredCursor.sourceKey,
+        sourceRef: clone(coveredCursor.sourceRef),
         stateDigest,
         payload: clone(payload),
         createdAt: now,
@@ -479,13 +543,27 @@ export function commitSovereigntyTask(value, {
     runtime.checkpoints.push(checkpoint);
     runtime.checkpoints = runtime.checkpoints.slice(-80);
     const health = runtime.moduleHealth[task.module];
-    health.lastSuccessTurn = Math.max(health.lastSuccessTurn, task.turn);
+    health.lastSuccessTurn = Math.max(health.lastSuccessTurn, coveredThroughTurn);
     health.lastSuccessAt = now;
     health.lastFailureCode = '';
-    health.nextRetryTurn = 0;
+    const remainingRetryTurns = runtime.backlog
+        .filter((entry) => (
+            entry.module === task.module
+            && ['retryable_failed', 'deferred'].includes(entry.status)
+        ))
+        .map((entry) => entry.nextRetryTurn);
+    health.nextRetryTurn = remainingRetryTurns.length
+        ? Math.min(...remainingRetryTurns)
+        : 0;
     runtime.updatedAt = now;
     recomputeSimulatedThrough(runtime);
-    return { runtime, changed: true, task: clone(task), checkpoint: clone(checkpoint) };
+    return {
+        runtime,
+        changed: true,
+        task: clone(task),
+        checkpoint: clone(checkpoint),
+        supersededTaskIds,
+    };
 }
 
 export function cancelSovereigntyTaskAsStale(value, {
@@ -550,6 +628,33 @@ export function retrySovereigntyTaskNow(value, {
     }
     runtime.updatedAt = tasks.length ? now : runtime.updatedAt;
     return { runtime, retried: tasks.map((task) => task.id) };
+}
+
+export function dueSovereigntyTasks(value, { currentTurn = null } = {}) {
+    const runtime = normalizeSovereigntyRuntime(value);
+    const turn = currentTurn === null || currentTurn === undefined || currentTurn === ''
+        ? runtime.observedThrough.turn
+        : integer(currentTurn, 0, Number.MAX_SAFE_INTEGER, runtime.observedThrough.turn);
+    return clone(runtime.backlog.filter((task) => (
+        ['pending', 'retryable_failed', 'deferred'].includes(task.status)
+        && task.nextRetryTurn <= turn
+    )));
+}
+
+export function sovereigntyRetryDelay(value, {
+    baseMs = 2_000,
+    maximumMs = 30_000,
+} = {}) {
+    const due = dueSovereigntyTasks(value);
+    if (!due.length) return 0;
+    const retryCount = Math.min(
+        ...due.map((task) => Math.max(1, task.retryCount || task.attemptCount || 1)),
+    );
+    return Math.min(
+        Math.max(1_000, integer(maximumMs, 1_000, 300_000, 30_000)),
+        Math.max(250, integer(baseMs, 250, 60_000, 2_000))
+            * (2 ** Math.min(4, Math.max(0, retryCount - 1))),
+    );
 }
 
 export function restoreSovereigntyCheckpoint(value, {

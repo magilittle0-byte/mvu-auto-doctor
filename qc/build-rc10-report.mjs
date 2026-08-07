@@ -7,7 +7,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const version = JSON.parse(
     fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'),
 ).version;
-if (version !== '2.0.0-rc.12') throw new Error('rc.12 manifest is required');
+if (version !== '2.0.0-rc.13') throw new Error('rc.13 manifest is required');
 
 function collectRuntimeFiles(relativeDirectory) {
     const files = [];
@@ -86,8 +86,12 @@ function zipEntryCount(buffer) {
 const artifactName = fs.readdirSync(path.join(root, 'dist')).find((name) => (
     name.includes(`v${version}_`) && name.toLowerCase().endsWith('.zip')
 ));
-if (!artifactName) throw new Error('rc.12 release artifact is missing');
+if (!artifactName) throw new Error('rc.13 release artifact is missing');
 const artifact = fs.readFileSync(path.join(root, 'dist', artifactName));
+const runtimeGateEvidence = JSON.parse(fs.readFileSync(
+    path.join(root, 'qc', 'reports', 'latest-sovereignty-runtime-gate.json'),
+    'utf8',
+));
 const sovereigntyEvidence = JSON.parse(fs.readFileSync(
     path.join(root, 'qc', 'reports', 'latest-sovereignty-gemini-ab.json'),
     'utf8',
@@ -105,7 +109,24 @@ const realTauriEvidence = JSON.parse(fs.readFileSync(
     'utf8',
 ));
 if (
-    sovereigntyEvidence.accepted !== true
+    runtimeGateEvidence.accepted !== true
+    || runtimeGateEvidence.version !== version
+    || runtimeGateEvidence.runtimeVersion !== 2
+    || runtimeGateEvidence.sourceSha256 !== createHash('sha256')
+        .update(fs.readFileSync(
+            path.join(root, 'sovereignty-runtime-core.mjs'),
+            'utf8',
+        ).replace(/\r\n?/gu, '\n'))
+        .digest('hex')
+    || runtimeGateEvidence.exactFailureShape?.initial?.taskCount !== 155
+    || runtimeGateEvidence.exactFailureShape?.initial?.observedThrough !== 38
+    || runtimeGateEvidence.exactFailureShape?.initial?.simulatedThrough !== 0
+    || runtimeGateEvidence.exactFailureShape?.initial?.activeBacklog !== 34
+    || runtimeGateEvidence.exactFailureShape?.final?.simulatedThrough !== 38
+    || runtimeGateEvidence.exactFailureShape?.final?.activeBacklog !== 0
+    || runtimeGateEvidence.propertyFailureScenarios !== 64
+    || runtimeGateEvidence.historicalActionFabricationCount !== 0
+    || sovereigntyEvidence.accepted !== true
     || sovereigntyEvidence.model !== 'gemini-3.1-pro-preview'
     || sovereigntyEvidence.syntheticOnly !== true
     || realModelEvidence.failure
@@ -117,7 +138,7 @@ if (
     || realTauriEvidence.failure
     || realTauriEvidence.setup?.candidateVersion !== version
     || realTauriEvidence.cleanup?.baselineRestored !== true
-) throw new Error('current rc.12 real-model evidence is missing or failed');
+) throw new Error('current rc.13 runtime or real-environment evidence is missing or failed');
 const report = JSON.parse(fs.readFileSync(
     path.join(root, 'docs', 'qc-reports', 'v2.0.0-rc.9.json'),
     'utf8',
@@ -137,12 +158,12 @@ report.releaseArtifact = {
     allowlistVerified: true,
 };
 report.checks.testSuite = {
-    total: 285,
-    passed: 285,
+    total: 289,
+    passed: 289,
     failed: 0,
     todo: 0,
     skipped: 0,
-    durationMs: 142215.6563,
+    durationMs: 146546.8551,
 };
 Object.assign(report.checks.actorLedger, {
     version: 6,
@@ -158,7 +179,7 @@ Object.assign(report.checks.actorLedger, {
     continuityStimuliSeparatedFromGoals: true,
 });
 report.checks.sovereigntyRuntime = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedThroughIndependentOfModel: true,
     simulatedThroughCommitOnly: true,
     durableBacklog: true,
@@ -186,13 +207,32 @@ report.checks.sovereigntyRuntime = {
     hiddenAbilityWithoutHistoryCount: 0,
     customInstructionScopeCoveragePercent: 100,
     customInstructionRawTextInDiagnostics: false,
+    singleSchedulerClock: runtimeGateEvidence.schedulerClock,
+    legacyMixedClockMigration: runtimeGateEvidence.legacyMixedClockMigration,
+    automaticRetryWithoutNewTurn: runtimeGateEvidence.automaticRetryWithoutNewTurn,
+    queuedRetryUserCancellation: runtimeGateEvidence.queuedRetryUserCancellation,
+    latestStateSupersession: runtimeGateEvidence.latestStateSupersession,
+    exactFailureShapeTasks: runtimeGateEvidence.exactFailureShape.initial.taskCount,
+    exactFailureShapeObservedTurns:
+        runtimeGateEvidence.exactFailureShape.initial.observedThrough,
+    exactFailureShapeInitialSimulatedThrough:
+        runtimeGateEvidence.exactFailureShape.initial.simulatedThrough,
+    exactFailureShapeInitialActiveBacklog:
+        runtimeGateEvidence.exactFailureShape.initial.activeBacklog,
+    exactFailureShapeFinalSimulatedThrough:
+        runtimeGateEvidence.exactFailureShape.final.simulatedThrough,
+    exactFailureShapeFinalActiveBacklog:
+        runtimeGateEvidence.exactFailureShape.final.activeBacklog,
+    propertyFailureScenarios: runtimeGateEvidence.propertyFailureScenarios,
+    diagnosticAutoRetryVisible: true,
+    userFacingActorTerm: '人物行动分析',
 };
 const databaseRuntime = realDatabaseEvidence.runtime || {};
 const databaseResponses = Array.isArray(databaseRuntime.databaseBundleResponses)
     ? databaseRuntime.databaseBundleResponses
     : [];
 Object.assign(report.checks.realDatabaseCompatibility.latest, {
-    evidenceRole: 'current-rc11-headless-probe',
+    evidenceRole: 'current-rc13-headless-probe',
     doctorVersionVisible: version,
     authorImportSha256: realDatabaseEvidence.setup?.authorImportSha256,
     officialBundleSha256: databaseResponses.find(
@@ -472,6 +512,18 @@ report.checks.regressionMatrix.items = [
         disposition: 'fixed',
         evidence: 'A sanitized 54-message, 9-actor, 19-turn, 76-task replay plus four parallel long-context Gemini slots covers actor, world, social and full-schema repair paths without private data egress.',
     },
+    {
+        id: 'RC13-BACKLOG-CONVERGENCE-24',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'One observedThrough scheduler clock migrates mixed-clock retries; latest-state recovery supersedes covered work and converges the exact 38-turn, 155-task failure shape from simulatedThrough 0 to 38 with zero active backlog.',
+    },
+    {
+        id: 'RC13-AUTO-RECOVERY-CANCEL-25',
+        severity: 'critical',
+        disposition: 'fixed',
+        evidence: 'Retry proceeds without a new chat message, remains visible in health diagnostics, and explicit user cancellation terminally stops queued and running work.',
+    },
 ];
 report.publication = {
     scope: 'release-candidate',
@@ -479,7 +531,7 @@ report.publication = {
     releaseCandidateAllowed: true,
     forcePushAllowed: false,
     allowedRemoteRefs: [
-        'refs/heads/codex/rc12-real-session-hotfix',
+        'refs/heads/codex/rc13-backlog-recovery',
         'refs/heads/main',
     ],
     tagAllowed: false,
@@ -501,4 +553,4 @@ fs.writeFileSync(
     path.join(root, 'docs', 'qc-reports', `v${version}.json`),
     `${JSON.stringify(report, null, 2)}\n`,
 );
-console.log(`rc.12 report written: ${report.codeFingerprint}`);
+console.log(`rc.13 report written: ${report.codeFingerprint}`);

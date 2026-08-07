@@ -400,7 +400,7 @@ export function buildActorShardMessages(candidate, {
     target = {},
     customPrompt = '',
 } = {}) {
-    const instruction = formatUserNarrativeInstruction('NPC分片', customPrompt);
+    const instruction = formatUserNarrativeInstruction('人物行动分析', customPrompt);
     const system = [
         '你是隔离运行的NPC幕后模拟worker，只为一个角色生成一份结构化候选提案；角色是否在场不影响其拥有下一行动窗口。',
         '你没有任何写权限：禁止修改MVU、世界书、论坛、聊天正文、数据库、任务、关系或事实账本。',

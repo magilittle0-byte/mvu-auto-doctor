@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "testedAt": "2026-08-07T05:52:27.784Z",
+  "testedAt": "2026-08-07T10:48:24.095Z",
   "model": "gemini-3.1-pro-preview",
   "upstream": "api2.gemai.cc",
   "syntheticOnly": true,
@@ -11,22 +11,22 @@
   "failedAttempts": 0,
   "maximumConcurrency": 4,
   "slotIds": [
-    "world-scale-slot",
-    "social-scale-slot",
     "strict-actor-scale-slot",
     "fast-actor-scale-slot",
-    "actor-repair-scale-slot-1",
+    "world-scale-slot",
+    "social-scale-slot",
     "actor-repair-scale-slot-2",
+    "actor-repair-scale-slot-1",
     "world-repair-scale-slot",
     "strict-slot-a",
     "fast-slot-b",
     "judge-slot"
   ],
   "presetIds": [
-    "world-long-session-increment",
-    "social-long-session-audit",
     "strict-long-session-actor",
     "fast-long-session-actor",
+    "world-long-session-increment",
+    "social-long-session-audit",
     "actor-full-schema-repair",
     "world-full-schema-repair",
     "baseline-no-doctor-repair",
@@ -37,44 +37,44 @@
   "sameTargetModelRequired": true,
   "credentialSourceCount": 1,
   "modelTimeoutConfigured": false,
-  "longestSuccessfulCallMs": 17004,
+  "longestSuccessfulCallMs": 23035,
   "inputByteRange": [
     712,
-    114872
+    114774
   ],
   "scaleReplay": {
-    "messageCount": 54,
+    "messageCount": 74,
     "actorCount": 9,
-    "observedTurns": 19,
-    "taskCount": 76,
+    "observedTurns": 38,
+    "taskCount": 155,
     "threadCount": 12,
-    "sourceCharacters": 40542,
+    "sourceCharacters": 54846,
     "modelContextCharacters": 40000,
     "modelTimeoutConfigured": false,
     "foregroundBlockingRequired": false,
     "parallelSlotCount": 4,
     "logicalCalls": 7,
-    "actorPrimaryAccepted": false,
+    "actorPrimaryAccepted": true,
     "actorPrimaryAcceptedBySlot": [
-      false,
-      false
+      true,
+      true
     ],
     "actorPrimaryFailureCodes": [
-      "actor_shard.resource_invalid",
-      "actor_shard.resource_invalid"
+      "",
+      ""
     ],
     "actorRepairModes": [
-      "automatic-primary-repair",
-      "automatic-primary-repair"
+      "deliberate-malformed-probe",
+      "deliberate-malformed-probe"
     ],
     "actorRepairAcceptedBySlot": [
       true,
       true
     ],
     "actorFinalAccepted": true,
-    "worldPrimaryAccepted": true,
-    "worldPrimaryFailureCode": "",
-    "worldRepairMode": "deliberate-malformed-probe",
+    "worldPrimaryAccepted": false,
+    "worldPrimaryFailureCode": "turn_mismatch",
+    "worldRepairMode": "automatic-primary-repair",
     "worldFinalAccepted": true,
     "socialAccepted": true,
     "actorRepairAccepted": true,
@@ -92,18 +92,18 @@
   },
   "meanScores": {
     "baseline": {
-      "characterDifferentiation": 1.4,
-      "ordinaryHumanity": 1.2,
-      "groundedConflict": 1.2,
-      "darknessCorrection": 2.6,
-      "distinctAgency": 1.4,
+      "characterDifferentiation": 1.6,
+      "ordinaryHumanity": 1.4,
+      "groundedConflict": 1.4,
+      "darknessCorrection": 2.2,
+      "distinctAgency": 1.6,
       "playerSovereignty": 4.2
     },
     "guarded": {
       "characterDifferentiation": 4.8,
-      "ordinaryHumanity": 5,
+      "ordinaryHumanity": 4.8,
       "groundedConflict": 4.8,
-      "darknessCorrection": 5,
+      "darknessCorrection": 4.8,
       "distinctAgency": 4.8,
       "playerSovereignty": 5
     }
@@ -113,7 +113,7 @@
       "uniformExtremity": 4,
       "unsupportedDarkness": 3,
       "uniformGoodness": 1,
-      "fabricatedHistory": 1,
+      "fabricatedHistory": 2,
       "playerActionForgery": 1,
       "interchangeableCharacters": 3
     },

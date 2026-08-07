@@ -22,7 +22,10 @@ export function claimNextSovereigntyTask(value: unknown, options?: object): obje
 export function failSovereigntyTask(value: unknown, options?: object): object;
 export function commitSovereigntyTask(value: unknown, options?: object): object;
 export function cancelSovereigntyTaskAsStale(value: unknown, options?: object): object;
+export function requeueSovereigntyTaskForLatestState(value: unknown, options?: object): object;
 export function retrySovereigntyTaskNow(value: unknown, options?: object): object;
+export function dueSovereigntyTasks(value: unknown, options?: object): object[];
+export function sovereigntyRetryDelay(value: unknown, options?: object): number;
 export function restoreSovereigntyCheckpoint(value: unknown, options?: object): object;
 export function sovereigntyHealthView(value: unknown): object;
 export function extractFirstBalancedJsonObject(output: unknown): object;
